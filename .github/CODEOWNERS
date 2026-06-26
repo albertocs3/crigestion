@@ -1,0 +1,12 @@
+# Default ownership. Replace with concrete GitHub users or teams when the project adds collaborators.
+* @albertocs3
+
+# Security-sensitive areas.
+docs/seguridad/ @albertocs3
+docs/adr/ADR-0009-autenticacion-sesiones.md @albertocs3
+docs/adr/ADR-0010-autorizacion-permisos.md @albertocs3
+docs/adr/ADR-0018-verifactu-adaptador.md @albertocs3
+app/api/ @albertocs3
+prisma/ @albertocs3
+next.config.mjs @albertocs3
+.github/workflows/ @albertocs3

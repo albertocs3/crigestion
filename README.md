@@ -32,3 +32,5 @@ Para preparar el entorno de desarrollo en macOS, sigue `docs/setup-mac.md`.
 El repositorio incluye GitHub Actions en `.github/workflows/ci.yml` para validar cada push y pull request contra `main`.
 
 Tambien incluye plantillas de pull request e issues para mantener trazabilidad funcional, tecnica y de seguridad.
+
+Consulta `CONTRIBUTING.md` para el flujo de trabajo y `SECURITY.md` para reportar o tratar vulnerabilidades.
