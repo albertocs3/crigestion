@@ -24,7 +24,8 @@ La base tecnologica vigente es:
 9. [Registro de decisiones arquitectonicas](adr/README.md)
 10. [Backlog tecnico de la primera rebanada vertical](07-backlog-tecnico-primera-rebanada.md)
 11. [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md)
-12. Especificaciones funcionales y tecnicas de cada modulo.
+12. [Preparacion del entorno en macOS](setup-mac.md)
+13. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 
@@ -41,6 +42,7 @@ La base tecnologica vigente es:
 | [Registro de decisiones arquitectonicas](adr/README.md) | ADR iniciales, alternativas consideradas y consecuencias aceptadas. |
 | [Backlog tecnico primera rebanada vertical](07-backlog-tecnico-primera-rebanada.md) | Tareas tecnicas trazables para implementar `PLT-CU-001`. |
 | [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md) | Secuencia de comandos, estructura y validaciones para crear la solucion real. |
+| [Preparacion del entorno en macOS](setup-mac.md) | Herramientas, variables de entorno y comandos para arrancar el desarrollo en Mac. |
 
 ## 4. Especificaciones por modulo
 

@@ -10,7 +10,7 @@ Aplicacion de gestion empresarial construida con Next.js, TypeScript, PostgreSQL
 
 ## Puesta en marcha
 
-1. Copia `.env.example` a `.env` y ajusta `DATABASE_URL`.
+1. Copia `.env.example` a `.env.local` y ajusta `DATABASE_URL`.
 2. Instala dependencias con `npm install`.
 3. Genera Prisma con `npm run prisma:generate`.
 4. Crea la base con `npm run prisma:migrate`.
@@ -23,3 +23,5 @@ Endpoints iniciales:
 - `POST /api/platform/installation/initialize`
 
 La documentacion tecnica principal esta en `docs/05-arquitectura-tecnica.md`.
+
+Para preparar el entorno de desarrollo en macOS, sigue `docs/setup-mac.md`.
