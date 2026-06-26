@@ -30,6 +30,13 @@ npm --version
 psql --version
 ```
 
+El repositorio incluye `.nvmrc` con Node 22. Si usas `nvm`:
+
+```bash
+nvm install
+nvm use
+```
+
 ## 2. Clonar repositorio
 
 ```bash

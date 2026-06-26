@@ -7,6 +7,7 @@ Aplicacion de gestion empresarial construida con Next.js, TypeScript, PostgreSQL
 - Node.js 22 LTS o superior.
 - PostgreSQL 16 o superior.
 - npm.
+- Docker Desktop, opcional para PostgreSQL local reproducible.
 
 ## Puesta en marcha
 
@@ -25,3 +26,7 @@ Endpoints iniciales:
 La documentacion tecnica principal esta en `docs/05-arquitectura-tecnica.md`.
 
 Para preparar el entorno de desarrollo en macOS, sigue `docs/setup-mac.md`.
+
+## Validacion continua
+
+El repositorio incluye GitHub Actions en `.github/workflows/ci.yml` para validar cada push y pull request contra `main`.
