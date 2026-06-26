@@ -63,6 +63,36 @@ No guardes certificados digitales, contraseñas reales ni secretos productivos e
 
 ## 4. PostgreSQL local
 
+Puedes usar PostgreSQL instalado en macOS o Docker. La opcion Docker es la mas reproducible.
+
+### Opcion A: Docker
+
+Copia el ejemplo:
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+Arranca PostgreSQL:
+
+```bash
+npm run db:up
+```
+
+Comprueba logs si hace falta:
+
+```bash
+npm run db:logs
+```
+
+La `DATABASE_URL` de `.env.local` debe coincidir con:
+
+```bash
+DATABASE_URL="postgresql://crigestion:crigestion@localhost:5432/crigestion?schema=public"
+```
+
+### Opcion B: PostgreSQL con Homebrew
+
 Crea usuario y base de datos:
 
 ```bash
