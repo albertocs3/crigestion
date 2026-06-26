@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentacion de seguridad
+    url: https://github.com/albertocs3/crigestion/blob/main/docs/seguridad/02-owasp-top-10.md
+    about: Consulta los controles OWASP definidos para CriGestión.

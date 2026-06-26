@@ -1,0 +1,38 @@
+name: Bug
+description: Registrar un fallo reproducible.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: Comportamiento actual
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto tecnico
+      description: Navegador, entorno, commit, logs relevantes sin secretos.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impacto
+      description: Indica si afecta a datos, seguridad, facturacion, disponibilidad o UX.

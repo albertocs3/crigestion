@@ -1,0 +1,54 @@
+name: Seguridad
+description: Registrar una mejora o riesgo de seguridad.
+title: "[Security]: "
+labels:
+  - security
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No incluyas secretos, contraseñas, certificados privados ni datos reales de clientes.
+  - type: textarea
+    id: risk
+    attributes:
+      label: Riesgo
+      description: Describe el riesgo, flujo afectado y posible impacto.
+    validations:
+      required: true
+  - type: checkboxes
+    id: owasp
+    attributes:
+      label: Categorias OWASP relacionadas
+      options:
+        - label: A01 Broken Access Control
+        - label: A02 Security Misconfiguration
+        - label: A03 Software Supply Chain Failures
+        - label: A04 Cryptographic Failures
+        - label: A05 Injection
+        - label: A06 Insecure Design
+        - label: A07 Authentication Failures
+        - label: A08 Software or Data Integrity Failures
+        - label: A09 Security Logging and Alerting Failures
+        - label: A10 Mishandling of Exceptional Conditions
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validacion recomendada
+      description: Tests, revision manual, logs, ZAP, auditoria o comprobaciones necesarias.
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severidad estimada
+      options:
+        - Baja
+        - Media
+        - Alta
+        - Critica
+    validations:
+      required: true

@@ -182,3 +182,11 @@ Empieza por el bootstrap seguro de plataforma:
 6. Dashboard privado.
 7. Auditoria minima de accesos y acciones criticas.
 8. Tests de contrato, integracion y flujo E2E basico.
+
+## 11. Flujo de trabajo recomendado
+
+- Crear una rama por tarea desde `main`.
+- Abrir issue si el cambio tiene alcance funcional, tecnico o de seguridad.
+- Abrir pull request usando la plantilla del repositorio.
+- Completar la checklist OWASP antes de fusionar.
+- Pedir revision especializada cuando toque permisos, sesiones, certificados, migraciones o datos sensibles.

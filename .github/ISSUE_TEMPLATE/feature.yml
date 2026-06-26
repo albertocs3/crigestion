@@ -1,0 +1,57 @@
+name: Funcionalidad
+description: Proponer una nueva funcionalidad para CriGestión.
+title: "[Feature]: "
+labels:
+  - feature
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema u oportunidad
+      description: Describe que necesidad funcional o tecnica se quiere cubrir.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Describe la solucion esperada, flujos principales y alternativas consideradas.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Criterios de aceptacion
+      description: Lista comprobable de condiciones para cerrar la tarea.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area principal
+      options:
+        - Plataforma
+        - Seguridad
+        - Clientes
+        - Catalogo
+        - Facturacion
+        - Contabilidad
+        - Tesoreria
+        - Suscripciones
+        - VeriFactu
+        - Infraestructura
+        - Documentacion
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Seguridad y datos
+      description: Indica permisos, datos sensibles, auditoria, OWASP o privacidad si aplica.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notas adicionales
