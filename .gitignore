@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.log
+.env
+.env.local
+.env.*.local
+prisma/dev.db
+tmp/
+uploads/
+backups/
+conversacionChatGPT.txt

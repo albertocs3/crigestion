@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InstallationStatus {
+  NOT_INITIALIZED
+  INITIALIZING
+  INITIALIZED
+  FAILED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+}
+
+model Installation {
+  id                     String             @id @default(uuid()) @db.Uuid
+  singletonKey           Int                @default(1)
+  status                 InstallationStatus @default(NOT_INITIALIZED)
+  startedAt              DateTime?          @db.Timestamptz(3)
+  completedAt            DateTime?          @db.Timestamptz(3)
+  productVersion         String             @db.VarChar(32)
+  failureCode            String?            @db.VarChar(100)
+  companyId              String?            @unique @db.Uuid
+  initialAdministratorId String?            @unique @db.Uuid
+  createdAt              DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
+
+  company                Company?           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  initialAdministrator   User?              @relation(fields: [initialAdministratorId], references: [id], onDelete: Restrict)
+
+  @@unique([singletonKey])
+  @@map("installations")
+}
+
+model Company {
+  id           String        @id @default(uuid()) @db.Uuid
+  legalName    String        @db.VarChar(200)
+  taxId        String        @unique @db.VarChar(32)
+  email        String?       @db.VarChar(254)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+
+  installation Installation?
+
+  @@map("companies")
+}
+
+model User {
+  id                    String        @id @default(uuid()) @db.Uuid
+  displayName           String        @db.VarChar(160)
+  userName              String        @unique @db.VarChar(80)
+  normalizedUserName    String        @unique @db.VarChar(80)
+  passwordHash          String        @db.VarChar(500)
+  status                UserStatus    @default(ACTIVE)
+  roleId                String        @db.Uuid
+  failedLoginCount      Int           @default(0)
+  lockedUntil           DateTime?     @db.Timestamptz(3)
+  lastLoginAt           DateTime?     @db.Timestamptz(3)
+  passwordChangedAt     DateTime      @default(now()) @db.Timestamptz(3)
+  securityVersion       Int           @default(1)
+  createdAt             DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime      @updatedAt @db.Timestamptz(3)
+
+  role                  Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  sessions              Session[]
+  initialInstallation   Installation?
+
+  @@map("users")
+}
+
+model ReservedUserName {
+  id                 String   @id @default(uuid()) @db.Uuid
+  normalizedUserName String   @unique @db.VarChar(80)
+  reservedByUserId   String?  @db.Uuid
+  reason             String   @db.VarChar(80)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("reserved_user_names")
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  code        String           @unique @db.VarChar(80)
+  name        String           @db.VarChar(120)
+  isProtected Boolean          @default(false)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id        String           @id @default(uuid()) @db.Uuid
+  code      String           @unique @db.VarChar(120)
+  name      String           @db.VarChar(160)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime         @updatedAt @db.Timestamptz(3)
+
+  roles     RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AuditEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventType   String   @db.VarChar(120)
+  actorType   String   @db.VarChar(40)
+  payload     Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("audit_events")
+}
+
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  tokenHash        String    @unique @db.VarChar(128)
+  startedAt        DateTime  @default(now()) @db.Timestamptz(3)
+  lastActivityAt   DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt        DateTime  @db.Timestamptz(3)
+  revokedAt        DateTime? @db.Timestamptz(3)
+  revokeReason     String?   @db.VarChar(120)
+  ipAddress        String?   @db.VarChar(64)
+  userAgent        String?   @db.VarChar(500)
+  securityVersion  Int
+
+  user             User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model LoginAttempt {
+  id                 String   @id @default(uuid()) @db.Uuid
+  normalizedUserName String   @db.VarChar(80)
+  succeeded          Boolean
+  failureCode        String?  @db.VarChar(80)
+  ipAddress          String?  @db.VarChar(64)
+  userAgent          String?  @db.VarChar(500)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([normalizedUserName, createdAt])
+  @@index([ipAddress, createdAt])
+  @@map("login_attempts")
+}

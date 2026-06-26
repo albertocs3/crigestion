@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>Resumen del proyecto CriGestión</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.5; color: #1f2933; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+    th, td { border: 1px solid #d7dce2; padding: 8px; text-align: left; }
+    code { background: #f2f4f7; padding: 2px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Resumen del proyecto CriGestión</h1>
+  <p>CriGestión es un software de gestion empresarial integrado para una unica empresa.</p>
+
+  <h2>Stack tecnico vigente</h2>
+  <table>
+    <tr><th>Area</th><th>Decision</th></tr>
+    <tr><td>Aplicacion</td><td>Next.js App Router</td></tr>
+    <tr><td>Lenguaje</td><td>TypeScript</td></tr>
+    <tr><td>Base de datos</td><td>PostgreSQL</td></tr>
+    <tr><td>ORM y migraciones</td><td>Prisma</td></tr>
+    <tr><td>API</td><td>Route Handlers bajo <code>/api</code></td></tr>
+  </table>
+
+  <h2>Primera rebanada</h2>
+  <p><code>PLT-CU-001 - Inicializar el sistema</code></p>
+  <ul>
+    <li>Modelo Prisma inicial.</li>
+    <li><code>GET /api/health</code>.</li>
+    <li><code>GET /api/platform/installation</code>.</li>
+    <li><code>POST /api/platform/installation/initialize</code>.</li>
+    <li>Pagina <code>/platform/installation</code>.</li>
+  </ul>
+</body>
+</html>
