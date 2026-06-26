@@ -36,6 +36,9 @@ npm run lint
 npm run audit
 ```
 
+El repositorio fija UTF-8 y finales de linea LF mediante `.editorconfig` y `.gitattributes`.
+Si Git indica muchos cambios solo por saltos de linea, revisa la configuracion local antes de commitear.
+
 Si el cambio afecta a base de datos:
 
 ```bash

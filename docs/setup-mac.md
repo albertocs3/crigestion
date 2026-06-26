@@ -44,6 +44,13 @@ git clone https://github.com/albertocs3/crigestion.git
 cd crigestion
 ```
 
+Configuracion recomendada de Git en macOS:
+
+```bash
+git config --global core.autocrlf input
+git config --global pull.rebase false
+```
+
 ## 3. Variables de entorno
 
 Copia el ejemplo:
