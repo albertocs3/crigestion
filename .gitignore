@@ -13,3 +13,4 @@ tmp/
 uploads/
 backups/
 conversacionChatGPT.txt
+tsconfig.tsbuildinfo

@@ -25,7 +25,11 @@ Endpoints iniciales:
 
 La documentacion tecnica principal esta en `docs/05-arquitectura-tecnica.md`.
 
-Para preparar el entorno de desarrollo en macOS, sigue `docs/setup-mac.md`.
+Para preparar el entorno de desarrollo principal en Windows 11, sigue `docs/setup-windows.md`.
+
+Checklist rapida para Windows 11: `docs/checklist-inicio-windows.md`.
+
+La guia historica de macOS queda disponible en `docs/setup-mac.md`.
 
 ## Validacion continua
 
