@@ -13,7 +13,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 | Unitarias | Dominio y casos de uso | Vitest |
 | Integracion | Prisma + PostgreSQL real | Vitest/Jest + base de prueba |
 | Contrato | Route Handlers HTTP | Vitest con `Request`/`Response` |
-| E2E web | Flujos de navegador | Playwright, pendiente |
+| E2E web | Flujos de navegador | Playwright |
 
 ## 3. Pruebas P0 de inicializacion
 
@@ -34,6 +34,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado y permisos insuficientes.
+- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de instalacion, login, sesion activa y logout.
 
 ## 5. Verificaciones manuales iniciales
 
@@ -43,8 +44,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - Ejecutar `npm run prisma:migrate`.
 - Ejecutar `npm run typecheck`.
 - Ejecutar `npm run build`.
-- Arrancar `npm run dev`.
-- Consultar `/api/health`.
+- Ejecutar `npm run test:e2e`.
 
 ## 6. Criterios de salida
 
@@ -53,4 +53,4 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 3. Migracion PostgreSQL desde cero.
 4. API de inicializacion cubierta por contrato.
 5. Transaccion de inicializacion cubierta contra PostgreSQL real.
-6. E2E web definido para el siguiente incremento de UI.
+6. E2E web del flujo inicial ejecutado con Playwright.
