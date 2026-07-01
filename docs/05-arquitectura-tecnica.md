@@ -264,6 +264,7 @@ npm run prisma:migrate
 npm run dev
 npm run typecheck
 npm test
+npm run test:e2e
 npm run audit
 npm run build
 ```

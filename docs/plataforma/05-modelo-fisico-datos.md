@@ -38,6 +38,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 | Autorizacion | `Permission` / `permissions` | Permisos funcionales |
 | Autorizacion | `RolePermission` / `role_permissions` | Relacion rol-permiso |
 | Auditoria | `AuditEvent` / `audit_events` | Eventos auditables |
+| Idempotencia | `IdempotencyRecord` / `idempotency_records` | Repeticion segura de mutaciones iniciales |
 
 ## 5. Diagrama logico
 
@@ -67,6 +68,7 @@ Entidades iniciales:
 - `ReservedUserName`.
 - `Session`.
 - `LoginAttempt`.
+- `IdempotencyRecord`.
 
 ## 7. Restricciones clave
 
@@ -79,6 +81,7 @@ Entidades iniciales:
 - `Permission.code` es unico.
 - `RolePermission` usa clave compuesta `roleId + permissionId`.
 - `Session.tokenHash` es unico.
+- `IdempotencyRecord.key` es unico.
 - Para garantizar una unica sesion activa por usuario se requiere un indice unico parcial en PostgreSQL sobre `sessions(user_id)` cuando `revoked_at IS NULL` y no haya expirado segun el criterio operativo. Si Prisma Migrate no puede expresarlo directamente, se añadira como SQL en la migracion.
 
 ## 8. Modelo de accesos
@@ -103,7 +106,8 @@ Debe crear o confirmar en una unica transaccion:
 1. Empresa.
 2. Primer administrador.
 3. Instalacion.
-4. Evento de auditoria.
+4. Registro de idempotencia.
+5. Evento de auditoria.
 
 Si cualquier paso falla, no debe quedar estado parcial.
 
