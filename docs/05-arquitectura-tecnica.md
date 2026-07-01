@@ -19,7 +19,7 @@ La aplicacion pasa a ser web, con interfaz, API y casos de uso servidos desde un
 | Acceso a datos | Prisma Client |
 | Migraciones | Prisma Migrate |
 | Validacion de entrada | Zod en bordes HTTP y formularios |
-| Autenticacion | Sesion web segura, pendiente de concrecion en ADR especifico |
+| Autenticacion | Sesion web con token opaco en cookie `HttpOnly`, hash de token en PostgreSQL y CSRF en mutaciones |
 | Autorizacion | Permisos `Modulo.Accion` validados en servidor |
 | Tiempo | Instantes en UTC; presentacion en `Europe/Madrid` |
 | Adjuntos | Repositorio protegido fuera de la carpeta publica |
@@ -263,6 +263,8 @@ npm run prisma:generate
 npm run prisma:migrate
 npm run dev
 npm run typecheck
+npm test
+npm run audit
 npm run build
 ```
 

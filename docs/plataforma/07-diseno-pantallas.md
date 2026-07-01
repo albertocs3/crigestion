@@ -10,6 +10,10 @@ Define la experiencia web inicial de Plataforma para CriGestión con Next.js.
 |---|---|---|
 | `/` | Inicio operativo | Mostrar estado general y acceso a inicializacion |
 | `/platform/installation` | Estado de instalacion | Mostrar si la plataforma esta inicializada |
+| `/login` | Acceso | Autenticar usuarios internos |
+| `/app` | Inicio autenticado | Mostrar sesion activa y accesos operativos |
+| `/app/users` | Gestion de usuarios | Listar, crear, activar, desactivar y cambiar roles |
+| `/app/roles` | Gestion de roles | Listar y crear roles con permisos |
 
 ## 3. Inicio operativo
 
@@ -30,7 +34,9 @@ Estados:
 Contenido cuando no existe instalacion:
 
 - Mensaje de instalacion pendiente.
-- Accion futura para abrir formulario de inicializacion.
+- Formulario de inicializacion con datos de empresa y primer administrador.
+- Validacion local orientativa y validacion final server-side.
+- Estados de carga, exito y error.
 
 Contenido cuando existe instalacion:
 
@@ -38,20 +44,49 @@ Contenido cuando existe instalacion:
 - Empresa.
 - Administrador inicial.
 
-## 5. Formulario pendiente
+## 5. Acceso
 
-La siguiente iteracion debe crear un Client Component para:
+Contenido:
 
-- Datos de empresa.
-- Datos de administrador.
-- Validacion local orientativa.
-- Envio a `POST /api/platform/installation/initialize`.
-- Estados de carga, exito y error.
+- Formulario de usuario y contrasena.
+- Redireccion a `/app` si ya existe sesion autenticada.
+- Estados de carga y error.
 
-## 6. Criterios UI
+## 6. Inicio autenticado
+
+Contenido:
+
+- Usuario autenticado.
+- Rol vigente.
+- Numero de permisos.
+- Caducidad de sesion.
+- Accesos a usuarios y roles.
+- Formulario de cambio de contrasena.
+- Accion de cierre de sesion.
+
+## 7. Gestion de usuarios
+
+Contenido:
+
+- Listado de usuarios como DTOs sin hashes ni secretos.
+- Estado, rol, bloqueos, intentos fallidos y fecha de creacion.
+- Formulario para crear usuario.
+- Acciones para desactivar, reactivar y cambiar rol.
+- Estados de error cuando falta permiso o falla la validacion.
+
+## 8. Gestion de roles
+
+Contenido:
+
+- Listado de roles, permisos y numero de usuarios.
+- Formulario para crear rol con permisos seleccionados.
+- Estados de error cuando falta permiso o falla la validacion.
+
+## 9. Criterios UI
 
 - Server Components por defecto.
 - Client Components solo para formularios.
 - Textos claros y compactos.
 - Nada de secretos en pantalla de resumen.
 - Estados vacio, carga y error visibles.
+- Controles accesibles con labels, foco visible y mensajes junto a la accion afectada.

@@ -10,7 +10,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 |---|---|---|
 | Typecheck | Tipos TypeScript | `npm run typecheck` |
 | Build | Build productivo | `npm run build` |
-| Unitarias | Dominio y casos de uso | Vitest o Jest, pendiente |
+| Unitarias | Dominio y casos de uso | Vitest |
 | Integracion | Prisma + PostgreSQL real | Vitest/Jest + base de prueba |
 | Contrato | Route Handlers HTTP | Cliente HTTP de prueba |
 | E2E web | Flujos de navegador | Playwright, pendiente |

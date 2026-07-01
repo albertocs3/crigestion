@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { InstallationForm } from "@/modules/platform/presentation/InstallationForm";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +34,13 @@ export default async function InstallationPage() {
               </p>
             </div>
           ) : (
-            <p className="muted">
-              La base aun no tiene una instalacion registrada. Usa el endpoint
-              de inicializacion para crear los datos minimos.
-            </p>
+            <div className="stack">
+              <p className="muted">
+                La base aun no tiene una instalacion registrada. Completa los
+                datos minimos para crear la empresa y el primer administrador.
+              </p>
+              <InstallationForm />
+            </div>
           )}
         </div>
       </section>

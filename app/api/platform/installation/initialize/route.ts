@@ -1,55 +1,22 @@
-import { pbkdf2Sync, randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { z } from "zod";
-import { prisma } from "@/lib/prisma";
+import {
+  hashRequestBody,
+  initializePlatform,
+  initializeSchema
+} from "@/modules/platform/application/installation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const initializeSchema = z.object({
-  company: z.object({
-    legalName: z.string().min(2).max(200),
-    taxId: z.string().min(3).max(32),
-    email: z.string().email().optional()
-  }),
-  administrator: z.object({
-    displayName: z.string().min(2).max(160),
-    userName: z
-      .string()
-      .min(3)
-      .max(80)
-      .regex(
-        /^[a-zA-Z0-9._-]+$/,
-        "El usuario solo admite letras, numeros, punto, guion y guion bajo."
-      ),
-    password: z
-      .string()
-      .min(12)
-      .max(200)
-      .regex(/[a-z]/, "La contrasena debe incluir una minuscula.")
-      .regex(/[A-Z]/, "La contrasena debe incluir una mayuscula.")
-      .regex(/[0-9]/, "La contrasena debe incluir un numero.")
-      .regex(/[^a-zA-Z0-9]/, "La contrasena debe incluir un caracter especial.")
-  })
-});
+const globalForRateLimit = globalThis as unknown as {
+  initializeRateLimit?: Map<string, { count: number; resetAt: number }>;
+};
 
-const platformPermissions = [
-  ["Platform.ManageUsers", "Gestionar usuarios"],
-  ["Platform.ManageRoles", "Gestionar roles"],
-  ["Platform.ManageConfiguration", "Gestionar configuracion"],
-  ["Platform.ViewAudit", "Consultar auditoria"]
-] as const;
+const initializeRateLimit =
+  globalForRateLimit.initializeRateLimit ?? new Map<string, { count: number; resetAt: number }>();
 
-function normalizeUserName(userName: string) {
-  return userName.trim().toLocaleLowerCase("es-ES");
-}
-
-function hashPassword(password: string) {
-  const iterations = 210_000;
-  const salt = randomBytes(16);
-  const hash = pbkdf2Sync(password, salt, iterations, 32, "sha256");
-
-  return `pbkdf2_sha256$${iterations}$${salt.toString("base64")}$${hash.toString("base64")}`;
+if (!globalForRateLimit.initializeRateLimit) {
+  globalForRateLimit.initializeRateLimit = initializeRateLimit;
 }
 
 function isAllowedOrigin(request: Request) {
@@ -63,7 +30,34 @@ function isAllowedOrigin(request: Request) {
   return origin === appBaseUrl;
 }
 
+function isRateLimited(request: Request): boolean {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  const ipAddress = forwardedFor?.split(",")[0]?.trim() ?? "local";
+  const now = Date.now();
+  const windowMs = 60_000;
+  const maxAttempts = 10;
+  const current = initializeRateLimit.get(ipAddress);
+
+  if (!current || current.resetAt <= now) {
+    initializeRateLimit.set(ipAddress, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+
+  current.count += 1;
+  return current.count > maxAttempts;
+}
+
 export async function POST(request: Request) {
+  if (isRateLimited(request)) {
+    return NextResponse.json(
+      {
+        code: "RATE_LIMITED",
+        message: "Demasiados intentos de inicializacion. Espera antes de reintentar."
+      },
+      { status: 429 }
+    );
+  }
+
   if (!isAllowedOrigin(request)) {
     return NextResponse.json(
       {
@@ -98,10 +92,34 @@ export async function POST(request: Request) {
     );
   }
 
+  if (idempotencyKey.length > 160) {
+    return NextResponse.json(
+      {
+        code: "IDEMPOTENCY_KEY_INVALID",
+        message: "La cabecera Idempotency-Key no puede superar 160 caracteres."
+      },
+      { status: 400 }
+    );
+  }
+
+  let rawBody: string;
+
+  try {
+    rawBody = await request.text();
+  } catch {
+    return NextResponse.json(
+      {
+        code: "INVALID_JSON",
+        message: "El cuerpo de la peticion no es JSON valido."
+      },
+      { status: 400 }
+    );
+  }
+
   let body: unknown;
 
   try {
-    body = await request.json();
+    body = JSON.parse(rawBody);
   } catch {
     return NextResponse.json(
       {
@@ -124,103 +142,18 @@ export async function POST(request: Request) {
     );
   }
 
-  const existing = await prisma.installation.findFirst();
+  const result = await initializePlatform(
+    payload.data,
+    idempotencyKey,
+    hashRequestBody(rawBody)
+  );
 
-  if (existing) {
+  if (!result.ok) {
     return NextResponse.json(
-      {
-        code: "PLATFORM_ALREADY_INITIALIZED",
-        message: "La plataforma ya esta inicializada."
-      },
-      { status: 409 }
+      result.error,
+      { status: result.status }
     );
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const administratorRole = await tx.role.upsert({
-      where: { code: "Administrador" },
-      update: { name: "Administrador", isProtected: true },
-      create: {
-        code: "Administrador",
-        name: "Administrador",
-        isProtected: true
-      }
-    });
-
-    for (const [code, name] of platformPermissions) {
-      const permission = await tx.permission.upsert({
-        where: { code },
-        update: { name },
-        create: { code, name }
-      });
-
-      await tx.rolePermission.upsert({
-        where: {
-          roleId_permissionId: {
-            roleId: administratorRole.id,
-            permissionId: permission.id
-          }
-        },
-        update: {},
-        create: {
-          roleId: administratorRole.id,
-          permissionId: permission.id
-        }
-      });
-    }
-
-    const normalizedUserName = normalizeUserName(
-      payload.data.administrator.userName
-    );
-
-    const company = await tx.company.create({
-      data: payload.data.company
-    });
-
-    const administrator = await tx.user.create({
-      data: {
-        displayName: payload.data.administrator.displayName,
-        userName: payload.data.administrator.userName,
-        normalizedUserName,
-        passwordHash: hashPassword(payload.data.administrator.password),
-        status: "ACTIVE",
-        roleId: administratorRole.id
-      }
-    });
-
-    await tx.reservedUserName.create({
-      data: {
-        normalizedUserName,
-        reservedByUserId: administrator.id,
-        reason: "INITIAL_ADMINISTRATOR"
-      }
-    });
-
-    const installation = await tx.installation.create({
-      data: {
-        status: "INITIALIZED",
-        startedAt: new Date(),
-        completedAt: new Date(),
-        productVersion: "0.1.0",
-        companyId: company.id,
-        initialAdministratorId: administrator.id
-      }
-    });
-
-    await tx.auditEvent.create({
-      data: {
-        eventType: "PLATFORM_INITIALIZED",
-        actorType: "SYSTEM",
-        payload: {
-          companyId: company.id,
-          administratorId: administrator.id,
-          idempotencyKey
-        }
-      }
-    });
-
-    return installation;
-  });
-
-  return NextResponse.json(result, { status: 201 });
+  return NextResponse.json(result.value, { status: result.status });
 }

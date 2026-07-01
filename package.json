@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "audit": "npm audit --audit-level=high",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -29,13 +30,15 @@
     "@types/node": "^22.15.32",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "dotenv": "^17.2.3",
     "eslint": "^9.29.0",
     "eslint-config-next": "^15.3.4",
     "prisma": "^6.10.1",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.9"
   },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
+  "overrides": {
+    "postcss": "8.5.16"
   }
 }

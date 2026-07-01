@@ -166,3 +166,16 @@ model LoginAttempt {
   @@index([ipAddress, createdAt])
   @@map("login_attempts")
 }
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid()) @db.Uuid
+  key            String   @unique @db.VarChar(160)
+  requestHash    String   @db.VarChar(64)
+  responseStatus Int
+  responseBody   Json
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("idempotency_records")
+}

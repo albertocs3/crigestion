@@ -97,16 +97,22 @@ Respuesta `201`:
 }
 ```
 
+Si se repite la misma peticion con la misma `Idempotency-Key`, la API puede
+devolver `200` con el mismo cuerpo de respuesta ya confirmado.
+
 Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
 | 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 | 409 | `PLATFORM_ALREADY_INITIALIZED` | Ya existe instalacion |
+| 409 | `IDEMPOTENCY_KEY_REUSED` | La misma clave se uso con otro cuerpo |
+| 429 | `RATE_LIMITED` | Demasiados intentos de inicializacion |
 
 ## 6. Seguridad
 
@@ -119,18 +125,369 @@ Errores:
 - La contrasena no se guarda en auditoria ni logs.
 - El navegador nunca accede a `DATABASE_URL`.
 
-## 7. Contratos pendientes de acceso
+## 7. Autenticacion y sesiones
 
-La autenticacion posterior debera exponer contratos para:
+### `POST /api/auth/login`
 
-- `POST /api/auth/login`.
-- `POST /api/auth/logout`.
-- `GET /api/auth/session`.
-- `POST /api/auth/change-password`.
+Endpoint publico mientras exista instalacion inicializada.
 
-Todos usaran sesion web con cookie segura, validacion Zod, proteccion CSRF en mutaciones y auditoria.
+Request:
 
-## 8. Criterios de aceptacion
+```json
+{
+  "userName": "admin",
+  "password": "Cambiar-esta-clave-2026"
+}
+```
+
+Respuesta `200`:
+
+```json
+{
+  "authenticated": true,
+  "user": {
+    "id": "uuid",
+    "displayName": "Administrador",
+    "userName": "admin",
+    "role": {
+      "code": "Administrador",
+      "name": "Administrador"
+    },
+    "permissions": ["Platform.ManageUsers"]
+  },
+  "expiresAt": "2026-06-26T15:00:00.000Z"
+}
+```
+
+Efectos:
+
+- Crea una sesion en `sessions`.
+- Guarda solo hash del token.
+- Devuelve el token solo en cookie `HttpOnly`, `SameSite=Lax`, `Path=/`.
+- Registra `login_attempts`.
+- Audita `LOGIN_SUCCEEDED` o `LOGIN_FAILED` sin contrasena.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `INVALID_CREDENTIALS` | Usuario, contrasena o estado no validos |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `ACTIVE_SESSION_EXISTS` | Ya existe una sesion activa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+| 423 | `ACCOUNT_LOCKED` | Cuenta bloqueada temporalmente |
+
+### `GET /api/auth/session`
+
+Respuesta sin sesion:
+
+```json
+{
+  "authenticated": false
+}
+```
+
+Respuesta con sesion valida:
+
+```json
+{
+  "authenticated": true,
+  "user": {
+    "id": "uuid",
+    "displayName": "Administrador",
+    "userName": "admin",
+    "role": {
+      "code": "Administrador",
+      "name": "Administrador"
+    },
+    "permissions": ["Platform.ManageUsers"]
+  },
+  "expiresAt": "2026-06-26T15:00:00.000Z"
+}
+```
+
+### `GET /api/auth/csrf`
+
+Requiere cookie de sesion.
+
+Respuesta `200`:
+
+```json
+{
+  "csrfToken": "token"
+}
+```
+
+El token devuelto debe enviarse en `X-CSRF-Token` en mutaciones autenticadas con cookie.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion activa |
+
+### `POST /api/auth/logout`
+
+Requiere cookie de sesion.
+
+Respuesta `200`:
+
+```json
+{
+  "authenticated": false
+}
+```
+
+Efectos:
+
+- Marca `revokedAt`.
+- Guarda motivo `USER_LOGOUT`.
+- Borra la cookie.
+- Audita `LOGOUT_SUCCEEDED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion activa |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+
+### `POST /api/auth/change-password`
+
+Requiere cookie de sesion y cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{
+  "currentPassword": "Cambiar-esta-clave-2026",
+  "newPassword": "Nueva-clave-segura-2026"
+}
+```
+
+Respuesta `200`:
+
+```json
+{
+  "passwordChanged": true
+}
+```
+
+Efectos:
+
+- Verifica la contrasena actual.
+- Guarda solo el hash de la nueva contrasena.
+- Incrementa `securityVersion`.
+- Revoca las sesiones activas del usuario con motivo `USER_PASSWORD_CHANGED`.
+- Borra la cookie de sesion actual.
+- Audita `PASSWORD_CHANGED` o `PASSWORD_CHANGE_FAILED` sin contrasenas ni hashes.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 401 | `INVALID_CURRENT_PASSWORD` | La contrasena actual no coincide |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `PASSWORD_REUSE_NOT_ALLOWED` | La nueva contrasena coincide con la actual |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+## 8. Usuarios, roles y permisos
+
+### `GET /api/platform/users`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageUsers`.
+
+Respuesta `200`:
+
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "displayName": "Administrador",
+      "userName": "admin",
+      "status": "ACTIVE",
+      "role": {
+        "code": "Administrador",
+        "name": "Administrador"
+      },
+      "failedLoginCount": 0,
+      "lockedUntil": null,
+      "lastLoginAt": "2026-06-26T10:00:00.000Z",
+      "createdAt": "2026-06-26T10:00:00.000Z"
+    }
+  ]
+}
+```
+
+### `POST /api/platform/users`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageUsers`.
+
+Request:
+
+```json
+{
+  "displayName": "Usuario interno",
+  "userName": "usuario",
+  "password": "Cambiar-esta-clave-2026",
+  "roleCode": "Administrador"
+}
+```
+
+Respuesta `201`: usuario creado sin `passwordHash`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `USER_NAME_ALREADY_USED` | El usuario actual o reservado ya existe |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `ROLE_NOT_FOUND` | El rol indicado no existe |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+### `PATCH /api/platform/users/{userId}`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageUsers`.
+
+Request:
+
+```json
+{
+  "action": "deactivate"
+}
+```
+
+Tambien admite:
+
+```json
+{
+  "action": "changeRole",
+  "roleCode": "ConsultaAuditoria"
+}
+```
+
+Acciones admitidas:
+
+- `deactivate`.
+- `reactivate`.
+- `changeRole`.
+
+Respuesta `200`: usuario actualizado sin `passwordHash`.
+
+Efectos:
+
+- `deactivate` marca el usuario como `INACTIVE`.
+- `deactivate` revoca sesiones activas del usuario.
+- `reactivate` marca el usuario como `ACTIVE` y reinicia bloqueo/intentos.
+- `changeRole` asigna el nuevo rol y revoca sesiones activas del usuario.
+- Las acciones mutadoras incrementan `securityVersion`.
+- Audita `USER_DEACTIVATED`, `USER_REACTIVATED` o `USER_ROLE_CHANGED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `USER_NOT_FOUND` | El usuario no existe |
+| 409 | `SELF_ROLE_CHANGE_NOT_ALLOWED` | Intento de cambiar el propio rol |
+| 409 | `SELF_STATUS_CHANGE_NOT_ALLOWED` | Intento de cambiar el propio estado |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `ROLE_NOT_FOUND` | El rol indicado no existe |
+| 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
+
+### `GET /api/platform/roles`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageRoles`.
+
+Respuesta `200`:
+
+```json
+{
+  "roles": [
+    {
+      "id": "uuid",
+      "code": "Administrador",
+      "name": "Administrador",
+      "isProtected": true,
+      "permissions": [
+        {
+          "code": "Platform.ManageUsers",
+          "name": "Gestionar usuarios"
+        }
+      ],
+      "userCount": 1,
+      "createdAt": "2026-06-26T10:00:00.000Z"
+    }
+  ],
+  "permissions": [
+    {
+      "code": "Platform.ManageUsers",
+      "name": "Gestionar usuarios"
+    }
+  ]
+}
+```
+
+### `POST /api/platform/roles`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageRoles`.
+
+Request:
+
+```json
+{
+  "code": "Tecnico",
+  "name": "Tecnico",
+  "permissionCodes": ["Platform.ViewAudit"]
+}
+```
+
+Respuesta `201`: rol creado.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `ROLE_CODE_ALREADY_USED` | El codigo de rol ya existe |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `PERMISSION_NOT_FOUND` | Algun permiso no existe |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+Los siguientes contratos de seguridad se iran incorporando en rebanadas posteriores.
+
+## 9. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

@@ -72,7 +72,7 @@ Al terminar esta rebanada:
 |---|---|---|---|
 | PVS-019 | Crear pagina inicial | Estado visible de la plataforma | Render server-side |
 | PVS-020 | Crear pagina de instalacion | `/platform/installation` | Muestra empresa/admin si existen |
-| PVS-021 | Crear formulario web | Formulario cliente para inicializar | Pendiente tras API base |
+| PVS-021 | Crear formulario web | Formulario cliente para inicializar | Client Component con estados de envio |
 
 ### EPIC-PVS-005 - Calidad
 

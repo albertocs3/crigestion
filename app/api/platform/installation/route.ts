@@ -1,22 +1,9 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getInstallationState } from "@/modules/platform/application/installation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const installation = await prisma.installation.findFirst({
-    select: {
-      id: true,
-      status: true,
-      startedAt: true,
-      completedAt: true,
-      productVersion: true
-    }
-  });
-
-  return NextResponse.json({
-    initialized: installation?.status === "INITIALIZED",
-    installation
-  });
+  return NextResponse.json(await getInstallationState());
 }
