@@ -31,6 +31,8 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/installation-routes.test.ts`: contrato HTTP de estado e inicializacion, errores estables, idempotencia, Origin y rate limit.
 - `tests/platform/auth.test.ts`: login, sesion opaca, CSRF, bloqueo, logout, cambio de contrasena sin auditar secretos y limpieza de sesiones expiradas antes de abrir una nueva.
 - `tests/platform/auth-routes.test.ts`: contrato HTTP de login, sesion, CSRF, logout, cambio de contrasena y cookie `HttpOnly`.
+- `tests/platform/sessions.test.ts`: listado de sesiones activas sin material de token, revocacion remota y bloqueo de revocacion propia.
+- `tests/platform/sessions-routes.test.ts`: contrato HTTP de sesiones activas, permisos, CSRF y errores estables de revocacion.
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado y permisos insuficientes.

@@ -6,6 +6,7 @@ async function main() {
   const permissions = [
     ["Platform.ManageUsers", "Gestionar usuarios"],
     ["Platform.ManageRoles", "Gestionar roles"],
+    ["Platform.ManageSessions", "Gestionar sesiones"],
     ["Platform.ManageConfiguration", "Gestionar configuracion"],
     ["Platform.ViewAudit", "Consultar auditoria"]
   ] as const;

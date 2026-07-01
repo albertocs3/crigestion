@@ -66,6 +66,10 @@ a {
   gap: 16px;
 }
 
+.compact-stack {
+  gap: 8px;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -223,6 +227,14 @@ th {
 
 tr:last-child td {
   border-bottom: 0;
+}
+
+.cell-detail {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .form-actions {

@@ -39,6 +39,7 @@ export const initializeSchema = z.object({
 const platformPermissions = [
   ["Platform.ManageUsers", "Gestionar usuarios"],
   ["Platform.ManageRoles", "Gestionar roles"],
+  ["Platform.ManageSessions", "Gestionar sesiones"],
   ["Platform.ManageConfiguration", "Gestionar configuracion"],
   ["Platform.ViewAudit", "Consultar auditoria"]
 ] as const;

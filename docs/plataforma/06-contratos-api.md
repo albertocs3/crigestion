@@ -485,9 +485,89 @@ Errores:
 | 422 | `PERMISSION_NOT_FOUND` | Algun permiso no existe |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 
+## 9. Sesiones activas
+
+### `GET /api/platform/sessions`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageSessions`.
+
+Respuesta `200`:
+
+```json
+{
+  "sessions": [
+    {
+      "id": "uuid",
+      "user": {
+        "id": "uuid",
+        "displayName": "Administrador",
+        "userName": "admin",
+        "role": {
+          "code": "Administrador",
+          "name": "Administrador"
+        }
+      },
+      "startedAt": "2026-06-26T10:00:00.000Z",
+      "lastActivityAt": "2026-06-26T10:05:00.000Z",
+      "expiresAt": "2026-06-26T15:00:00.000Z",
+      "ipAddress": "203.0.113.10",
+      "userAgent": "Mozilla/5.0",
+      "isCurrentSession": true
+    }
+  ]
+}
+```
+
+No devuelve token, `tokenHash` ni hashes de contrasena.
+
+### `PATCH /api/platform/sessions/{sessionId}`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageSessions`.
+
+Request:
+
+```json
+{
+  "action": "revoke"
+}
+```
+
+Respuesta `200`:
+
+```json
+{
+  "revoked": true
+}
+```
+
+Efectos:
+
+- Marca `revokedAt`.
+- Guarda motivo `ADMIN_SESSION_REVOKED`.
+- Audita `SESSION_REVOKED`.
+- No permite revocar la sesion actual; para eso se usa logout.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `SESSION_NOT_FOUND` | La sesion no existe o ya fue revocada |
+| 409 | `SELF_SESSION_REVOKE_NOT_ALLOWED` | Intento de revocar la propia sesion |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
+
 Los siguientes contratos de seguridad se iran incorporando en rebanadas posteriores.
 
-## 9. Criterios de aceptacion
+## 10. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

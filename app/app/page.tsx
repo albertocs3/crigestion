@@ -49,12 +49,21 @@ export default async function AppHomePage() {
           </div>
           <div>
             <div className="button-row">
-              <Link className="button" href="/app/users">
-                Gestionar usuarios
-              </Link>
-              <Link className="button button-secondary" href="/app/roles">
-                Gestionar roles
-              </Link>
+              {session.user.permissions.includes("Platform.ManageUsers") ? (
+                <Link className="button" href="/app/users">
+                  Gestionar usuarios
+                </Link>
+              ) : null}
+              {session.user.permissions.includes("Platform.ManageRoles") ? (
+                <Link className="button button-secondary" href="/app/roles">
+                  Gestionar roles
+                </Link>
+              ) : null}
+              {session.user.permissions.includes("Platform.ManageSessions") ? (
+                <Link className="button button-secondary" href="/app/sessions">
+                  Gestionar sesiones
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>

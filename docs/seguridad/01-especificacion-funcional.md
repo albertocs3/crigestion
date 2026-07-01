@@ -175,6 +175,7 @@ Ejemplos:
 
 - `Platform.ManageUsers`.
 - `Platform.ManageRoles`.
+- `Platform.ManageSessions`.
 - `Platform.ManageConfiguration`.
 - `Platform.ViewAudit`.
 - `Billing.Issue`.
