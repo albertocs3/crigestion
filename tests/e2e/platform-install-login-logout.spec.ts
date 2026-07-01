@@ -7,6 +7,8 @@ const email = "admin-e2e@example.test";
 const displayName = "Administrador E2E";
 const userName = "admin-e2e";
 const password = "Cambiar-e2e-2026";
+const limitedUserName = "auditor-e2e";
+const limitedPassword = "Cambiar-auditor-2026";
 
 test.beforeEach(async () => {
   await resetPlatformTables();
@@ -73,6 +75,116 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   });
   expect(revokedSessionCount).toBe(1);
 });
+
+test("shows access denied for a user without users or roles permissions", async ({
+  page
+}) => {
+  await createLimitedUser(page);
+
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(limitedUserName);
+  await page.getByLabel("Contrasena").fill(limitedPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await expect(page.getByText("Sesion activa de Usuario Auditor E2E")).toBeVisible();
+
+  await page.goto("/app/users");
+  await expect(page).toHaveURL(/\/app\/users$/);
+  await expect(page.getByRole("heading", { name: "Usuarios" })).toBeVisible();
+  await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
+  await expect(page.getByText("Usuarios internos, estado de acceso")).not.toBeVisible();
+
+  await page.goto("/app/roles");
+  await expect(page).toHaveURL(/\/app\/roles$/);
+  await expect(page.getByRole("heading", { name: "Roles" })).toBeVisible();
+  await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
+  await expect(page.getByText("Roles protegidos y personalizados")).not.toBeVisible();
+
+  const deniedAuditCount = await prisma.auditEvent.count({
+    where: {
+      eventType: "ACCESS_DENIED"
+    }
+  });
+  expect(deniedAuditCount).toBe(2);
+});
+
+async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
+  const command = {
+    company: {
+      legalName: companyName,
+      taxId,
+      email
+    },
+    administrator: {
+      displayName,
+      userName,
+      password
+    }
+  };
+
+  await page.goto("/platform/installation");
+  const initializeResponse = await page.request.post(
+    "/api/platform/installation/initialize",
+    {
+      headers: {
+        "Idempotency-Key": "e2e-permissions-setup"
+      },
+      data: command
+    }
+  );
+  expect(initializeResponse.status()).toBe(201);
+
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(userName);
+  await page.getByLabel("Contrasena").fill(password);
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+
+  await createAuthenticatedResource(page, "/api/platform/roles", {
+      code: "ConsultaAuditoria",
+      name: "Consulta auditoria",
+      permissionCodes: ["Platform.ViewAudit"]
+    });
+  await createAuthenticatedResource(page, "/api/platform/users", {
+      displayName: "Usuario Auditor E2E",
+      userName: limitedUserName,
+      password: limitedPassword,
+      roleCode: "ConsultaAuditoria"
+    });
+
+  await page.context().clearCookies();
+}
+
+async function createAuthenticatedResource(
+  page: import("@playwright/test").Page,
+  path: string,
+  data: unknown
+): Promise<void> {
+  const response = await page.evaluate(
+    async ({ requestPath, payload }) => {
+      const csrfResponse = await fetch("/api/auth/csrf");
+      const csrfBody = (await csrfResponse.json()) as { csrfToken: string };
+      const resourceResponse = await fetch(requestPath, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRF-Token": csrfBody.csrfToken
+        },
+        body: JSON.stringify(payload)
+      });
+
+      return {
+        status: resourceResponse.status,
+        body: await resourceResponse.json()
+      };
+    },
+    { requestPath: path, payload: data }
+  );
+
+  expect(response.status).toBe(201);
+}
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
