@@ -86,6 +86,15 @@ export async function createRole(
   command: CreateRoleCommand,
   actor: SessionUser
 ): Promise<CreateRoleResult> {
+  const existingRole = await prisma.role.findUnique({
+    where: { code: command.code },
+    select: { id: true }
+  });
+
+  if (existingRole) {
+    return roleCodeAlreadyUsed();
+  }
+
   const uniquePermissionCodes = [...new Set(command.permissionCodes)];
   const permissions = await prisma.permission.findMany({
     where: {
@@ -169,14 +178,7 @@ export async function createRole(
     };
   } catch (error) {
     if (isUniqueConstraintError(error)) {
-      return {
-        ok: false,
-        status: 409,
-        error: {
-          code: "ROLE_CODE_ALREADY_USED",
-          message: "El codigo de rol ya existe."
-        }
-      };
+      return roleCodeAlreadyUsed();
     }
 
     throw error;
@@ -218,4 +220,15 @@ function isUniqueConstraintError(error: unknown): boolean {
     error instanceof Prisma.PrismaClientKnownRequestError &&
     error.code === "P2002"
   );
+}
+
+function roleCodeAlreadyUsed(): CreateRoleResult {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "ROLE_CODE_ALREADY_USED",
+      message: "El codigo de rol ya existe."
+    }
+  };
 }
