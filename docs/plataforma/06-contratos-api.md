@@ -485,6 +485,45 @@ Errores:
 | 422 | `PERMISSION_NOT_FOUND` | Algun permiso no existe |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 
+### `PATCH /api/platform/roles/{roleId}`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageRoles`.
+
+Request:
+
+```json
+{
+  "permissionCodes": ["Platform.ViewAudit"]
+}
+```
+
+Respuesta `200`: rol actualizado.
+
+Efectos:
+
+- Reemplaza la matriz de permisos del rol personalizado.
+- Incrementa `securityVersion` de los usuarios del rol.
+- Revoca sesiones activas de usuarios del rol con motivo `ROLE_PERMISSIONS_CHANGED`.
+- Audita `ROLE_PERMISSIONS_CHANGED` con permisos anteriores y nuevos.
+- Rechaza cambios sobre roles protegidos.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `ROLE_NOT_FOUND` | El rol no existe |
+| 409 | `ROLE_PROTECTED` | El rol base protegido no permite editar permisos |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `PERMISSION_NOT_FOUND` | Algun permiso no existe |
+| 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
+
 ## 9. Sesiones activas
 
 ### `GET /api/platform/sessions`

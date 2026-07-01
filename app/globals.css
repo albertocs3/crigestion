@@ -128,6 +128,12 @@ a {
   gap: 20px;
 }
 
+.table-form {
+  display: grid;
+  gap: 12px;
+  min-width: 280px;
+}
+
 fieldset {
   display: grid;
   gap: 12px;

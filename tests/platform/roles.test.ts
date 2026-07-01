@@ -14,6 +14,7 @@ import {
 import {
   createRole,
   listRoles,
+  updateRolePermissions,
   type CreateRoleCommand
 } from "@/modules/platform/application/roles";
 import {
@@ -134,6 +135,93 @@ describe("platform roles", () => {
       error: {
         code: "FORBIDDEN",
         message: "No tienes permiso para realizar esta accion."
+      }
+    });
+  });
+
+  it("updates custom role permissions and revokes affected user sessions", async () => {
+    const actor = await getAdminActor();
+
+    await createRole(limitedRoleCommand, actor);
+    await createUser(createLimitedUserCommand(), actor);
+
+    const loginResult = await login({
+      userName: "auditor",
+      password: "Cambiar-auditor-2026"
+    });
+
+    expect(loginResult.ok).toBe(true);
+
+    if (!loginResult.ok) {
+      return;
+    }
+
+    const role = await prisma.role.findUniqueOrThrow({
+      where: { code: limitedRoleCommand.code }
+    });
+    const userBeforeChange = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "auditor" }
+    });
+    const result = await updateRolePermissions(
+      role.id,
+      { permissionCodes: ["Platform.ManageUsers"] },
+      actor
+    );
+
+    expect(result.ok).toBe(true);
+
+    if (!result.ok) {
+      return;
+    }
+
+    const session = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashSessionToken(loginResult.value.token) }
+    });
+    const userAfterChange = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "auditor" }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ROLE_PERMISSIONS_CHANGED" }
+    });
+
+    expect(result.value.permissions).toEqual([
+      {
+        code: "Platform.ManageUsers",
+        name: "Gestionar usuarios"
+      }
+    ]);
+    expect(session.revokedAt).toBeInstanceOf(Date);
+    expect(session.revokeReason).toBe("ROLE_PERMISSIONS_CHANGED");
+    expect(userAfterChange.securityVersion).toBeGreaterThan(
+      userBeforeChange.securityVersion
+    );
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      roleId: role.id,
+      roleCode: limitedRoleCommand.code,
+      previousPermissionCodes: ["Platform.ViewAudit"],
+      newPermissionCodes: ["Platform.ManageUsers"]
+    });
+  });
+
+  it("does not allow updating protected role permissions", async () => {
+    const actor = await getAdminActor();
+    const administratorRole = await prisma.role.findUniqueOrThrow({
+      where: { code: "Administrador" }
+    });
+
+    const result = await updateRolePermissions(
+      administratorRole.id,
+      { permissionCodes: ["Platform.ViewAudit"] },
+      actor
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "ROLE_PROTECTED",
+        message: "No se pueden modificar permisos de un rol protegido."
       }
     });
   });

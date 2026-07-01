@@ -10,6 +10,7 @@ import {
   listRoles
 } from "@/modules/platform/application/roles";
 import { RoleCreateForm } from "@/modules/platform/presentation/RoleCreateForm";
+import { RolePermissionsForm } from "@/modules/platform/presentation/RolePermissionsForm";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,9 @@ export default async function RolesPage() {
                     <td>{role.name}</td>
                     <td>{role.isProtected ? "Protegido" : "Personalizado"}</td>
                     <td>{role.userCount}</td>
-                    <td>{role.permissions.map((permission) => permission.code).join(", ")}</td>
+                    <td>
+                      <RolePermissionsForm role={role} permissions={permissions} />
+                    </td>
                   </tr>
                 ))}
               </tbody>

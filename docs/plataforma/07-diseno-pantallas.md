@@ -82,6 +82,8 @@ Contenido:
 
 - Listado de roles, permisos y numero de usuarios.
 - Formulario para crear rol con permisos seleccionados.
+- Edicion de permisos en roles personalizados.
+- Roles protegidos en solo lectura.
 - Estados de error cuando falta permiso o falla la validacion.
 
 ## 9. Gestion de sesiones

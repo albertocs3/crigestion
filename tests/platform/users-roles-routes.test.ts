@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
+import { PATCH as rolePatch } from "@/app/api/platform/roles/[roleId]/route";
 import { GET as rolesGet, POST as rolesPost } from "@/app/api/platform/roles/route";
 import { PATCH as userPatch } from "@/app/api/platform/users/[userId]/route";
 import { GET as usersGet, POST as usersPost } from "@/app/api/platform/users/route";
@@ -266,6 +267,95 @@ describe("users and roles HTTP contracts", () => {
     });
   });
 
+  it("updates role permissions and revokes affected sessions through PATCH", async () => {
+    const adminToken = await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createRoleResponse = await rolesPost(
+      jsonRequest(
+        "/api/platform/roles",
+        {
+          code: "ConsultaAuditoria",
+          name: "Consulta auditoria",
+          permissionCodes: ["Platform.ViewAudit"]
+        },
+        { csrfToken }
+      )
+    );
+    const role = (await createRoleResponse.json()) as { id: string };
+
+    await usersPost(
+      jsonRequest(
+        "/api/platform/users",
+        {
+          ...createUserPayload(),
+          userName: "auditor",
+          roleCode: "ConsultaAuditoria"
+        },
+        { csrfToken }
+      )
+    );
+
+    cookieMock.reset();
+    await loginWith("auditor", createUserPayload().password);
+
+    const auditorSession = await prisma.session.findFirstOrThrow({
+      where: {
+        user: {
+          normalizedUserName: "auditor"
+        },
+        revokedAt: null
+      }
+    });
+
+    cookieMock.values.set(sessionCookieName, adminToken);
+    const response = await rolePatch(
+      jsonRequest(
+        `/api/platform/roles/${role.id}`,
+        { permissionCodes: ["Platform.ManageUsers"] },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ roleId: role.id }) }
+    );
+    const body = await response.json();
+    const revokedSession = await prisma.session.findUniqueOrThrow({
+      where: { id: auditorSession.id }
+    });
+
+    expect(response.status).toBe(200);
+    expect(body.permissions).toEqual([
+      {
+        code: "Platform.ManageUsers",
+        name: "Gestionar usuarios"
+      }
+    ]);
+    expect(revokedSession.revokedAt).toBeInstanceOf(Date);
+    expect(revokedSession.revokeReason).toBe("ROLE_PERMISSIONS_CHANGED");
+  });
+
+  it("rejects role permission PATCH for protected roles", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const administrator = await prisma.role.findUniqueOrThrow({
+      where: { code: "Administrador" }
+    });
+
+    const response = await rolePatch(
+      jsonRequest(
+        `/api/platform/roles/${administrator.id}`,
+        { permissionCodes: ["Platform.ViewAudit"] },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ roleId: administrator.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body).toEqual({
+      code: "ROLE_PROTECTED",
+      message: "No se pueden modificar permisos de un rol protegido."
+    });
+  });
+
   it("denies users and roles endpoints without the required permission", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -321,8 +411,15 @@ function createUserPayload() {
   };
 }
 
-async function loginAsAdmin(): Promise<void> {
+async function loginAsAdmin(): Promise<string> {
   await loginWith("admin", adminPassword);
+  const token = cookieMock.values.get(sessionCookieName);
+
+  if (!token) {
+    throw new Error("Admin login did not set a session cookie.");
+  }
+
+  return token;
 }
 
 async function loginWith(userName: string, password: string): Promise<void> {
