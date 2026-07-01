@@ -5,6 +5,7 @@ import {
   randomBytes,
   timingSafeEqual
 } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { normalizeUserName } from "@/modules/platform/application/installation";
@@ -240,76 +241,70 @@ export async function login(
     return invalidCredentials();
   }
 
+  await revokeExpiredSessionsForUser(user.id, now);
+
   const activeSession = await prisma.session.findFirst({
     where: {
       userId: user.id,
-      revokedAt: null,
-      expiresAt: {
-        gt: now
-      }
+      revokedAt: null
     },
     select: { id: true }
   });
 
   if (activeSession) {
-    await recordLoginAttempt(normalizedUserName, false, "ACTIVE_SESSION_EXISTS", context);
-    await auditLogin("LOGIN_FAILED", {
-      userId: user.id,
-      reason: "ACTIVE_SESSION_EXISTS"
-    });
-
-    return {
-      ok: false,
-      status: 409,
-      error: {
-        code: "ACTIVE_SESSION_EXISTS",
-        message: "Ya existe una sesion activa para este usuario."
-      }
-    };
+    return activeSessionExists(normalizedUserName, user.id, context);
   }
 
   const token = createSessionToken();
   const expiresAt = new Date(now.getTime() + sessionDurationMs);
 
-  await prisma.$transaction([
-    prisma.user.update({
-      where: { id: user.id },
-      data: {
-        failedLoginCount: 0,
-        lockedUntil: null,
-        lastLoginAt: now
-      }
-    }),
-    prisma.session.create({
-      data: {
-        userId: user.id,
-        tokenHash: hashSessionToken(token),
-        startedAt: now,
-        lastActivityAt: now,
-        expiresAt,
-        ipAddress: context.ipAddress,
-        userAgent: context.userAgent,
-        securityVersion: user.securityVersion
-      }
-    }),
-    prisma.loginAttempt.create({
-      data: {
-        normalizedUserName,
-        succeeded: true,
-        ipAddress: context.ipAddress,
-        userAgent: context.userAgent
-      }
-    }),
-    prisma.auditEvent.create({
-      data: {
-        eventType: "LOGIN_SUCCEEDED",
-        actorType: "USER",
-        payload: {
-          userId: user.id
+  try {
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginCount: 0,
+          lockedUntil: null,
+          lastLoginAt: now
         }
-      }
-    })
-  ]);
+      }),
+      prisma.session.create({
+        data: {
+          userId: user.id,
+          tokenHash: hashSessionToken(token),
+          startedAt: now,
+          lastActivityAt: now,
+          expiresAt,
+          ipAddress: context.ipAddress,
+          userAgent: context.userAgent,
+          securityVersion: user.securityVersion
+        }
+      }),
+      prisma.loginAttempt.create({
+        data: {
+          normalizedUserName,
+          succeeded: true,
+          ipAddress: context.ipAddress,
+          userAgent: context.userAgent
+        }
+      }),
+      prisma.auditEvent.create({
+        data: {
+          eventType: "LOGIN_SUCCEEDED",
+          actorType: "USER",
+          payload: {
+            userId: user.id
+          }
+        }
+      })
+    ]);
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      return activeSessionExists(normalizedUserName, user.id, context);
+    }
+
+    throw error;
+  }
 
   return {
     ok: true,
@@ -660,6 +655,43 @@ async function recordLoginAttempt(
   });
 }
 
+async function revokeExpiredSessionsForUser(userId: string, now: Date): Promise<void> {
+  await prisma.session.updateMany({
+    where: {
+      userId,
+      revokedAt: null,
+      expiresAt: {
+        lte: now
+      }
+    },
+    data: {
+      revokedAt: now,
+      revokeReason: "SESSION_EXPIRED"
+    }
+  });
+}
+
+async function activeSessionExists(
+  normalizedUserName: string,
+  userId: string,
+  context: RequestContext
+): Promise<LoginResult> {
+  await recordLoginAttempt(normalizedUserName, false, "ACTIVE_SESSION_EXISTS", context);
+  await auditLogin("LOGIN_FAILED", {
+    userId,
+    reason: "ACTIVE_SESSION_EXISTS"
+  });
+
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "ACTIVE_SESSION_EXISTS",
+      message: "Ya existe una sesion activa para este usuario."
+    }
+  };
+}
+
 async function auditLogin(
   eventType: "LOGIN_FAILED" | "LOGIN_SUCCEEDED",
   payload: Record<string, string>
@@ -671,6 +703,10 @@ async function auditLogin(
       payload
     }
   });
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
 function invalidCredentials(): LoginResult {

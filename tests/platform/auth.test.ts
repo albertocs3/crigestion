@@ -85,6 +85,51 @@ describe("platform authentication", () => {
     });
   });
 
+  it("revokes expired sessions before creating a new one", async () => {
+    const first = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+
+    expect(first.ok).toBe(true);
+
+    if (!first.ok) {
+      return;
+    }
+
+    const expiredAt = new Date(Date.now() - 1_000);
+    await prisma.session.update({
+      where: { tokenHash: hashSessionToken(first.value.token) },
+      data: {
+        expiresAt: expiredAt
+      }
+    });
+
+    const second = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+
+    expect(second.ok).toBe(true);
+
+    const oldSession = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashSessionToken(first.value.token) }
+    });
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    const activeSessionCount = await prisma.session.count({
+      where: {
+        userId: user.id,
+        revokedAt: null
+      }
+    });
+
+    expect(oldSession.revokedAt).toBeInstanceOf(Date);
+    expect(oldSession.revokeReason).toBe("SESSION_EXPIRED");
+    expect(activeSessionCount).toBe(1);
+  });
+
   it("revokes the session on logout", async () => {
     const result = await login({
       userName: "admin",

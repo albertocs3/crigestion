@@ -82,7 +82,7 @@ Entidades iniciales:
 - `RolePermission` usa clave compuesta `roleId + permissionId`.
 - `Session.tokenHash` es unico.
 - `IdempotencyRecord.key` es unico.
-- Para garantizar una unica sesion activa por usuario se requiere un indice unico parcial en PostgreSQL sobre `sessions(user_id)` cuando `revoked_at IS NULL` y no haya expirado segun el criterio operativo. Si Prisma Migrate no puede expresarlo directamente, se añadira como SQL en la migracion.
+- La migracion `20260701193000_add_active_session_unique_index` crea el indice unico parcial `sessions_one_active_per_user_idx` sobre `sessions("userId")` cuando `"revokedAt" IS NULL`. Prisma no expresa este indice en `schema.prisma`, por lo que se mantiene como SQL manual.
 
 ## 8. Modelo de accesos
 
@@ -92,6 +92,7 @@ Reglas:
 
 - Una sesion revocada no puede volver a usarse.
 - La expiracion se valida en servidor.
+- El login revoca sesiones expiradas no revocadas antes de crear una nueva sesion, con motivo `SESSION_EXPIRED`.
 - La version de seguridad de la sesion debe coincidir con la del usuario.
 - El cambio de contrasena, rol, permisos, bloqueo o desactivacion revoca sesiones.
 - Los intentos de login se registran sin guardar la contrasena.
