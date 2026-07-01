@@ -70,7 +70,7 @@ Cada regla:
 
 | ID | Regla |
 |---|---|
-| SEG-RN-018 | Las contraseñas tendrán al menos 10 caracteres. |
+| SEG-RN-018 | Las contraseñas tendrán al menos 12 caracteres. |
 | SEG-RN-019 | Las contraseñas incluirán al menos una letra mayúscula. |
 | SEG-RN-020 | Las contraseñas incluirán al menos una letra minúscula. |
 | SEG-RN-021 | Las contraseñas incluirán al menos un número. |
@@ -409,7 +409,7 @@ Las reglas funcionales no fijan todavía:
 
 - Algoritmo y parámetros del hash de contraseñas.
 - Tecnología de autorización y sesiones.
-- Persistencia de sesión única.
+- Estrategia concreta de limpieza periodica de sesiones caducadas.
 - Mecanismo de cifrado de secretos.
 - Repositorio de archivos.
 - Motor antivirus.

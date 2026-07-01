@@ -133,7 +133,7 @@ Caducidad:
 Sesion unica:
 
 - Un usuario solo puede mantener una sesion activa.
-- Un nuevo inicio de sesion se rechaza si ya existe otra sesion activa, salvo decision explicita de cierre previo.
+- Un nuevo inicio de sesion se rechaza si ya existe otra sesion activa.
 - Cambio de contrasena, rol, permisos, bloqueo o desactivacion revoca sesiones.
 
 ## 8. CSRF
@@ -269,6 +269,5 @@ Toda tarea de seguridad, API, persistencia, despliegue o UI que toque datos sens
 - Elegir libreria o implementacion final de autenticacion.
 - Elegir algoritmo final de hash: Argon2id o PBKDF2 versionado.
 - Definir mecanismo exacto de token CSRF.
-- Definir si el nuevo login cierra sesion previa o se rechaza.
 - Definir catalogo completo de permisos por modulo.
 - Definir retencion de auditoria y login attempts.

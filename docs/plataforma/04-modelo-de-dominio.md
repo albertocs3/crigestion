@@ -320,9 +320,10 @@ Responsable de:
 - Crear sesiones.
 - Renovar actividad.
 - Caducar sesiones.
+- Revocar una sesion remota por administracion.
 - Revocar todas las sesiones de un usuario.
 
-La garantía de sesión única requiere coordinación transaccional o una restricción de persistencia.
+La garantía de sesión única se refuerza con una restricción de persistencia sobre sesiones no revocadas.
 
 ## 8. Rol y permisos
 
@@ -1398,7 +1399,7 @@ El dominio expresa capacidades mediante puertos.
 
 - Si Identidad y Autorización compartirán almacenamiento o serán módulos separados.
 - Cómo garantizar la no reutilización histórica de nombres de usuario.
-- Estrategia concreta de sesión única.
+- Estrategia concreta de limpieza periodica de sesiones caducadas.
 - Si los eventos de dominio usarán una bandeja de salida transaccional.
 - Persistencia append-only de auditoría.
 - Estrategia de cifrado de campos consultables.

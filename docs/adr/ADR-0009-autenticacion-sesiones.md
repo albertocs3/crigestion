@@ -21,6 +21,8 @@ Reglas:
 - Cada peticion protegida valida sesion, usuario, rol, permisos y version de seguridad en servidor.
 - Las operaciones mutables tendran proteccion CSRF.
 - Solo se permite una sesion activa por usuario.
+- La unicidad de sesion activa se refuerza con una restriccion de PostgreSQL sobre sesiones no revocadas.
+- El administrador puede consultar sesiones activas y revocar sesiones remotas sin exponer tokens ni hashes.
 
 ## Alternativas consideradas
 
@@ -32,5 +34,6 @@ Reglas:
 
 - Se necesita tabla `sessions`.
 - Los cambios de contrasena, rol, permisos, bloqueo o desactivacion revocan sesiones.
+- La revocacion administrativa de sesiones queda auditada.
 - Los Route Handlers protegidos deben declarar permiso necesario.
 - La UI solo mejora la experiencia; no sustituye la autorizacion server-side.
