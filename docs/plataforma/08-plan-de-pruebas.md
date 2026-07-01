@@ -12,7 +12,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 | Build | Build productivo | `npm run build` |
 | Unitarias | Dominio y casos de uso | Vitest |
 | Integracion | Prisma + PostgreSQL real | Vitest/Jest + base de prueba |
-| Contrato | Route Handlers HTTP | Cliente HTTP de prueba |
+| Contrato | Route Handlers HTTP | Vitest con `Request`/`Response` |
 | E2E web | Flujos de navegador | Playwright, pendiente |
 
 ## 3. Pruebas P0 de inicializacion
@@ -25,9 +25,15 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 | PLT-TP-004 | Seed de roles y permisos es idempotente | Integracion | P0 |
 | PLT-TP-005 | La contrasena no queda en texto claro | Seguridad | P0 |
 
-## 4. Verificaciones manuales iniciales
+## 4. Cobertura implementada
 
-Hasta instalar Node/npm y definir runner:
+- `tests/platform/installation.test.ts`: inicializacion transaccional, idempotencia, auditoria sin secretos y rechazo de segunda inicializacion.
+- `tests/platform/installation-routes.test.ts`: contrato HTTP de estado e inicializacion, errores estables, idempotencia, Origin y rate limit.
+- `tests/platform/auth.test.ts`: login, sesion opaca, CSRF, bloqueo, logout y cambio de contrasena sin auditar secretos.
+- `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
+- `tests/platform/roles.test.ts`: creacion, duplicados, listado y permisos insuficientes.
+
+## 5. Verificaciones manuales iniciales
 
 - Revisar que `node` y `npm` estan disponibles.
 - Ejecutar `npm install`.
@@ -38,11 +44,11 @@ Hasta instalar Node/npm y definir runner:
 - Arrancar `npm run dev`.
 - Consultar `/api/health`.
 
-## 5. Criterios de salida
+## 6. Criterios de salida
 
 1. TypeScript estricto sin errores.
 2. Build correcto.
 3. Migracion PostgreSQL desde cero.
 4. API de inicializacion cubierta por contrato.
 5. Transaccion de inicializacion cubierta contra PostgreSQL real.
-6. E2E web definido antes de cerrar la primera rebanada.
+6. E2E web definido para el siguiente incremento de UI.
