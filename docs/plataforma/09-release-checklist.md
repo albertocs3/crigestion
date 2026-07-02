@@ -37,6 +37,8 @@ Ejecutar:
 npm run verify:release
 ```
 
+El CI ejecuta este mismo comando contra PostgreSQL con las migraciones aplicadas.
+
 Si el cambio toca flujos de navegador criticos, ejecutar tambien:
 
 ```powershell
