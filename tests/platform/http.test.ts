@@ -21,6 +21,7 @@ describe("platform HTTP security helpers", () => {
 
   it("allows local development requests when APP_BASE_URL is not configured", () => {
     vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("APP_ENV", "development");
     delete process.env.APP_BASE_URL;
 
     expect(
@@ -30,6 +31,7 @@ describe("platform HTTP security helpers", () => {
 
   it("rejects production mutation origins when APP_BASE_URL is missing", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "production");
     delete process.env.APP_BASE_URL;
 
     expect(
@@ -51,6 +53,7 @@ describe("platform HTTP security helpers", () => {
 
   it("uses the request URL as a production fallback when Origin is absent", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "production");
     process.env.APP_BASE_URL = "https://app.example.test";
 
     expect(
@@ -63,7 +66,9 @@ describe("platform HTTP security helpers", () => {
 
   it("ignores forwarded client IP headers in production unless explicitly trusted", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "production");
     vi.stubEnv("TRUST_PROXY_HEADERS", "false");
+    process.env.APP_BASE_URL = "https://app.example.test";
     const request = new Request("https://app.example.test/api/auth/login", {
       headers: {
         "X-Forwarded-For": "198.51.100.10"
@@ -75,7 +80,9 @@ describe("platform HTTP security helpers", () => {
 
   it("uses forwarded client IP headers when proxy headers are trusted", () => {
     vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "production");
     vi.stubEnv("TRUST_PROXY_HEADERS", "true");
+    process.env.APP_BASE_URL = "https://app.example.test";
     const request = new Request("https://app.example.test/api/auth/login", {
       headers: {
         "X-Forwarded-For": "198.51.100.10, 10.0.0.1"

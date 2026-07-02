@@ -11,6 +11,10 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { normalizeUserName } from "@/modules/platform/application/installation";
 import {
+  getSessionCookieName,
+  getSessionSecret,
+} from "@/modules/platform/application/environment";
+import {
   dummyPasswordHash,
   hashPassword,
   verifyPassword
@@ -26,18 +30,7 @@ const genericLoginError = {
   message: "Usuario o contrasena incorrectos."
 } as const;
 
-export const sessionCookieName =
-  process.env.AUTH_COOKIE_NAME ?? "crigestion_session";
-
-export function isSessionCookieSecure(): boolean {
-  return process.env.NODE_ENV === "production" || process.env.AUTH_COOKIE_SECURE === "true";
-}
-
-export function getSessionCookieSameSite(): "lax" | "strict" {
-  const configured = process.env.AUTH_COOKIE_SAME_SITE?.toLocaleLowerCase("en-US");
-
-  return configured === "strict" ? "strict" : "lax";
-}
+export const sessionCookieName = getSessionCookieName();
 
 export const loginSchema = z.object({
   userName: z.string().trim().min(1).max(80),
@@ -826,14 +819,4 @@ function unauthenticated(): LogoutResult {
       message: "No hay una sesion activa."
     }
   };
-}
-
-function getSessionSecret(): string {
-  const secret = process.env.APP_SESSION_SECRET;
-
-  if (!secret || secret === "change-me-in-local-env") {
-    throw new Error("APP_SESSION_SECRET must be configured.");
-  }
-
-  return secret;
 }

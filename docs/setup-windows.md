@@ -109,6 +109,8 @@ No guardes certificados digitales, contrasenas reales, tokens ni secretos produc
 
 Activa `TRUST_PROXY_HEADERS="true"` solo cuando la aplicacion este detras de un proxy confiable que sobrescriba cabeceras como `X-Forwarded-For`. El rate limit por IP de login depende de esa IP confiable en produccion.
 
+La aplicacion valida estas variables al arrancar. `APP_ENV` indica el entorno operativo. Cuando `APP_ENV="production"`, `APP_BASE_URL` debe usar `https://`, `APP_SESSION_SECRET` debe tener al menos 32 caracteres y `AUTH_COOKIE_SECURE` no puede ser `"false"`.
+
 ## 7. PostgreSQL local con Docker
 
 Arranca PostgreSQL:
