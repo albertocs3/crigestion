@@ -291,6 +291,29 @@ tr:last-child td {
   flex-wrap: wrap;
 }
 
+.filter-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto;
+  align-items: end;
+  gap: 14px;
+}
+
+.json-block {
+  display: block;
+  max-width: 520px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .filter-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .checkbox-grid {
   display: grid;
   gap: 8px;

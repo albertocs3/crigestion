@@ -604,9 +604,56 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
 
-Los siguientes contratos de seguridad se iran incorporando en rebanadas posteriores.
+## 10. Auditoria
 
-## 10. Criterios de aceptacion
+### `GET /api/platform/audit`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ViewAudit`.
+
+Parametros query:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Tamano de pagina entre 1 y 100. Por defecto 25 |
+| `cursor` | Cursor devuelto por la pagina anterior |
+| `eventType` | Filtro opcional por tipo de evento |
+
+Respuesta `200`:
+
+```json
+{
+  "events": [
+    {
+      "id": "uuid",
+      "eventType": "LOGIN_SUCCEEDED",
+      "actorType": "USER",
+      "payload": {
+        "userId": "uuid"
+      },
+      "createdAt": "2026-06-26T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Efectos:
+
+- Devuelve DTOs de auditoria, no modelos Prisma.
+- Redacta claves sensibles conocidas en `payload`.
+- Audita la propia consulta como `AUDIT_VIEWED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 422 | `VALIDATION_ERROR` | Query invalida |
+
+## 11. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

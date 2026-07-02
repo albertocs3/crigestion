@@ -130,6 +130,8 @@ model AuditEvent {
   payload     Json
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
+  @@index([createdAt, id])
+  @@index([eventType, createdAt])
   @@map("audit_events")
 }
 

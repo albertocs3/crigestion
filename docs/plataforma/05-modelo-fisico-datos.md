@@ -122,6 +122,7 @@ Reglas:
 - Guardar tipo de evento estable.
 - Guardar actor tecnico o usuario.
 - Guardar payload JSON minimo.
+- Indexar `createdAt` e `eventType` para consulta paginada del visor de auditoria.
 
 ## 11. Migraciones
 

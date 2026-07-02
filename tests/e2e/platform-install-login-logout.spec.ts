@@ -97,6 +97,7 @@ test("shows access denied for a user without users or roles permissions", async 
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
   await expect(page.getByText("Sesion activa de Usuario Auditor E2E")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ver auditoria" })).toBeVisible();
 
   await page.goto("/app/users");
   await expect(page).toHaveURL(/\/app\/users$/);
@@ -109,6 +110,12 @@ test("shows access denied for a user without users or roles permissions", async 
   await expect(page.getByRole("heading", { name: "Roles" })).toBeVisible();
   await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
   await expect(page.getByText("Roles protegidos y personalizados")).not.toBeVisible();
+
+  await page.goto("/app/audit");
+  await expect(page).toHaveURL(/\/app\/audit$/);
+  await expect(page.getByRole("heading", { name: "Auditoria" })).toBeVisible();
+  await expect(page.getByText("LOGIN_SUCCEEDED").first()).toBeVisible();
+  await expect(page.getByText(limitedPassword)).not.toBeVisible();
 
   const deniedAuditCount = await prisma.auditEvent.count({
     where: {

@@ -15,6 +15,7 @@ Define la experiencia web inicial de Plataforma para CriGestión con Next.js.
 | `/app/users` | Gestion de usuarios | Listar, crear, activar, desactivar y cambiar roles |
 | `/app/roles` | Gestion de roles | Listar y crear roles con permisos |
 | `/app/sessions` | Gestion de sesiones | Listar sesiones activas y revocar sesiones remotas |
+| `/app/audit` | Auditoria | Consultar eventos auditables con filtros basicos |
 
 ## 3. Entrada
 
@@ -57,6 +58,7 @@ Contenido:
 - Caducidad de sesion.
 - Accesos a usuarios y roles.
 - Acceso a sesiones activas cuando el rol lo permite.
+- Acceso a auditoria cuando el rol lo permite.
 - Formulario de cambio de contrasena.
 - Accion de cierre de sesion.
 - Redireccion a `/platform/installation` si la plataforma no esta inicializada.
@@ -95,7 +97,17 @@ Contenido:
 - Estados de error cuando falta permiso o falla la validacion.
 - Redireccion a `/login` si no existe sesion valida.
 
-## 10. Criterios UI
+## 10. Auditoria
+
+Contenido:
+
+- Listado paginado de eventos auditables como DTOs.
+- Fecha, tipo de evento, actor y payload saneado.
+- Filtro por tipo de evento.
+- Redireccion a `/login` si no existe sesion valida.
+- Estado de error cuando falta permiso.
+
+## 11. Criterios UI
 
 - Server Components por defecto.
 - Client Components solo para formularios.

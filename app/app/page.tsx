@@ -54,6 +54,11 @@ export default async function AppHomePage() {
                   Gestionar sesiones
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Platform.ViewAudit") ? (
+                <Link className="button button-secondary" href="/app/audit">
+                  Ver auditoria
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>
