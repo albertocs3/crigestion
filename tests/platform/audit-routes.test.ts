@@ -228,6 +228,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

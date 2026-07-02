@@ -96,6 +96,7 @@ APP_BASE_URL="http://localhost:3000"
 APP_ENV="development"
 APP_SESSION_SECRET="valor-local-largo-y-aleatorio"
 AUTH_COOKIE_SECURE="false"
+TRUST_PROXY_HEADERS="false"
 ```
 
 Genera un secreto local con PowerShell:
@@ -105,6 +106,8 @@ Genera un secreto local con PowerShell:
 ```
 
 No guardes certificados digitales, contrasenas reales, tokens ni secretos productivos en Git.
+
+Activa `TRUST_PROXY_HEADERS="true"` solo cuando la aplicacion este detras de un proxy confiable que sobrescriba cabeceras como `X-Forwarded-For`. El rate limit por IP de login depende de esa IP confiable en produccion.
 
 ## 7. PostgreSQL local con Docker
 

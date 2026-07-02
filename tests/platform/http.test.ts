@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getCorrelationId,
+  getRequestContext,
   jsonResponse,
   isAllowedOrigin
 } from "@/modules/platform/application/http";
@@ -58,6 +59,30 @@ describe("platform HTTP security helpers", () => {
     expect(
       isAllowedOrigin(new Request("https://evil.example.test/api/auth/logout"))
     ).toBe(false);
+  });
+
+  it("ignores forwarded client IP headers in production unless explicitly trusted", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("TRUST_PROXY_HEADERS", "false");
+    const request = new Request("https://app.example.test/api/auth/login", {
+      headers: {
+        "X-Forwarded-For": "198.51.100.10"
+      }
+    });
+
+    expect(getRequestContext(request).ipAddress).toBeUndefined();
+  });
+
+  it("uses forwarded client IP headers when proxy headers are trusted", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("TRUST_PROXY_HEADERS", "true");
+    const request = new Request("https://app.example.test/api/auth/login", {
+      headers: {
+        "X-Forwarded-For": "198.51.100.10, 10.0.0.1"
+      }
+    });
+
+    expect(getRequestContext(request).ipAddress).toBe("198.51.100.10");
   });
 
   it("adds correlation id to error responses when the request carries one", async () => {

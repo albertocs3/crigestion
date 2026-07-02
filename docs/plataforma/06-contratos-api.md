@@ -177,6 +177,7 @@ Efectos:
 - Devuelve el token solo en cookie `HttpOnly`, `Secure` en produccion, `SameSite=Lax` por defecto, `Path=/`.
 - Registra `login_attempts`.
 - Audita `LOGIN_SUCCEEDED` o `LOGIN_FAILED` sin contrasena.
+- Aplica rate limit atomico por IP confiable/ventana sobre intentos de login. En produccion solo se confia en cabeceras de proxy si `TRUST_PROXY_HEADERS=true`.
 
 Errores:
 
@@ -189,6 +190,9 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 | 423 | `ACCOUNT_LOCKED` | Cuenta bloqueada temporalmente |
+| 429 | `LOGIN_RATE_LIMITED` | Demasiados intentos recientes desde la misma IP confiable |
+
+La respuesta `429` incluye la cabecera `Retry-After` y el campo `retryAfterSeconds`.
 
 ### `GET /api/auth/session`
 

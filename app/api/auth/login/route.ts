@@ -46,6 +46,15 @@ export async function POST(request: Request) {
   const result = await login(payload.data, getRequestContext(request));
 
   if (!result.ok) {
+    if (result.status === 429 && result.error.retryAfterSeconds) {
+      return jsonResponse(request, result.error, {
+        status: result.status,
+        headers: {
+          "Retry-After": String(result.error.retryAfterSeconds)
+        }
+      });
+    }
+
     return jsonResponse(request, result.error, { status: result.status });
   }
 

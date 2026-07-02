@@ -134,6 +134,43 @@ describe("authentication HTTP contracts", () => {
     });
   });
 
+  it("rate limits repeated login requests by IP", async () => {
+    const ipAddress = "198.51.100.42";
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await loginPost(
+        jsonRequest(
+          "/api/auth/login",
+          {
+            userName: `desconocido-${attempt}`,
+            password: "Clave-incorrecta-2026"
+          },
+          { ipAddress }
+        )
+      );
+    }
+
+    const response = await loginPost(
+      jsonRequest(
+        "/api/auth/login",
+        {
+          userName: "otro-desconocido",
+          password: "Clave-incorrecta-2026"
+        },
+        { ipAddress }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toEqual(expect.stringMatching(/^\d+$/));
+    expect(body).toEqual({
+      code: "LOGIN_RATE_LIMITED",
+      message: "Demasiados intentos de acceso. Espera antes de reintentar.",
+      retryAfterSeconds: expect.any(Number)
+    });
+  });
+
   it("logs in with an HttpOnly cookie and never returns token material", async () => {
     const response = await loginPost(jsonRequest("/api/auth/login", credentials()));
     const body = await response.json();
@@ -334,11 +371,12 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    ipAddress?: string;
   } = {}
 ): Request {
   const headers = new Headers({
     "Content-Type": "application/json",
-    "X-Forwarded-For": uniqueTestIp()
+    "X-Forwarded-For": options.ipAddress ?? uniqueTestIp()
   });
 
   if (options.origin) {
@@ -384,6 +422,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

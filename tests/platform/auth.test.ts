@@ -218,6 +218,73 @@ describe("platform authentication", () => {
     expect(serializedAudit).not.toContain("Clave-incorrecta-2026");
   });
 
+  it("rate limits repeated login attempts by IP", async () => {
+    const ipAddress = "198.51.100.10";
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await login(
+        {
+          userName: `desconocido-${attempt}`,
+          password: "Clave-incorrecta-2026"
+        },
+        { ipAddress }
+      );
+    }
+
+    const result = await login(
+      {
+        userName: "otro-desconocido",
+        password: "Clave-incorrecta-2026"
+      },
+      { ipAddress }
+    );
+    const attempts = await prisma.loginAttempt.findMany({
+      where: { ipAddress },
+      orderBy: { createdAt: "asc" }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        eventType: "LOGIN_FAILED",
+        payload: {
+          path: ["reason"],
+          equals: "LOGIN_RATE_LIMITED"
+        }
+      }
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 429,
+      error: {
+        code: "LOGIN_RATE_LIMITED",
+        message: "Demasiados intentos de acceso. Espera antes de reintentar.",
+        retryAfterSeconds: expect.any(Number)
+      }
+    });
+    expect(attempts).toHaveLength(21);
+    expect(attempts.at(-1)?.failureCode).toBe("LOGIN_RATE_LIMITED");
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("Clave-incorrecta-2026");
+  });
+
+  it("does not collapse missing client IPs into a global rate limit bucket", async () => {
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const result = await login({
+        userName: `desconocido-sin-ip-${attempt}`,
+        password: "Clave-incorrecta-2026"
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        status: 401,
+        error: {
+          code: "INVALID_CREDENTIALS"
+        }
+      });
+    }
+
+    await expect(prisma.rateLimitBucket.count()).resolves.toBe(0);
+  });
+
   it("changes password, revokes sessions, and does not audit secrets", async () => {
     const loginResult = await login({
       userName: "admin",
@@ -328,6 +395,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

@@ -7,13 +7,26 @@ export const correlationIdHeaderName = "X-Correlation-ID";
 const generatedCorrelationIds = new WeakMap<Request, string>();
 
 export function getRequestContext(request: Request) {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-
   return {
-    ipAddress: forwardedFor?.split(",")[0]?.trim(),
+    ipAddress: getClientIpAddress(request),
     userAgent: request.headers.get("user-agent") ?? undefined,
     correlationId: getCorrelationId(request)
   };
+}
+
+function getClientIpAddress(request: Request): string | undefined {
+  if (!trustProxyHeaders()) {
+    return undefined;
+  }
+
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  const forwardedIp = forwardedFor?.split(",")[0]?.trim();
+
+  return forwardedIp || request.headers.get("x-real-ip")?.trim() || undefined;
+}
+
+function trustProxyHeaders(): boolean {
+  return process.env.TRUST_PROXY_HEADERS === "true" || process.env.NODE_ENV !== "production";
 }
 
 export function getCorrelationId(request: Request): string {
