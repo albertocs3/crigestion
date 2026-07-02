@@ -604,7 +604,74 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
 
-## 10. Auditoria
+## 10. Configuracion
+
+### `GET /api/platform/configuration`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageConfiguration`.
+
+Respuesta `200`:
+
+```json
+{
+  "company": {
+    "id": "uuid",
+    "legalName": "CriGestion SL",
+    "taxId": "B12345678",
+    "email": "admin@example.com",
+    "updatedAt": "2026-06-26T10:00:00.000Z"
+  },
+  "installation": {
+    "id": "uuid",
+    "status": "INITIALIZED",
+    "productVersion": "0.1.0",
+    "completedAt": "2026-06-26T10:00:00.000Z"
+  }
+}
+```
+
+### `PATCH /api/platform/configuration/company`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageConfiguration`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{
+  "legalName": "CriGestion SL",
+  "taxId": "B12345678",
+  "email": "admin@example.com"
+}
+```
+
+Respuesta `200`: empresa actualizada como DTO.
+
+Efectos:
+
+- Actualiza los datos base de empresa.
+- Audita `COMPANY_CONFIGURATION_UPDATED` con campos cambiados, sin guardar valores fiscales/email completos en el payload.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `CONFIGURATION_NOT_FOUND` | La configuracion no existe |
+| 409 | `COMPANY_TAX_ID_ALREADY_USED` | El NIF ya pertenece a otra empresa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+## 11. Auditoria
 
 ### `GET /api/platform/audit`
 
@@ -653,7 +720,7 @@ Errores:
 | 403 | `FORBIDDEN` | Falta permiso |
 | 422 | `VALIDATION_ERROR` | Query invalida |
 
-## 11. Criterios de aceptacion
+## 12. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

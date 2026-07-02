@@ -54,6 +54,11 @@ export default async function AppHomePage() {
                   Gestionar sesiones
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Platform.ManageConfiguration") ? (
+                <Link className="button button-secondary" href="/app/configuration">
+                  Configuracion
+                </Link>
+              ) : null}
               {session.user.permissions.includes("Platform.ViewAudit") ? (
                 <Link className="button button-secondary" href="/app/audit">
                   Ver auditoria

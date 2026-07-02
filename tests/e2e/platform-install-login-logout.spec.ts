@@ -50,6 +50,19 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
   await expect(page.getByText(`Sesion activa de ${displayName}`)).toBeVisible();
   await expect(page.getByText(userName)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Configuracion" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Configuracion" }).click();
+  await expect(page).toHaveURL(/\/app\/configuration$/);
+  await expect(page.getByRole("heading", { name: "Configuracion" })).toBeVisible();
+  await page.getByLabel("Nombre legal").fill("CriGestion E2E Actualizada SL");
+  await page.getByLabel("NIF").fill("B87654321");
+  await page.getByLabel("Email").fill("contabilidad-e2e@example.test");
+  await page.getByRole("button", { name: "Guardar configuracion" }).click();
+  await expect(page.getByText("Configuracion actualizada.")).toBeVisible();
+  await expect(page.locator('input[name="legalName"]')).toHaveValue(
+    "CriGestion E2E Actualizada SL"
+  );
 
   await page.goto("/login");
   await expect(page).toHaveURL(/\/app$/);
@@ -81,7 +94,13 @@ test("initializes the platform, logs in, shows the session, and logs out", async
       }
     }
   });
+  const configurationAuditCount = await prisma.auditEvent.count({
+    where: {
+      eventType: "COMPANY_CONFIGURATION_UPDATED"
+    }
+  });
   expect(revokedSessionCount).toBe(1);
+  expect(configurationAuditCount).toBe(1);
 });
 
 test("shows access denied for a user without users or roles permissions", async ({
