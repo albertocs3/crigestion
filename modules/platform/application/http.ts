@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 export const correlationIdHeaderName = "X-Correlation-ID";
+const generatedCorrelationIds = new WeakMap<Request, string>();
 
 export function getRequestContext(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
@@ -18,7 +19,21 @@ export function getRequestContext(request: Request) {
 export function getCorrelationId(request: Request): string {
   const headerValue = request.headers.get(correlationIdHeaderName);
 
-  return isValidCorrelationId(headerValue) ? headerValue : randomUUID();
+  if (isValidCorrelationId(headerValue)) {
+    return headerValue;
+  }
+
+  const existingCorrelationId = generatedCorrelationIds.get(request);
+
+  if (existingCorrelationId) {
+    return existingCorrelationId;
+  }
+
+  const correlationId = randomUUID();
+
+  generatedCorrelationIds.set(request, correlationId);
+
+  return correlationId;
 }
 
 export function jsonResponse<TBody>(

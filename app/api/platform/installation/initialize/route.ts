@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   hashRequestBody,
   initializePlatform,
@@ -8,6 +7,7 @@ import {
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
+  jsonResponse,
   originNotAllowed,
   unsupportedMediaType,
   validationError
@@ -46,7 +46,8 @@ function isRateLimited(request: Request): boolean {
 
 export async function POST(request: Request) {
   if (isRateLimited(request)) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "RATE_LIMITED",
         message: "Demasiados intentos de inicializacion. Espera antes de reintentar."
@@ -56,17 +57,18 @@ export async function POST(request: Request) {
   }
 
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(originNotAllowed(), { status: 403 });
+    return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
 
   if (!isJsonRequest(request)) {
-    return NextResponse.json(unsupportedMediaType(), { status: 415 });
+    return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
 
   const idempotencyKey = request.headers.get("Idempotency-Key");
 
   if (!idempotencyKey) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "IDEMPOTENCY_KEY_REQUIRED",
         message: "La cabecera Idempotency-Key es obligatoria."
@@ -76,7 +78,8 @@ export async function POST(request: Request) {
   }
 
   if (idempotencyKey.length > 160) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "IDEMPOTENCY_KEY_INVALID",
         message: "La cabecera Idempotency-Key no puede superar 160 caracteres."
@@ -90,7 +93,7 @@ export async function POST(request: Request) {
   try {
     rawBody = await request.text();
   } catch {
-    return NextResponse.json(invalidJson(), { status: 400 });
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   let body: unknown;
@@ -98,13 +101,13 @@ export async function POST(request: Request) {
   try {
     body = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json(invalidJson(), { status: 400 });
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   const payload = initializeSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
+    return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await initializePlatform(
@@ -114,11 +117,12 @@ export async function POST(request: Request) {
   );
 
   if (!result.ok) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       result.error,
       { status: result.status }
     );
   }
 
-  return NextResponse.json(result.value, { status: result.status });
+  return jsonResponse(request, result.value, { status: result.status });
 }

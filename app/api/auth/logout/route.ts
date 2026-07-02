@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import {
   logout,
   sessionCookieName,
@@ -7,6 +6,7 @@ import {
 } from "@/modules/platform/application/auth";
 import {
   isAllowedOrigin,
+  jsonResponse,
   originNotAllowed
 } from "@/modules/platform/application/http";
 
@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(originNotAllowed(), { status: 403 });
+    return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
 
   const cookieStore = await cookies();
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   const csrf = validateCsrfToken(token, request.headers.get("X-CSRF-Token"));
 
   if (!csrf.ok) {
-    return NextResponse.json(csrf.error, { status: csrf.status });
+    return jsonResponse(request, csrf.error, { status: csrf.status });
   }
 
   const result = await logout(token);
@@ -31,8 +31,8 @@ export async function POST(request: Request) {
   cookieStore.delete(sessionCookieName);
 
   if (!result.ok) {
-    return NextResponse.json(result.error, { status: result.status });
+    return jsonResponse(request, result.error, { status: result.status });
   }
 
-  return NextResponse.json({ authenticated: false });
+  return jsonResponse(request, { authenticated: false });
 }

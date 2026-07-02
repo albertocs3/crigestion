@@ -93,7 +93,7 @@ describe("authentication HTTP contracts", () => {
   });
 
   it("returns an anonymous session DTO when no cookie exists", async () => {
-    const response = await sessionGet();
+    const response = await sessionGet(apiRequest("/api/auth/session"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -172,7 +172,7 @@ describe("authentication HTTP contracts", () => {
   it("returns the authenticated session from the session cookie", async () => {
     await loginAsAdmin();
 
-    const response = await sessionGet();
+    const response = await sessionGet(apiRequest("/api/auth/session"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -190,7 +190,7 @@ describe("authentication HTTP contracts", () => {
   });
 
   it("requires a valid session before issuing a CSRF token", async () => {
-    const response = await csrfGet();
+    const response = await csrfGet(apiRequest("/api/auth/csrf"));
     const body = await response.json();
 
     expect(response.status).toBe(401);
@@ -315,7 +315,7 @@ async function loginAsAdmin(): Promise<string> {
 }
 
 async function getCsrfToken(): Promise<string> {
-  const response = await csrfGet();
+  const response = await csrfGet(apiRequest("/api/auth/csrf"));
   const body = (await response.json()) as { csrfToken?: string };
 
   expect(response.status).toBe(200);
@@ -354,6 +354,10 @@ function jsonRequest(
     headers,
     body: JSON.stringify(payload)
   });
+}
+
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
 }
 
 function uniqueTestIp(): string {

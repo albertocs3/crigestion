@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getCorrelationId,
   jsonResponse,
   isAllowedOrigin
 } from "@/modules/platform/application/http";
@@ -80,5 +81,11 @@ describe("platform HTTP security helpers", () => {
       message: "No tienes permiso para realizar esta accion.",
       correlationId: "test-correlation-001"
     });
+  });
+
+  it("reuses generated correlation ids for the same request", () => {
+    const request = new Request("http://localhost/api/platform/users");
+
+    expect(getCorrelationId(request)).toBe(getCorrelationId(request));
   });
 });

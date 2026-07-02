@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import {
   getSessionCookieSameSite,
   isSessionCookieSecure,
@@ -12,6 +11,7 @@ import {
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
+  jsonResponse,
   originNotAllowed,
   unsupportedMediaType,
   validationError
@@ -22,11 +22,11 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(originNotAllowed(), { status: 403 });
+    return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
 
   if (!isJsonRequest(request)) {
-    return NextResponse.json(unsupportedMediaType(), { status: 415 });
+    return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
 
   let body: unknown;
@@ -34,19 +34,19 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(invalidJson(), { status: 400 });
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   const payload = loginSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
+    return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await login(payload.data, getRequestContext(request));
 
   if (!result.ok) {
-    return NextResponse.json(result.error, { status: result.status });
+    return jsonResponse(request, result.error, { status: result.status });
   }
 
   const cookieStore = await cookies();
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     expires: result.value.expiresAt
   });
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     authenticated: true,
     user: result.value.user,
     expiresAt: result.value.expiresAt.toISOString()

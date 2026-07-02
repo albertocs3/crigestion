@@ -32,7 +32,7 @@ describe("platform installation HTTP contracts", () => {
   });
 
   it("reports an uninitialized platform as a stable DTO", async () => {
-    const response = await getInstallation();
+    const response = await getInstallation(apiRequest("/api/platform/installation"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -205,6 +205,10 @@ function jsonRequest(
     headers,
     body: JSON.stringify(payload)
   });
+}
+
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
 }
 
 function uniqueTestIp(): string {

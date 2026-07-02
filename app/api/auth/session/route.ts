@@ -1,16 +1,16 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import {
   getSessionState,
   sessionCookieName
 } from "@/modules/platform/application/auth";
+import { jsonResponse } from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: Request) {
   const cookieStore = await cookies();
   const token = cookieStore.get(sessionCookieName)?.value;
 
-  return NextResponse.json(await getSessionState(token));
+  return jsonResponse(request, await getSessionState(token));
 }

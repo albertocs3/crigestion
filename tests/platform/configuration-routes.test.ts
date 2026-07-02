@@ -79,7 +79,7 @@ describe("configuration HTTP contracts", () => {
   });
 
   it("rejects unauthenticated configuration reads", async () => {
-    const response = await configurationGet();
+    const response = await configurationGet(apiRequest("/api/platform/configuration"));
     const body = await response.json();
 
     expect(response.status).toBe(401);
@@ -93,7 +93,7 @@ describe("configuration HTTP contracts", () => {
     await createLimitedUserWithoutConfigurationPermission();
     await loginWith("gestion", limitedPassword);
 
-    const response = await configurationGet();
+    const response = await configurationGet(apiRequest("/api/platform/configuration"));
     const body = await response.json();
 
     expect(response.status).toBe(403);
@@ -106,7 +106,7 @@ describe("configuration HTTP contracts", () => {
   it("returns configuration DTOs for authorized administrators", async () => {
     await loginWith("admin", adminPassword);
 
-    const response = await configurationGet();
+    const response = await configurationGet(apiRequest("/api/platform/configuration"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -228,7 +228,7 @@ async function loginWith(userName: string, password: string): Promise<void> {
 }
 
 async function getCsrfToken(): Promise<string> {
-  const response = await csrfGet();
+  const response = await csrfGet(apiRequest("/api/auth/csrf"));
   const body = (await response.json()) as { csrfToken?: string };
 
   expect(response.status).toBe(200);
@@ -262,6 +262,10 @@ function jsonRequest(
     headers,
     body: JSON.stringify(payload)
   });
+}
+
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
 }
 
 function uniqueTestIp(): string {

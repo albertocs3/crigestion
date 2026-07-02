@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
 import { getInstallationState } from "@/modules/platform/application/installation";
+import { jsonResponse } from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
-  return NextResponse.json(await getInstallationState());
+export async function GET(request: Request) {
+  return jsonResponse(request, await getInstallationState());
 }

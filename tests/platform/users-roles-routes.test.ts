@@ -211,7 +211,7 @@ describe("users and roles HTTP contracts", () => {
   it("lists roles and permissions for an authorized administrator", async () => {
     await loginAsAdmin();
 
-    const response = await rolesGet();
+    const response = await rolesGet(apiRequest("/api/platform/roles"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -385,7 +385,7 @@ describe("users and roles HTTP contracts", () => {
     await loginWith("auditor", createUserPayload().password);
 
     const usersResponse = await usersGet(apiRequest("/api/platform/users"));
-    const rolesResponse = await rolesGet();
+    const rolesResponse = await rolesGet(apiRequest("/api/platform/roles"));
     const usersBody = await usersResponse.json();
     const rolesBody = await rolesResponse.json();
 
@@ -496,7 +496,7 @@ async function loginWith(userName: string, password: string): Promise<void> {
 }
 
 async function getCsrfToken(): Promise<string> {
-  const response = await csrfGet();
+  const response = await csrfGet(apiRequest("/api/auth/csrf"));
   const body = (await response.json()) as { csrfToken?: string };
 
   expect(response.status).toBe(200);

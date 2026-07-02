@@ -1,5 +1,4 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   requirePermission,
@@ -8,9 +7,11 @@ import {
   validateCsrfToken
 } from "@/modules/platform/application/auth";
 import {
+  getCorrelationId,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
+  jsonResponse,
   originNotAllowed,
   unsupportedMediaType,
   validationError
@@ -46,7 +47,7 @@ export async function PATCH(
   context: { params: Promise<{ userId: string }> }
 ) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(originNotAllowed(), { status: 403 });
+    return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
 
   const cookieStore = await cookies();
@@ -54,23 +55,27 @@ export async function PATCH(
   const csrf = validateCsrfToken(sessionToken, request.headers.get("X-CSRF-Token"));
 
   if (!csrf.ok) {
-    return NextResponse.json(csrf.error, { status: csrf.status });
+    return jsonResponse(request, csrf.error, { status: csrf.status });
   }
 
-  const authorization = await requirePermission(sessionToken, requiredPermission);
+  const authorization = await requirePermission(
+    sessionToken,
+    requiredPermission,
+    { correlationId: getCorrelationId(request) }
+  );
 
   if (!authorization.ok) {
-    return NextResponse.json(authorization.error, { status: authorization.status });
+    return jsonResponse(request, authorization.error, { status: authorization.status });
   }
 
   const params = paramsSchema.safeParse(await context.params);
 
   if (!params.success) {
-    return NextResponse.json(validationError(params.error.flatten()), { status: 422 });
+    return jsonResponse(request, validationError(params.error.flatten()), { status: 422 });
   }
 
   if (!isJsonRequest(request)) {
-    return NextResponse.json(unsupportedMediaType(), { status: 415 });
+    return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
 
   let body: unknown;
@@ -78,13 +83,13 @@ export async function PATCH(
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(invalidJson(), { status: 400 });
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   const payload = bodySchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
+    return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await applyUserPatch(
@@ -94,10 +99,10 @@ export async function PATCH(
   );
 
   if (!result.ok) {
-    return NextResponse.json(result.error, { status: result.status });
+    return jsonResponse(request, result.error, { status: result.status });
   }
 
-  return NextResponse.json(result.value, { status: result.status });
+  return jsonResponse(request, result.value, { status: result.status });
 }
 
 async function applyUserPatch(

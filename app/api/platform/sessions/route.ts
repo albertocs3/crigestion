@@ -1,9 +1,12 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import {
   requirePermission,
   sessionCookieName
 } from "@/modules/platform/application/auth";
+import {
+  getCorrelationId,
+  jsonResponse
+} from "@/modules/platform/application/http";
 import { listActiveSessions } from "@/modules/platform/application/sessions";
 
 export const dynamic = "force-dynamic";
@@ -11,16 +14,20 @@ export const runtime = "nodejs";
 
 const requiredPermission = "Platform.ManageSessions";
 
-export async function GET() {
+export async function GET(request: Request) {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(sessionCookieName)?.value;
-  const authorization = await requirePermission(sessionToken, requiredPermission);
+  const authorization = await requirePermission(
+    sessionToken,
+    requiredPermission,
+    { correlationId: getCorrelationId(request) }
+  );
 
   if (!authorization.ok) {
-    return NextResponse.json(authorization.error, { status: authorization.status });
+    return jsonResponse(request, authorization.error, { status: authorization.status });
   }
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     sessions: await listActiveSessions(authorization.sessionId)
   });
 }

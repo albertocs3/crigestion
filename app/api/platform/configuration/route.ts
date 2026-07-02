@@ -1,29 +1,37 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
 import {
   requirePermission,
   sessionCookieName
 } from "@/modules/platform/application/auth";
 import { getPlatformConfiguration } from "@/modules/platform/application/configuration";
+import {
+  getCorrelationId,
+  jsonResponse
+} from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 const requiredPermission = "Platform.ManageConfiguration";
 
-export async function GET() {
+export async function GET(request: Request) {
   const cookieStore = await cookies();
   const sessionToken = cookieStore.get(sessionCookieName)?.value;
-  const authorization = await requirePermission(sessionToken, requiredPermission);
+  const authorization = await requirePermission(
+    sessionToken,
+    requiredPermission,
+    { correlationId: getCorrelationId(request) }
+  );
 
   if (!authorization.ok) {
-    return NextResponse.json(authorization.error, { status: authorization.status });
+    return jsonResponse(request, authorization.error, { status: authorization.status });
   }
 
   const configuration = await getPlatformConfiguration();
 
   if (!configuration) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "CONFIGURATION_NOT_FOUND",
         message: "La configuracion de plataforma no existe."
@@ -32,5 +40,5 @@ export async function GET() {
     );
   }
 
-  return NextResponse.json(configuration);
+  return jsonResponse(request, configuration);
 }
