@@ -1,11 +1,14 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { processNextRequestedBackup } from "@/modules/platform/infrastructure/backupExecutor";
+import {
+  processNextRequestedBackup,
+  verifyEncryptedBackupArtifact
+} from "@/modules/platform/infrastructure/backupExecutor";
 import {
   hashRequestBody,
   initializePlatform,
@@ -76,7 +79,9 @@ describe("backup executor", () => {
     const updatedOperation = await prisma.backupOperation.findUniqueOrThrow({
       where: { id: operation.id }
     });
-    const artifact = await readFile(path.join(backupDirectory, result.storageKey));
+    const artifactPath = path.join(backupDirectory, result.storageKey);
+    const artifact = await readFile(artifactPath);
+    const originalArtifact = Buffer.from(artifact);
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "BACKUP_VERIFIED" }
     });
@@ -90,6 +95,36 @@ describe("backup executor", () => {
     expect(typeof result.sizeBytes).toBe("bigint");
     expect(artifact.toString("utf8")).toContain("CRIGESTION-BACKUP-v1");
     expect(artifact.toString("utf8")).not.toContain("pg dump content");
+    await expect(
+      verifyEncryptedBackupArtifact(artifactPath, backupKey())
+    ).resolves.toBeUndefined();
+
+    await expect(
+      verifyEncryptedBackupArtifact(artifactPath, Buffer.alloc(32, 7))
+    ).rejects.toThrow();
+
+    const headerTamperedArtifact = Buffer.from(originalArtifact);
+    const headerOffset = headerTamperedArtifact.indexOf("2026-07-02");
+    expect(headerOffset).toBeGreaterThan(0);
+    headerTamperedArtifact[headerOffset + 9] =
+      headerTamperedArtifact[headerOffset + 9] ^ 1;
+    await writeFile(artifactPath, headerTamperedArtifact);
+    await expect(
+      verifyEncryptedBackupArtifact(artifactPath, backupKey())
+    ).rejects.toThrow();
+
+    const tagTamperedArtifact = Buffer.from(originalArtifact);
+    tagTamperedArtifact[tagTamperedArtifact.length - 1] =
+      tagTamperedArtifact[tagTamperedArtifact.length - 1] ^ 1;
+    await writeFile(artifactPath, tagTamperedArtifact);
+    await expect(
+      verifyEncryptedBackupArtifact(artifactPath, backupKey())
+    ).rejects.toThrow();
+
+    await writeFile(artifactPath, originalArtifact.subarray(0, originalArtifact.length - 8));
+    await expect(
+      verifyEncryptedBackupArtifact(artifactPath, backupKey())
+    ).rejects.toThrow();
     expect(auditEvent.payload).toMatchObject({
       backupOperationId: operation.id,
       status: "VERIFIED",
@@ -232,9 +267,15 @@ function backupEnv(backupDirectory: string): NodeJS.ProcessEnv {
     NODE_ENV: "test",
     DATABASE_URL: process.env.DATABASE_URL,
     BACKUP_DIRECTORY: backupDirectory,
-    BACKUP_ENCRYPTION_KEY:
-      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    BACKUP_ENCRYPTION_KEY: backupKey().toString("hex")
   };
+}
+
+function backupKey(): Buffer {
+  return Buffer.from(
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "hex"
+  );
 }
 
 function fixedNow(): Date {
