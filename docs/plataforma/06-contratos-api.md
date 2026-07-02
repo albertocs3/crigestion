@@ -841,11 +841,14 @@ El worker `npm run backup:run` procesa la siguiente operacion `REQUESTED`:
 2. Ejecuta `pg_dump` sin shell.
 3. Cifra el volcado con AES-256-GCM.
 4. Guarda el artefacto en `BACKUP_DIRECTORY`.
-5. Calcula SHA-256 del artefacto cifrado.
-6. Marca `VERIFIED` o `FAILED`.
-7. Audita `BACKUP_VERIFIED` o `BACKUP_FAILED`.
+5. Reabre el artefacto cifrado y valida el tag de autenticacion AES-GCM.
+6. Calcula SHA-256 del artefacto cifrado.
+7. Marca `VERIFIED` o `FAILED`.
+8. Audita `BACKUP_VERIFIED` o `BACKUP_FAILED`.
 
 Antes de procesar nuevas solicitudes, el worker marca como `FAILED` las operaciones `RUNNING` que superen `BACKUP_RUNNING_TIMEOUT_MINUTES`, con error `BACKUP_WORKER_TIMEOUT`.
+
+`VERIFIED` confirma integridad criptografica del artefacto cifrado. La comprobacion de restaurabilidad con `pg_restore` se realizara en el flujo de restauracion controlada.
 
 Errores:
 

@@ -1,22 +1,30 @@
-import { createCipheriv, createHash, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes
+} from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import {
   appendFile,
   chmod,
   mkdir,
+  open,
   rename,
   rm,
   stat,
   writeFile
 } from "node:fs/promises";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { spawn } from "node:child_process";
 import type { BackupOperation, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 
 const backupMagic = "CRIGESTION-BACKUP-v1";
+const authTagLength = 16;
+const maxHeaderFrameLength = 16 * 1024;
 const backupKeySchema = z.string().trim().min(1);
 const backupEnvironmentSchema = z.object({
   BACKUP_DIRECTORY: z.string().trim().min(1).default("backups"),
@@ -281,6 +289,7 @@ async function createEncryptedDatabaseBackup(options: {
     await chmod(temporaryPath, 0o600);
     await rename(temporaryPath, finalPath);
     await chmod(finalPath, 0o600);
+    await verifyEncryptedBackupArtifact(finalPath, key);
 
     const [fileStat, sha256] = await Promise.all([
       stat(finalPath),
@@ -309,6 +318,150 @@ function backupHeaderFrame(header: Record<string, string>): Buffer {
 
   return Buffer.concat([prefix, headerBuffer]);
 }
+
+export async function verifyEncryptedBackupArtifact(
+  filePath: string,
+  key: Buffer
+): Promise<void> {
+  const fileStat = await stat(filePath);
+  const header = await readBackupHeader(filePath, fileStat.size);
+  const authTag = await readAuthTag(filePath, fileStat.size);
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    header.iv
+  );
+
+  decipher.setAAD(header.frame);
+  decipher.setAuthTag(authTag);
+
+  await pipeline(
+    createReadStream(filePath, {
+      start: header.endOffset,
+      end: fileStat.size - authTagLength - 1
+    }),
+    decipher,
+    new Writable({
+      write(_chunk, _encoding, callback) {
+        callback();
+      }
+    })
+  );
+}
+
+async function readBackupHeader(
+  filePath: string,
+  fileSize: number
+): Promise<{
+  frame: Buffer;
+  iv: Buffer;
+  endOffset: number;
+}> {
+  if (fileSize <= authTagLength) {
+    throw new Error("Backup artifact payload is incomplete.");
+  }
+
+  const readLength = Math.min(fileSize, maxHeaderFrameLength);
+  const file = await open(filePath, "r");
+
+  try {
+    const buffer = Buffer.alloc(readLength);
+    const { bytesRead } = await file.read(buffer, 0, readLength, 0);
+
+    return parseBackupHeader(buffer.subarray(0, bytesRead), fileSize);
+  } finally {
+    await file.close();
+  }
+}
+
+async function readAuthTag(filePath: string, fileSize: number): Promise<Buffer> {
+  const file = await open(filePath, "r");
+
+  try {
+    const buffer = Buffer.alloc(authTagLength);
+    const { bytesRead } = await file.read(
+      buffer,
+      0,
+      authTagLength,
+      fileSize - authTagLength
+    );
+
+    if (bytesRead !== authTagLength) {
+      throw new Error("Backup artifact authentication tag is incomplete.");
+    }
+
+    return buffer;
+  } finally {
+    await file.close();
+  }
+}
+
+function parseBackupHeader(prefix: Buffer, fileSize: number): {
+  frame: Buffer;
+  iv: Buffer;
+  endOffset: number;
+} {
+  const firstNewLine = prefix.indexOf(0x0a);
+
+  if (
+    firstNewLine < 0 ||
+    prefix.subarray(0, firstNewLine).toString("utf8") !== backupMagic
+  ) {
+    throw new Error("Backup artifact header is invalid.");
+  }
+
+  const secondNewLine = prefix.indexOf(0x0a, firstNewLine + 1);
+
+  if (secondNewLine < 0) {
+    throw new Error("Backup artifact header is incomplete.");
+  }
+
+  const headerLengthText = prefix
+    .subarray(firstNewLine + 1, secondNewLine)
+    .toString("utf8");
+  const headerLength = Number(headerLengthText);
+
+  if (
+    !Number.isSafeInteger(headerLength) ||
+    headerLength <= 0 ||
+    headerLength > maxHeaderFrameLength
+  ) {
+    throw new Error("Backup artifact header length is invalid.");
+  }
+
+  const headerStart = secondNewLine + 1;
+  const headerEnd = headerStart + headerLength;
+
+  if (headerEnd > prefix.length) {
+    throw new Error("Backup artifact header exceeds maximum size.");
+  }
+
+  if (headerEnd + authTagLength >= fileSize) {
+    throw new Error("Backup artifact payload is incomplete.");
+  }
+
+  const metadata = backupArtifactHeaderSchema.parse(
+    JSON.parse(prefix.subarray(headerStart, headerEnd).toString("utf8"))
+  );
+  const iv = Buffer.from(metadata.iv, "base64url");
+
+  if (iv.length !== 12) {
+    throw new Error("Backup artifact IV is invalid.");
+  }
+
+  return {
+    frame: prefix.subarray(0, headerEnd),
+    iv,
+    endOffset: headerEnd
+  };
+}
+
+const backupArtifactHeaderSchema = z.object({
+  algorithm: z.literal("aes-256-gcm"),
+  contentType: z.literal("postgresql.pg_dump.custom"),
+  iv: z.string().min(1),
+  createdAt: z.string().datetime()
+});
 
 function createPgDumpSource(databaseUrl: string, pgDumpBinary: string): DumpSource {
   const connection = toPgDumpConnection(databaseUrl);

@@ -108,10 +108,13 @@ El worker:
 - Pasa a `pg_dump` un entorno minimo para evitar propagar otros secretos de aplicacion.
 - Cifra el volcado con AES-256-GCM y autentica el encabezado del artefacto como AAD.
 - Guarda un artefacto `.backup` en `BACKUP_DIRECTORY`.
+- Reabre el artefacto cifrado y valida el tag de autenticacion AES-GCM antes de considerarlo verificado a nivel de integridad criptografica.
 - Calcula `sha256` del artefacto cifrado y registra `sizeBytes`.
 - Marca la operacion como `VERIFIED` o `FAILED`.
 - Marca como `FAILED` las operaciones `RUNNING` que exceden `BACKUP_RUNNING_TIMEOUT_MINUTES`.
 - Audita `BACKUP_VERIFIED` o `BACKUP_FAILED` sin rutas absolutas ni secretos.
+
+La verificacion de restaurabilidad completa, incluyendo `pg_restore --list` o restauracion controlada, pertenece al flujo de restauracion.
 
 ## 9. Modelo de accesos
 
