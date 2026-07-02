@@ -14,6 +14,20 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: crigestion
+          POSTGRES_USER: crigestion
+          POSTGRES_PASSWORD: crigestion
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crigestion -d crigestion"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgresql://crigestion:crigestion@localhost:5432/crigestion?schema=public
       APP_ENV: test
@@ -27,18 +41,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Generate Prisma Client
         run: npm run prisma:generate
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Apply database migrations
+        run: npm run prisma:deploy
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Audit high severity dependencies
-        run: npm run audit
+      - name: Verify release
+        run: npm run verify:release
