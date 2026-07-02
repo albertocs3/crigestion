@@ -3,9 +3,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import {
-  GET as backupsGet,
-  POST as backupsPost
-} from "@/app/api/platform/backups/route";
+  GET as restoresGet,
+  POST as restoresPost
+} from "@/app/api/platform/restores/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -66,7 +66,7 @@ const baseCommand: InitializeCommand = {
   }
 };
 
-describe("backup HTTP contracts", () => {
+describe("restore HTTP contracts", () => {
   beforeEach(async () => {
     process.env.APP_BASE_URL = "http://localhost:3000";
     process.env.AUTH_COOKIE_SECURE = "false";
@@ -80,8 +80,8 @@ describe("backup HTTP contracts", () => {
     await prisma.$disconnect();
   });
 
-  it("rejects unauthenticated backup listing", async () => {
-    const response = await backupsGet(apiRequest("/api/platform/backups"));
+  it("rejects unauthenticated restore listing", async () => {
+    const response = await restoresGet(apiRequest("/api/platform/restores"));
     const body = await response.json();
 
     expect(response.status).toBe(401);
@@ -95,7 +95,7 @@ describe("backup HTTP contracts", () => {
     await createLimitedUserWithoutBackups();
     await loginWith("auditor", limitedPassword);
 
-    const response = await backupsGet(apiRequest("/api/platform/backups"));
+    const response = await restoresGet(apiRequest("/api/platform/restores"));
     const body = await response.json();
 
     expect(response.status).toBe(403);
@@ -105,67 +105,16 @@ describe("backup HTTP contracts", () => {
     });
   });
 
-  it("lists backup operations without exposing storage keys", async () => {
+  it("requires CSRF before requesting a restore", async () => {
     await loginWith("admin", adminPassword);
-    const admin = await prisma.user.findUniqueOrThrow({
-      where: { normalizedUserName: "admin" }
-    });
+    const backup = await createVerifiedBackup();
 
-    await prisma.backupOperation.create({
-      data: {
-        status: "VERIFIED",
-        requestedById: admin.id,
-        startedAt: new Date("2026-07-02T10:00:00.000Z"),
-        completedAt: new Date("2026-07-02T10:01:00.000Z"),
-        productVersion: "0.1.0",
-        storageKey: "protected/backups/backup.enc",
-        sizeBytes: 1234567890123456789n,
-        sha256: "a".repeat(64)
-      }
-    });
-
-    const response = await backupsGet(
-      apiRequest("/api/platform/backups?status=VERIFIED")
+    const response = await restoresPost(
+      jsonRequest("/api/platform/restores", {
+        backupOperationId: backup.id,
+        reason: "Restauracion de prueba controlada"
+      })
     );
-    const body = await response.json();
-    const viewedEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "BACKUP_OPERATIONS_VIEWED" }
-    });
-
-    expect(response.status).toBe(200);
-    expect(body).toEqual({
-      backups: [
-        {
-          id: expect.any(String),
-          status: "VERIFIED",
-          requestedBy: {
-            id: admin.id,
-            displayName: "Administrador",
-            userName: "admin"
-          },
-          requestedAt: expect.any(String),
-          startedAt: "2026-07-02T10:00:00.000Z",
-          completedAt: "2026-07-02T10:01:00.000Z",
-          productVersion: "0.1.0",
-          sizeBytes: "1234567890123456789",
-          sha256: "a".repeat(64),
-          errorCode: null
-        }
-      ],
-      nextCursor: null
-    });
-    expect(JSON.stringify(body)).not.toContain("storageKey");
-    expect(viewedEvent.payload).toMatchObject({
-      actorUserId: admin.id,
-      status: "VERIFIED",
-      resultCount: 1
-    });
-  });
-
-  it("requires CSRF before requesting a manual backup", async () => {
-    await loginWith("admin", adminPassword);
-
-    const response = await backupsPost(jsonRequest("/api/platform/backups", {}));
     const body = await response.json();
 
     expect(response.status).toBe(403);
@@ -175,77 +124,106 @@ describe("backup HTTP contracts", () => {
     });
   });
 
-  it("requests a manual backup and audits the request", async () => {
+  it("requests a restore for a verified compatible backup", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
+    const backup = await createVerifiedBackup();
 
-    const response = await backupsPost(
-      jsonRequest("/api/platform/backups", {}, { csrfToken })
+    const response = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: backup.id,
+          reason: "Restauracion de prueba controlada"
+        },
+        { csrfToken }
+      )
     );
     const body = await response.json();
-    const operation = await prisma.backupOperation.findFirstOrThrow({
+    const restore = await prisma.restoreOperation.findFirstOrThrow({
       where: { status: "REQUESTED" }
     });
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "BACKUP_REQUESTED" }
+      where: { eventType: "RESTORE_REQUESTED" }
     });
 
     expect(response.status).toBe(202);
     expect(body).toMatchObject({
-      id: operation.id,
+      id: restore.id,
       status: "REQUESTED",
+      reason: "Restauracion de prueba controlada",
+      backup: {
+        id: backup.id,
+        productVersion: "0.1.0",
+        sizeBytes: "1234",
+        sha256: "b".repeat(64)
+      },
       requestedBy: {
         displayName: "Administrador",
         userName: "admin"
-      },
-      productVersion: "0.1.0",
-      startedAt: null,
-      completedAt: null,
-      sizeBytes: null,
-      sha256: null,
-      errorCode: null
+      }
     });
+    expect(JSON.stringify(body)).not.toContain("storageKey");
     expect(auditEvent.payload).toMatchObject({
-      backupOperationId: operation.id,
-      status: "REQUESTED"
+      restoreOperationId: restore.id,
+      backupOperationId: backup.id,
+      status: "REQUESTED",
+      reasonLength: "Restauracion de prueba controlada".length
     });
   });
 
-  it("rejects a second active manual backup request", async () => {
+  it("rejects backups that are not verified or compatible", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
+    const requestedBackup = await createBackup({ status: "REQUESTED" });
+    const incompatibleBackup = await createBackup({
+      status: "VERIFIED",
+      productVersion: "9.9.9",
+      storageKey: "backup.backup",
+      sizeBytes: 1234n,
+      sha256: "b".repeat(64)
+    });
 
-    await backupsPost(jsonRequest("/api/platform/backups", {}, { csrfToken }));
-    const response = await backupsPost(
-      jsonRequest("/api/platform/backups", {}, { csrfToken })
+    const notRestorableResponse = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: requestedBackup.id,
+          reason: "Restauracion de prueba controlada"
+        },
+        { csrfToken }
+      )
     );
-    const body = await response.json();
-
-    expect(response.status).toBe(409);
-    expect(body).toEqual({
-      code: "BACKUP_OPERATION_ALREADY_ACTIVE",
-      message: "Ya existe una operacion de copia o restauracion en curso."
+    const notRestorableBody = await notRestorableResponse.json();
+    await prisma.backupOperation.update({
+      where: { id: requestedBackup.id },
+      data: { status: "FAILED" }
     });
+    const incompatibleResponse = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: incompatibleBackup.id,
+          reason: "Restauracion de prueba controlada"
+        },
+        { csrfToken }
+      )
+    );
+    const incompatibleBody = await incompatibleResponse.json();
+
+    expect(notRestorableResponse.status).toBe(409);
+    expect(notRestorableBody.code).toBe("RESTORE_OPERATION_ALREADY_ACTIVE");
+    expect(incompatibleResponse.status).toBe(409);
+    expect(incompatibleBody.code).toBe("BACKUP_VERSION_INCOMPATIBLE");
   });
 
-  it("rejects manual backup requests while a restore is active", async () => {
+  it("lists restore operations without exposing backup storage keys", async () => {
     await loginWith("admin", adminPassword);
-    const csrfToken = await getCsrfToken();
     const admin = await prisma.user.findUniqueOrThrow({
       where: { normalizedUserName: "admin" }
     });
-    const backup = await prisma.backupOperation.create({
-      data: {
-        status: "VERIFIED",
-        requestedById: admin.id,
-        completedAt: new Date("2026-07-02T10:01:00.000Z"),
-        productVersion: "0.1.0",
-        storageKey: "protected/backups/backup.enc",
-        sizeBytes: 1234n,
-        sha256: "a".repeat(64)
-      }
-    });
-    await prisma.restoreOperation.create({
+    const backup = await createVerifiedBackup();
+    const restore = await prisma.restoreOperation.create({
       data: {
         status: "REQUESTED",
         backupOperationId: backup.id,
@@ -254,23 +232,46 @@ describe("backup HTTP contracts", () => {
       }
     });
 
-    const response = await backupsPost(
-      jsonRequest("/api/platform/backups", {}, { csrfToken })
+    const response = await restoresGet(
+      apiRequest("/api/platform/restores?status=REQUESTED")
     );
     const body = await response.json();
+    const viewedEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "RESTORE_OPERATIONS_VIEWED" }
+    });
 
-    expect(response.status).toBe(409);
-    expect(body).toEqual({
-      code: "BACKUP_OPERATION_ALREADY_ACTIVE",
-      message: "Ya existe una operacion de copia o restauracion en curso."
+    expect(response.status).toBe(200);
+    expect(body.restores[0]).toMatchObject({
+      id: restore.id,
+      status: "REQUESTED",
+      reason: "Restauracion de prueba controlada",
+      backup: {
+        id: backup.id,
+        sha256: "b".repeat(64)
+      }
+    });
+    expect(body.nextCursor).toBeNull();
+    expect(JSON.stringify(body)).not.toContain("storageKey");
+    expect(viewedEvent.payload).toMatchObject({
+      actorUserId: admin.id,
+      status: "REQUESTED",
+      resultCount: 1
     });
   });
 
-  it("validates query parameters with stable errors", async () => {
+  it("validates restore request payloads with stable errors", async () => {
     await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
 
-    const response = await backupsGet(
-      apiRequest("/api/platform/backups?status=UNKNOWN")
+    const response = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: "not-a-uuid",
+          reason: "corto"
+        },
+        { csrfToken }
+      )
     );
     const body = await response.json();
 
@@ -278,6 +279,41 @@ describe("backup HTTP contracts", () => {
     expect(body.code).toBe("VALIDATION_ERROR");
   });
 });
+
+async function createVerifiedBackup() {
+  return createBackup({
+    status: "VERIFIED",
+    storageKey: "backup.backup",
+    sizeBytes: 1234n,
+    sha256: "b".repeat(64),
+    completedAt: new Date("2026-07-02T10:01:00.000Z")
+  });
+}
+
+async function createBackup(data: {
+  status: "REQUESTED" | "RUNNING" | "VERIFIED" | "FAILED";
+  productVersion?: string;
+  storageKey?: string;
+  sizeBytes?: bigint;
+  sha256?: string;
+  completedAt?: Date;
+}) {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: "admin" }
+  });
+
+  return prisma.backupOperation.create({
+    data: {
+      status: data.status,
+      requestedById: admin.id,
+      productVersion: data.productVersion ?? "0.1.0",
+      storageKey: data.storageKey,
+      sizeBytes: data.sizeBytes,
+      sha256: data.sha256,
+      completedAt: data.completedAt
+    }
+  });
+}
 
 async function createLimitedUserWithoutBackups(): Promise<void> {
   const role = await prisma.role.create({

@@ -831,7 +831,7 @@ Respuesta `202`:
 Efectos:
 
 - Registra una operacion `REQUESTED`.
-- Impide otra operacion `REQUESTED` o `RUNNING` simultanea.
+- Impide otra operacion de copia `REQUESTED` o `RUNNING`, o una restauracion activa, de forma simultanea.
 - Audita `BACKUP_REQUESTED`.
 - No ejecuta el volcado fisico dentro del request HTTP.
 
@@ -859,7 +859,109 @@ Errores:
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
 | 403 | `FORBIDDEN` | Falta permiso |
 | 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
-| 409 | `BACKUP_OPERATION_ALREADY_ACTIVE` | Ya existe una copia solicitada o en ejecucion |
+| 409 | `BACKUP_OPERATION_ALREADY_ACTIVE` | Ya existe una copia solicitada/en ejecucion o una restauracion activa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+### `GET /api/platform/restores`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageBackups`.
+
+Parametros query:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Tamano de pagina entre 1 y 100. Por defecto 25 |
+| `cursor` | Cursor devuelto por la pagina anterior |
+| `status` | Filtro opcional por estado de restauracion |
+
+Respuesta `200`:
+
+```json
+{
+  "restores": [
+    {
+      "id": "uuid",
+      "status": "REQUESTED",
+      "backup": {
+        "id": "uuid",
+        "productVersion": "0.1.0",
+        "requestedAt": "2026-07-02T10:00:00.000Z",
+        "completedAt": "2026-07-02T10:01:00.000Z",
+        "sizeBytes": "123456",
+        "sha256": "hex-sha256"
+      },
+      "requestedBy": {
+        "id": "uuid",
+        "displayName": "Administrador",
+        "userName": "admin"
+      },
+      "reason": "Restauracion de prueba controlada",
+      "requestedAt": "2026-07-02T11:00:00.000Z",
+      "startedAt": null,
+      "completedAt": null,
+      "errorCode": null
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Efectos:
+
+- Devuelve DTOs de restauracion, no modelos Prisma.
+- No expone rutas fisicas ni `storageKey` de la copia.
+- Audita la propia consulta como `RESTORE_OPERATIONS_VIEWED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 422 | `VALIDATION_ERROR` | Query invalida |
+
+### `POST /api/platform/restores`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageBackups`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{
+  "backupOperationId": "uuid",
+  "reason": "Restauracion de prueba controlada"
+}
+```
+
+Respuesta `202`: restauracion registrada en estado `REQUESTED`.
+
+Efectos:
+
+- Registra una solicitud de restauracion; no ejecuta todavia `pg_restore`.
+- Exige que la copia exista, este `VERIFIED`, tenga metadatos de integridad y pertenezca a la misma `productVersion`.
+- Impide crear la solicitud si existe una copia `REQUESTED`/`RUNNING` o una restauracion activa.
+- Audita `RESTORE_REQUESTED` sin rutas ni secretos.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `BACKUP_NOT_FOUND` | La copia indicada no existe |
+| 409 | `BACKUP_NOT_RESTORABLE` | La copia no esta verificada o no tiene metadatos completos |
+| 409 | `BACKUP_VERSION_INCOMPATIBLE` | La copia pertenece a otra version del producto |
+| 409 | `RESTORE_OPERATION_ALREADY_ACTIVE` | Ya existe una copia o restauracion activa |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 

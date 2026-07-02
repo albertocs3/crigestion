@@ -41,6 +41,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 | Auditoria | `AuditEvent` / `audit_events` | Eventos auditables |
 | Idempotencia | `IdempotencyRecord` / `idempotency_records` | Repeticion segura de mutaciones iniciales |
 | Copias | `BackupOperation` / `backup_operations` | Estado y metadatos de copias manuales |
+| Copias | `RestoreOperation` / `restore_operations` | Solicitudes y trazabilidad de restauraciones |
 
 ## 5. Diagrama logico
 
@@ -51,6 +52,9 @@ erDiagram
     Role ||--o{ User : assigns
     User ||--o{ Session : opens
     User ||--o{ BackupOperation : requests
+    User ||--o{ RestoreOperation : requests
+    BackupOperation ||--o{ RestoreOperation : source
+    BackupOperation ||--o{ RestoreOperation : pre_restore_backup
     Role ||--o{ RolePermission : grants
     Permission ||--o{ RolePermission : assigned
 ```
@@ -74,6 +78,7 @@ Entidades iniciales:
 - `RateLimitBucket`.
 - `IdempotencyRecord`.
 - `BackupOperation`.
+- `RestoreOperation`.
 
 ## 7. Restricciones clave
 
@@ -92,6 +97,9 @@ Entidades iniciales:
 - `BackupOperation` indexa `status + requestedAt`, `requestedAt + id` y `requestedById + requestedAt` para consultas operativas paginadas.
 - La migracion `20260702171000_add_active_backup_operation_index` crea el indice unico parcial `backup_operations_one_active_idx` para impedir mas de una copia `REQUESTED` o `RUNNING`.
 - `BackupOperation.storageKey` guarda solo el nombre logico del artefacto dentro del repositorio de copias, no una ruta absoluta expuesta por API.
+- `RestoreOperation` indexa `status + requestedAt`, `requestedAt + id`, `backupOperationId + requestedAt` y `requestedById + requestedAt`.
+- La migracion `20260702203000_add_restore_operations` crea el indice unico parcial `restore_operations_one_active_idx` para impedir mas de una restauracion activa.
+- Las solicitudes HTTP de copia y restauracion toman un advisory lock transaccional de PostgreSQL antes de comprobar operaciones activas, para serializar la exclusion entre `backup_operations` y `restore_operations`.
 
 ## 8. Copias de seguridad
 
@@ -116,7 +124,23 @@ El worker:
 
 La verificacion de restaurabilidad completa, incluyendo `pg_restore --list` o restauracion controlada, pertenece al flujo de restauracion.
 
-## 9. Modelo de accesos
+## 9. Restauraciones
+
+El primer corte del flujo de restauracion registra solicitudes seguras sin ejecutar todavia `pg_restore`.
+
+La API:
+
+- Registra `RestoreOperation` en estado `REQUESTED`.
+- Exige una copia `VERIFIED` de la misma `productVersion`.
+- Rechaza copias sin `storageKey`, `sizeBytes` o `sha256`.
+- Impide restauraciones si existe una copia `REQUESTED` o `RUNNING`.
+- Impide nuevas copias si existe una restauracion activa.
+- No expone `storageKey` ni rutas fisicas en el contrato HTTP.
+- Audita `RESTORE_REQUESTED` y `RESTORE_OPERATIONS_VIEWED`.
+
+Los estados `VALIDATING`, `PREPARING`, `RESTORING`, `VERIFYING`, `COMPLETED`, `FAILED` y `REQUIRES_RECOVERY` quedan reservados para el worker/procedimiento de restauracion controlada.
+
+## 10. Modelo de accesos
 
 Las sesiones usan token opaco en cookie segura. La base solo conserva `tokenHash`.
 
@@ -132,7 +156,7 @@ Reglas:
 - El rate limit de login usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
 - Las cabeceras de proxy para IP cliente solo se usan si `TRUST_PROXY_HEADERS=true` o fuera de produccion; en produccion sin proxy confiable no se aplica el bucket por IP para evitar un limite global compartido.
 
-## 10. Transacciones
+## 11. Transacciones
 
 La inicializacion de Plataforma se ejecuta con `prisma.$transaction`.
 
@@ -146,7 +170,7 @@ Debe crear o confirmar en una unica transaccion:
 
 Si cualquier paso falla, no debe quedar estado parcial.
 
-## 11. Auditoria
+## 12. Auditoria
 
 `AuditEvent` es append-only a nivel de aplicacion.
 
@@ -158,7 +182,7 @@ Reglas:
 - Guardar payload JSON minimo.
 - Indexar `createdAt` e `eventType` para consulta paginada del visor de auditoria.
 
-## 12. Migraciones
+## 13. Migraciones
 
 Desarrollo:
 
@@ -179,7 +203,7 @@ Reglas:
 3. Revisar cambios destructivos por etapas.
 4. Validar contra PostgreSQL real.
 
-## 13. Criterios de aceptacion
+## 14. Criterios de aceptacion
 
 1. Prisma genera cliente.
 2. La migracion crea todas las tablas iniciales.

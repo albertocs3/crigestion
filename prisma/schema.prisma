@@ -27,6 +27,17 @@ enum BackupOperationStatus {
   FAILED
 }
 
+enum RestoreOperationStatus {
+  REQUESTED
+  VALIDATING
+  PREPARING
+  RESTORING
+  VERIFYING
+  COMPLETED
+  FAILED
+  REQUIRES_RECOVERY
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -79,6 +90,7 @@ model User {
   role                  Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
   sessions              Session[]
   requestedBackups      BackupOperation[]
+  requestedRestores     RestoreOperation[]
   initialInstallation   Installation?
 
   @@map("users")
@@ -218,9 +230,36 @@ model BackupOperation {
   updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
 
   requestedBy     User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  restoreSources  RestoreOperation[]    @relation("RestoreSourceBackup")
+  preRestoreUses  RestoreOperation[]    @relation("PreRestoreBackup")
 
   @@index([status, requestedAt])
   @@index([requestedAt, id])
   @@index([requestedById, requestedAt])
   @@map("backup_operations")
+}
+
+model RestoreOperation {
+  id                          String                 @id @default(uuid()) @db.Uuid
+  status                      RestoreOperationStatus @default(REQUESTED)
+  backupOperationId           String                 @db.Uuid
+  requestedById               String                 @db.Uuid
+  reason                      String                 @db.VarChar(500)
+  requestedAt                 DateTime               @default(now()) @db.Timestamptz(3)
+  startedAt                   DateTime?              @db.Timestamptz(3)
+  completedAt                 DateTime?              @db.Timestamptz(3)
+  preRestoreBackupOperationId String?                @db.Uuid
+  errorCode                   String?                @db.VarChar(120)
+  createdAt                   DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt                   DateTime               @updatedAt @db.Timestamptz(3)
+
+  backupOperation             BackupOperation        @relation("RestoreSourceBackup", fields: [backupOperationId], references: [id], onDelete: Restrict)
+  requestedBy                 User                   @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  preRestoreBackupOperation   BackupOperation?       @relation("PreRestoreBackup", fields: [preRestoreBackupOperationId], references: [id], onDelete: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([requestedAt, id])
+  @@index([backupOperationId, requestedAt])
+  @@index([requestedById, requestedAt])
+  @@map("restore_operations")
 }

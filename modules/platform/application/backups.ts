@@ -11,6 +11,7 @@ import { productVersion } from "@/modules/platform/application/version";
 
 const defaultLimit = 25;
 const maxLimit = 100;
+const operationExclusionAdvisoryLockKey = 72072072;
 
 export const listBackupOperationsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(maxLimit).default(defaultLimit),
@@ -127,6 +128,8 @@ export async function requestManualBackup(
 
   try {
     operation = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${operationExclusionAdvisoryLockKey})`;
+
       const activeOperation = await tx.backupOperation.findFirst({
         where: {
           status: {
@@ -139,6 +142,21 @@ export async function requestManualBackup(
       });
 
       if (activeOperation) {
+        return null;
+      }
+
+      const activeRestore = await tx.restoreOperation.findFirst({
+        where: {
+          status: {
+            in: ["REQUESTED", "VALIDATING", "PREPARING", "RESTORING", "VERIFYING"]
+          }
+        },
+        select: {
+          id: true
+        }
+      });
+
+      if (activeRestore) {
         return null;
       }
 
@@ -197,7 +215,7 @@ export async function requestManualBackup(
       status: 409,
       error: {
         code: "BACKUP_OPERATION_ALREADY_ACTIVE",
-        message: "Ya existe una operacion de copia en curso."
+        message: "Ya existe una operacion de copia o restauracion en curso."
       }
     };
   }
