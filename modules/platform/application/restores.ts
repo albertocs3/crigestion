@@ -27,6 +27,7 @@ export const listRestoreOperationsSchema = z.object({
     .enum([
       "REQUESTED",
       "VALIDATING",
+      "VALIDATED",
       "PREPARING",
       "RESTORING",
       "VERIFYING",
@@ -52,6 +53,7 @@ export type RestoreOperationListItem = {
   status:
     | "REQUESTED"
     | "VALIDATING"
+    | "VALIDATED"
     | "PREPARING"
     | "RESTORING"
     | "VERIFYING"
@@ -74,6 +76,7 @@ export type RestoreOperationListItem = {
   reason: string;
   requestedAt: string;
   startedAt: string | null;
+  validatedAt: string | null;
   completedAt: string | null;
   errorCode: string | null;
 };
@@ -274,6 +277,7 @@ const restoreOperationListSelect = {
   reason: true,
   requestedAt: true,
   startedAt: true,
+  validatedAt: true,
   completedAt: true,
   errorCode: true,
   backupOperation: {
@@ -301,6 +305,7 @@ function mapRestoreOperationListItem(operation: {
   reason: string;
   requestedAt: Date;
   startedAt: Date | null;
+  validatedAt: Date | null;
   completedAt: Date | null;
   errorCode: string | null;
   backupOperation: {
@@ -332,6 +337,7 @@ function mapRestoreOperationListItem(operation: {
     reason: operation.reason,
     requestedAt: operation.requestedAt.toISOString(),
     startedAt: operation.startedAt?.toISOString() ?? null,
+    validatedAt: operation.validatedAt?.toISOString() ?? null,
     completedAt: operation.completedAt?.toISOString() ?? null,
     errorCode: operation.errorCode
   };

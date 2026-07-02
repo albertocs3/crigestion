@@ -32,6 +32,7 @@ Revisar como minimo:
 | `BACKUP_ENCRYPTION_KEY` | Obligatoria si se ejecutan copias | Clave hex de 64 caracteres o base64 de 32 bytes. |
 | `PG_DUMP_BINARY` | Opcional | Por defecto `pg_dump`. |
 | `BACKUP_RUNNING_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `RUNNING` antiguos como fallidos. |
+| `RESTORE_VALIDATION_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `VALIDATING` antiguos como fallidos. |
 
 ## 4. Validacion previa
 
@@ -76,6 +77,7 @@ Orden recomendado:
 5. Arrancar la aplicacion con variables runtime definitivas.
 6. Verificar health check.
 7. Verificar que el proceso que ejecuta `npm run backup:run` tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+8. Verificar que el proceso que ejecuta `npm run restore:validate` tiene acceso a `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
 
 ## 7. Verificacion post-despliegue
 
@@ -115,3 +117,4 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - El rate limit de login por IP depende de una IP cliente confiable.
 - Las copias manuales se solicitan por API y se procesan fuera del request HTTP con `npm run backup:run`.
 - El worker de copias pasa a `pg_dump` un entorno minimo y no propaga secretos de aplicacion salvo la contrasena PostgreSQL como `PGPASSWORD`.
+- Las restauraciones se validan primero de forma no destructiva con `npm run restore:validate`; este comando no ejecuta `pg_restore` ni modifica datos de negocio.
