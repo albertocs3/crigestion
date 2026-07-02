@@ -41,6 +41,7 @@ La base tecnologica vigente es:
 | [Estructura de la solucion Next.js](06-estructura-solucion-dotnet.md) | Carpetas, dependencias, composicion, pruebas y orden inicial de creacion. |
 | [Registro de decisiones arquitectonicas](adr/README.md) | ADR iniciales, alternativas consideradas y consecuencias aceptadas. |
 | [Backlog tecnico primera rebanada vertical](07-backlog-tecnico-primera-rebanada.md) | Tareas tecnicas trazables para implementar `PLT-CU-001`. |
+| [Checklist de release de Plataforma](plataforma/09-release-checklist.md) | Pasos de validacion, migracion, despliegue y rollback para releases. |
 | [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md) | Secuencia de comandos, estructura y validaciones para crear la solucion real. |
 | [Preparacion del entorno en macOS](setup-mac.md) | Herramientas, variables de entorno y comandos para arrancar el desarrollo en Mac. |
 
