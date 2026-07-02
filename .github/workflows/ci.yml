@@ -14,6 +14,8 @@ jobs:
     name: Verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DATABASE_URL: postgresql://crigestion:crigestion@localhost:5432/crigestion?schema=public
 
     steps:
       - name: Checkout
