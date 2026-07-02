@@ -30,6 +30,7 @@ enum BackupOperationStatus {
 enum RestoreOperationStatus {
   REQUESTED
   VALIDATING
+  VALIDATED
   PREPARING
   RESTORING
   VERIFYING
@@ -247,6 +248,7 @@ model RestoreOperation {
   reason                      String                 @db.VarChar(500)
   requestedAt                 DateTime               @default(now()) @db.Timestamptz(3)
   startedAt                   DateTime?              @db.Timestamptz(3)
+  validatedAt                 DateTime?              @db.Timestamptz(3)
   completedAt                 DateTime?              @db.Timestamptz(3)
   preRestoreBackupOperationId String?                @db.Uuid
   errorCode                   String?                @db.VarChar(120)

@@ -99,6 +99,7 @@ Entidades iniciales:
 - `BackupOperation.storageKey` guarda solo el nombre logico del artefacto dentro del repositorio de copias, no una ruta absoluta expuesta por API.
 - `RestoreOperation` indexa `status + requestedAt`, `requestedAt + id`, `backupOperationId + requestedAt` y `requestedById + requestedAt`.
 - La migracion `20260702203000_add_restore_operations` crea el indice unico parcial `restore_operations_one_active_idx` para impedir mas de una restauracion activa.
+- La migracion `20260702210000_add_restore_validation_state` incorpora `VALIDATED` y `validatedAt` para registrar la validacion no destructiva del artefacto cifrado.
 - Las solicitudes HTTP de copia y restauracion toman un advisory lock transaccional de PostgreSQL antes de comprobar operaciones activas, para serializar la exclusion entre `backup_operations` y `restore_operations`.
 
 ## 8. Copias de seguridad
@@ -126,7 +127,7 @@ La verificacion de restaurabilidad completa, incluyendo `pg_restore --list` o re
 
 ## 9. Restauraciones
 
-El primer corte del flujo de restauracion registra solicitudes seguras sin ejecutar todavia `pg_restore`.
+El primer tramo del flujo de restauracion registra solicitudes seguras y permite validar el artefacto cifrado sin ejecutar todavia `pg_restore`.
 
 La API:
 
@@ -138,7 +139,19 @@ La API:
 - No expone `storageKey` ni rutas fisicas en el contrato HTTP.
 - Audita `RESTORE_REQUESTED` y `RESTORE_OPERATIONS_VIEWED`.
 
-Los estados `VALIDATING`, `PREPARING`, `RESTORING`, `VERIFYING`, `COMPLETED`, `FAILED` y `REQUIRES_RECOVERY` quedan reservados para el worker/procedimiento de restauracion controlada.
+El comando `npm run restore:validate` procesa la siguiente restauracion `REQUESTED`:
+
+1. Marca la operacion como `VALIDATING`.
+2. Audita `RESTORE_VALIDATION_STARTED`.
+3. Resuelve `storageKey` exclusivamente dentro de `BACKUP_DIRECTORY`.
+4. Compara `sizeBytes` y `sha256` del artefacto cifrado con los metadatos de `BackupOperation`.
+5. Reabre el artefacto cifrado y valida el tag AES-256-GCM.
+6. Marca `VALIDATED` y registra `validatedAt`, o marca `FAILED` con `errorCode`.
+7. Audita `RESTORE_VALIDATED` o `RESTORE_VALIDATION_FAILED` sin rutas absolutas ni secretos.
+
+`VALIDATED` representa solo validacion no destructiva del artefacto. No ejecuta restauracion, no invalida sesiones y no se considera una operacion activa a efectos de bloquear nuevas copias.
+
+Los estados `PREPARING`, `RESTORING`, `VERIFYING`, `COMPLETED` y `REQUIRES_RECOVERY` quedan reservados para el procedimiento de restauracion controlada.
 
 ## 10. Modelo de accesos
 

@@ -901,6 +901,7 @@ Respuesta `200`:
       "reason": "Restauracion de prueba controlada",
       "requestedAt": "2026-07-02T11:00:00.000Z",
       "startedAt": null,
+      "validatedAt": null,
       "completedAt": null,
       "errorCode": null
     }
@@ -948,6 +949,33 @@ Efectos:
 - Exige que la copia exista, este `VERIFIED`, tenga metadatos de integridad y pertenezca a la misma `productVersion`.
 - Impide crear la solicitud si existe una copia `REQUESTED`/`RUNNING` o una restauracion activa.
 - Audita `RESTORE_REQUESTED` sin rutas ni secretos.
+
+El comando operativo `npm run restore:validate` procesa solicitudes `REQUESTED` de forma no destructiva:
+
+1. `REQUESTED -> VALIDATING`.
+2. Valida contencion de `storageKey`, `sizeBytes`, `sha256` y autenticacion AES-GCM del artefacto cifrado.
+3. `VALIDATING -> VALIDATED` si la validacion termina correctamente.
+4. `VALIDATING -> FAILED` si detecta artefacto ausente, alterado, no descifrable, metadatos incompatibles o configuracion invalida.
+
+Eventos auditables del worker:
+
+- `RESTORE_VALIDATION_STARTED`.
+- `RESTORE_VALIDATED`.
+- `RESTORE_VALIDATION_FAILED`.
+
+Errores de worker:
+
+| Codigo | Causa |
+|---|---|
+| `RESTORE_BACKUP_NOT_RESTORABLE` | La copia ya no es verificada, compatible o completa |
+| `RESTORE_BACKUP_STORAGE_KEY_INVALID` | El identificador del artefacto no queda contenido en `BACKUP_DIRECTORY` |
+| `RESTORE_BACKUP_ARTIFACT_NOT_FOUND` | El artefacto no existe |
+| `RESTORE_BACKUP_SIZE_MISMATCH` | El tamano real no coincide con `sizeBytes` |
+| `RESTORE_BACKUP_SHA256_MISMATCH` | El hash real no coincide con `sha256` |
+| `RESTORE_BACKUP_DECRYPTION_FAILED` | El encabezado, payload o tag AES-GCM no valida |
+| `BACKUP_ENCRYPTION_KEY_INVALID` | La clave de cifrado no es valida |
+| `RESTORE_ENV_INVALID` | La configuracion minima del worker no es valida |
+| `RESTORE_WORKER_TIMEOUT` | Una validacion quedo atascada mas alla del timeout configurado |
 
 Errores:
 

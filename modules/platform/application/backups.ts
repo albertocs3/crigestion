@@ -148,7 +148,13 @@ export async function requestManualBackup(
       const activeRestore = await tx.restoreOperation.findFirst({
         where: {
           status: {
-            in: ["REQUESTED", "VALIDATING", "PREPARING", "RESTORING", "VERIFYING"]
+            in: [
+              "REQUESTED",
+              "VALIDATING",
+              "PREPARING",
+              "RESTORING",
+              "VERIFYING"
+            ]
           }
         },
         select: {

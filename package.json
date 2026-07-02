@@ -17,6 +17,7 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "backup:run": "tsx scripts/run-backup-worker.ts",
+    "restore:validate": "tsx scripts/run-restore-worker.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
