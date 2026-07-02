@@ -26,6 +26,16 @@ const genericLoginError = {
 export const sessionCookieName =
   process.env.AUTH_COOKIE_NAME ?? "crigestion_session";
 
+export function isSessionCookieSecure(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.AUTH_COOKIE_SECURE === "true";
+}
+
+export function getSessionCookieSameSite(): "lax" | "strict" {
+  const configured = process.env.AUTH_COOKIE_SAME_SITE?.toLocaleLowerCase("en-US");
+
+  return configured === "strict" ? "strict" : "lax";
+}
+
 export const loginSchema = z.object({
   userName: z.string().trim().min(1).max(80),
   password: z.string().min(1).max(200)

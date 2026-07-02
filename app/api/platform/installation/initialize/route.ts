@@ -4,6 +4,14 @@ import {
   initializePlatform,
   initializeSchema
 } from "@/modules/platform/application/installation";
+import {
+  invalidJson,
+  isAllowedOrigin,
+  isJsonRequest,
+  originNotAllowed,
+  unsupportedMediaType,
+  validationError
+} from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,17 +25,6 @@ const initializeRateLimit =
 
 if (!globalForRateLimit.initializeRateLimit) {
   globalForRateLimit.initializeRateLimit = initializeRateLimit;
-}
-
-function isAllowedOrigin(request: Request) {
-  const origin = request.headers.get("Origin");
-  const appBaseUrl = process.env.APP_BASE_URL;
-
-  if (!origin || !appBaseUrl) {
-    return true;
-  }
-
-  return origin === appBaseUrl;
 }
 
 function isRateLimited(request: Request): boolean {
@@ -59,25 +56,11 @@ export async function POST(request: Request) {
   }
 
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(
-      {
-        code: "ORIGIN_NOT_ALLOWED",
-        message: "Origen no permitido."
-      },
-      { status: 403 }
-    );
+    return NextResponse.json(originNotAllowed(), { status: 403 });
   }
 
-  const contentType = request.headers.get("Content-Type") ?? "";
-
-  if (!contentType.toLocaleLowerCase("en-US").includes("application/json")) {
-    return NextResponse.json(
-      {
-        code: "UNSUPPORTED_MEDIA_TYPE",
-        message: "La peticion debe enviarse como JSON."
-      },
-      { status: 415 }
-    );
+  if (!isJsonRequest(request)) {
+    return NextResponse.json(unsupportedMediaType(), { status: 415 });
   }
 
   const idempotencyKey = request.headers.get("Idempotency-Key");
@@ -107,13 +90,7 @@ export async function POST(request: Request) {
   try {
     rawBody = await request.text();
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return NextResponse.json(invalidJson(), { status: 400 });
   }
 
   let body: unknown;
@@ -121,25 +98,13 @@ export async function POST(request: Request) {
   try {
     body = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return NextResponse.json(invalidJson(), { status: 400 });
   }
 
   const payload = initializeSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(
-      {
-        code: "VALIDATION_ERROR",
-        issues: payload.error.flatten()
-      },
-      { status: 422 }
-    );
+    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await initializePlatform(

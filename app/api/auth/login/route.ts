@@ -1,13 +1,20 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import {
+  getSessionCookieSameSite,
+  isSessionCookieSecure,
   login,
   loginSchema,
   sessionCookieName
 } from "@/modules/platform/application/auth";
 import {
   getRequestContext,
-  isAllowedOrigin
+  invalidJson,
+  isAllowedOrigin,
+  isJsonRequest,
+  originNotAllowed,
+  unsupportedMediaType,
+  validationError
 } from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
@@ -15,25 +22,11 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(
-      {
-        code: "ORIGIN_NOT_ALLOWED",
-        message: "Origen no permitido."
-      },
-      { status: 403 }
-    );
+    return NextResponse.json(originNotAllowed(), { status: 403 });
   }
 
-  const contentType = request.headers.get("Content-Type") ?? "";
-
-  if (!contentType.toLocaleLowerCase("en-US").includes("application/json")) {
-    return NextResponse.json(
-      {
-        code: "UNSUPPORTED_MEDIA_TYPE",
-        message: "La peticion debe enviarse como JSON."
-      },
-      { status: 415 }
-    );
+  if (!isJsonRequest(request)) {
+    return NextResponse.json(unsupportedMediaType(), { status: 415 });
   }
 
   let body: unknown;
@@ -41,25 +34,13 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return NextResponse.json(invalidJson(), { status: 400 });
   }
 
   const payload = loginSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(
-      {
-        code: "VALIDATION_ERROR",
-        issues: payload.error.flatten()
-      },
-      { status: 422 }
-    );
+    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await login(payload.data, getRequestContext(request));
@@ -72,8 +53,8 @@ export async function POST(request: Request) {
 
   cookieStore.set(sessionCookieName, result.value.token, {
     httpOnly: true,
-    secure: process.env.AUTH_COOKIE_SECURE === "true",
-    sameSite: "lax",
+    secure: isSessionCookieSecure(),
+    sameSite: getSessionCookieSameSite(),
     path: "/",
     expires: result.value.expiresAt
   });

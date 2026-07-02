@@ -5,7 +5,14 @@ import {
   sessionCookieName,
   validateCsrfToken
 } from "@/modules/platform/application/auth";
-import { isAllowedOrigin } from "@/modules/platform/application/http";
+import {
+  invalidJson,
+  isAllowedOrigin,
+  isJsonRequest,
+  originNotAllowed,
+  unsupportedMediaType,
+  validationError
+} from "@/modules/platform/application/http";
 import {
   createUser,
   createUserSchema,
@@ -34,13 +41,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(
-      {
-        code: "ORIGIN_NOT_ALLOWED",
-        message: "Origen no permitido."
-      },
-      { status: 403 }
-    );
+    return NextResponse.json(originNotAllowed(), { status: 403 });
   }
 
   const cookieStore = await cookies();
@@ -60,16 +61,8 @@ export async function POST(request: Request) {
     return NextResponse.json(authorization.error, { status: authorization.status });
   }
 
-  const contentType = request.headers.get("Content-Type") ?? "";
-
-  if (!contentType.toLocaleLowerCase("en-US").includes("application/json")) {
-    return NextResponse.json(
-      {
-        code: "UNSUPPORTED_MEDIA_TYPE",
-        message: "La peticion debe enviarse como JSON."
-      },
-      { status: 415 }
-    );
+  if (!isJsonRequest(request)) {
+    return NextResponse.json(unsupportedMediaType(), { status: 415 });
   }
 
   let body: unknown;
@@ -77,25 +70,13 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return NextResponse.json(invalidJson(), { status: 400 });
   }
 
   const payload = createUserSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(
-      {
-        code: "VALIDATION_ERROR",
-        issues: payload.error.flatten()
-      },
-      { status: 422 }
-    );
+    return NextResponse.json(validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await createUser(payload.data, authorization.user);

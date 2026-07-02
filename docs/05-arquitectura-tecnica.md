@@ -192,6 +192,7 @@ La interfaz usa App Router:
 - HTTPS obligatorio en produccion.
 - Secretos en variables de entorno o proveedor seguro.
 - Cookies de sesion `HttpOnly`, `Secure` y `SameSite`.
+- En produccion, las mutaciones validan origen contra `APP_BASE_URL` configurado.
 - Tokens o sesiones siempre validados en servidor.
 - Permisos revalidados en cada accion.
 - Datos sensibles cifrados o protegidos con HMAC de busqueda cuando proceda.

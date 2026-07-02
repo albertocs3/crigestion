@@ -5,20 +5,17 @@ import {
   sessionCookieName,
   validateCsrfToken
 } from "@/modules/platform/application/auth";
-import { isAllowedOrigin } from "@/modules/platform/application/http";
+import {
+  isAllowedOrigin,
+  originNotAllowed
+} from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(
-      {
-        code: "ORIGIN_NOT_ALLOWED",
-        message: "Origen no permitido."
-      },
-      { status: 403 }
-    );
+    return NextResponse.json(originNotAllowed(), { status: 403 });
   }
 
   const cookieStore = await cookies();

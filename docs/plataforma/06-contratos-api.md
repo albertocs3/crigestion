@@ -67,7 +67,7 @@ Cabeceras:
 |---|---|---|
 | `Idempotency-Key` | Si | Evitar duplicados por reintentos |
 | `Content-Type: application/json` | Si | Rechazar cuerpos no JSON |
-| `Origin` | Cuando exista | Debe coincidir con `APP_BASE_URL` |
+| `Origin` | Cuando exista | Debe coincidir con el origen normalizado de `APP_BASE_URL`; en produccion `APP_BASE_URL` debe estar configurado |
 
 Request:
 
@@ -163,7 +163,7 @@ Efectos:
 
 - Crea una sesion en `sessions`.
 - Guarda solo hash del token.
-- Devuelve el token solo en cookie `HttpOnly`, `SameSite=Lax`, `Path=/`.
+- Devuelve el token solo en cookie `HttpOnly`, `Secure` en produccion, `SameSite=Lax` por defecto, `Path=/`.
 - Registra `login_attempts`.
 - Audita `LOGIN_SUCCEEDED` o `LOGIN_FAILED` sin contrasena.
 
