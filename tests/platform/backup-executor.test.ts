@@ -297,7 +297,8 @@ async function initializeForBackups(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
-    prisma.restoreOperation.deleteMany(),
+    prisma.platformMaintenanceState.deleteMany(),
+prisma.restoreOperation.deleteMany(),
     prisma.backupOperation.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),

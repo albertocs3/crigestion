@@ -1,11 +1,14 @@
 import { cookies } from "next/headers";
-import { z } from "zod";
 import {
   requirePermission,
-  type SessionUser,
   sessionCookieName,
   validateCsrfToken
 } from "@/modules/platform/application/auth";
+import {
+  getMaintenanceModeState,
+  updateMaintenanceMode,
+  updateMaintenanceModeSchema
+} from "@/modules/platform/application/maintenance";
 import {
   getCorrelationId,
   invalidJson,
@@ -16,37 +19,29 @@ import {
   unsupportedMediaType,
   validationError
 } from "@/modules/platform/application/http";
-import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
-import {
-  changeUserRole,
-  deactivateUser,
-  reactivateUser
-} from "@/modules/platform/application/users";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const requiredPermission = "Platform.ManageUsers";
-const paramsSchema = z.object({
-  userId: z.string().uuid()
-});
-const bodySchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("deactivate")
-  }),
-  z.object({
-    action: z.literal("reactivate")
-  }),
-  z.object({
-    action: z.literal("changeRole"),
-    roleCode: z.string().trim().min(1).max(80)
-  })
-]);
+const requiredPermission = "Platform.ManageMaintenance";
 
-export async function PATCH(
-  request: Request,
-  context: { params: Promise<{ userId: string }> }
-) {
+export async function GET(request: Request) {
+  const cookieStore = await cookies();
+  const sessionToken = cookieStore.get(sessionCookieName)?.value;
+  const authorization = await requirePermission(
+    sessionToken,
+    requiredPermission,
+    { correlationId: getCorrelationId(request) }
+  );
+
+  if (!authorization.ok) {
+    return jsonResponse(request, authorization.error, { status: authorization.status });
+  }
+
+  return jsonResponse(request, await getMaintenanceModeState());
+}
+
+export async function PATCH(request: Request) {
   if (!isAllowedOrigin(request)) {
     return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
@@ -70,22 +65,6 @@ export async function PATCH(
     return jsonResponse(request, authorization.error, { status: authorization.status });
   }
 
-  const maintenance = await requireMaintenanceModeInactive(
-    authorization.user,
-    request,
-    { correlationId }
-  );
-
-  if (!maintenance.ok) {
-    return jsonResponse(request, maintenance.error, { status: maintenance.status });
-  }
-
-  const params = paramsSchema.safeParse(await context.params);
-
-  if (!params.success) {
-    return jsonResponse(request, validationError(params.error.flatten()), { status: 422 });
-  }
-
   if (!isJsonRequest(request)) {
     return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
@@ -98,16 +77,16 @@ export async function PATCH(
     return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
-  const payload = bodySchema.safeParse(body);
+  const payload = updateMaintenanceModeSchema.safeParse(body);
 
   if (!payload.success) {
     return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
-  const result = await applyUserPatch(
-    params.data.userId,
+  const result = await updateMaintenanceMode(
     payload.data,
-    authorization.user
+    authorization.user,
+    { correlationId }
   );
 
   if (!result.ok) {
@@ -115,20 +94,4 @@ export async function PATCH(
   }
 
   return jsonResponse(request, result.value, { status: result.status });
-}
-
-async function applyUserPatch(
-  userId: string,
-  payload: z.infer<typeof bodySchema>,
-  actor: SessionUser
-) {
-  if (payload.action === "deactivate") {
-    return deactivateUser(userId, actor);
-  }
-
-  if (payload.action === "reactivate") {
-    return reactivateUser(userId, actor);
-  }
-
-  return changeUserRole(userId, payload.roleCode, actor);
 }

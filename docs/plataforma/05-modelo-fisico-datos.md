@@ -42,6 +42,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 | Idempotencia | `IdempotencyRecord` / `idempotency_records` | Repeticion segura de mutaciones iniciales |
 | Copias | `BackupOperation` / `backup_operations` | Estado y metadatos de copias manuales |
 | Copias | `RestoreOperation` / `restore_operations` | Solicitudes y trazabilidad de restauraciones |
+| Operacion | `PlatformMaintenanceState` / `platform_maintenance_state` | Estado singleton de mantenimiento operativo |
 
 ## 5. Diagrama logico
 
@@ -53,8 +54,11 @@ erDiagram
     User ||--o{ Session : opens
     User ||--o{ BackupOperation : requests
     User ||--o{ RestoreOperation : requests
+    User ||--o{ PlatformMaintenanceState : enables
+    User ||--o{ PlatformMaintenanceState : disables
     BackupOperation ||--o{ RestoreOperation : source
     BackupOperation ||--o{ RestoreOperation : pre_restore_backup
+    RestoreOperation ||--o{ PlatformMaintenanceState : maintenance_context
     Role ||--o{ RolePermission : grants
     Permission ||--o{ RolePermission : assigned
 ```
@@ -79,6 +83,7 @@ Entidades iniciales:
 - `IdempotencyRecord`.
 - `BackupOperation`.
 - `RestoreOperation`.
+- `PlatformMaintenanceState`.
 
 ## 7. Restricciones clave
 
@@ -101,6 +106,9 @@ Entidades iniciales:
 - La migracion `20260702203000_add_restore_operations` crea el indice unico parcial `restore_operations_one_active_idx` para impedir mas de una restauracion activa.
 - La migracion `20260702210000_add_restore_validation_state` incorpora `VALIDATED` y `validatedAt` para registrar la validacion no destructiva del artefacto cifrado.
 - Las solicitudes HTTP de copia y restauracion toman un advisory lock transaccional de PostgreSQL antes de comprobar operaciones activas, para serializar la exclusion entre `backup_operations` y `restore_operations`.
+- `PlatformMaintenanceState.singletonKey` es unico y la migracion `20260702214500_harden_platform_maintenance` refuerza por SQL que solo pueda valer `1`.
+- Si `PlatformMaintenanceState.enabled = true`, la base exige `mode`, `enabledAt` y `enabledById`.
+- Para `mode = RESTORE`, la base exige `restoreOperationId`.
 
 ## 8. Copias de seguridad
 
@@ -153,7 +161,20 @@ El comando `npm run restore:validate` procesa la siguiente restauracion `REQUEST
 
 Los estados `PREPARING`, `RESTORING`, `VERIFYING`, `COMPLETED` y `REQUIRES_RECOVERY` quedan reservados para el procedimiento de restauracion controlada.
 
-## 10. Modelo de accesos
+## 10. Modo mantenimiento
+
+El modo mantenimiento se activa antes de una restauracion destructiva real.
+
+Reglas:
+
+- Requiere permiso `Platform.ManageMaintenance`.
+- Solo puede activarse para una `RestoreOperation` en estado `VALIDATED`.
+- Audita `MAINTENANCE_MODE_ENABLED` y `MAINTENANCE_MODE_DISABLED`.
+- Bloquea mutaciones normales con `423 MAINTENANCE_MODE_ACTIVE` y audita `MAINTENANCE_MUTATION_BLOCKED`.
+- Mantiene permitidas rutas operativas necesarias para evitar lockout: health, sesion/CSRF/login/logout, consulta de auditoria, lectura de copias/restauraciones y `GET/PATCH /api/platform/maintenance`.
+- No ejecuta `pg_restore`; solo prepara la exclusividad previa.
+
+## 11. Modelo de accesos
 
 Las sesiones usan token opaco en cookie segura. La base solo conserva `tokenHash`.
 
@@ -169,7 +190,7 @@ Reglas:
 - El rate limit de login usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
 - Las cabeceras de proxy para IP cliente solo se usan si `TRUST_PROXY_HEADERS=true` o fuera de produccion; en produccion sin proxy confiable no se aplica el bucket por IP para evitar un limite global compartido.
 
-## 11. Transacciones
+## 12. Transacciones
 
 La inicializacion de Plataforma se ejecuta con `prisma.$transaction`.
 
@@ -183,7 +204,7 @@ Debe crear o confirmar en una unica transaccion:
 
 Si cualquier paso falla, no debe quedar estado parcial.
 
-## 12. Auditoria
+## 13. Auditoria
 
 `AuditEvent` es append-only a nivel de aplicacion.
 
@@ -195,7 +216,7 @@ Reglas:
 - Guardar payload JSON minimo.
 - Indexar `createdAt` e `eventType` para consulta paginada del visor de auditoria.
 
-## 13. Migraciones
+## 14. Migraciones
 
 Desarrollo:
 
@@ -216,7 +237,7 @@ Reglas:
 3. Revisar cambios destructivos por etapas.
 4. Validar contra PostgreSQL real.
 
-## 14. Criterios de aceptacion
+## 15. Criterios de aceptacion
 
 1. Prisma genera cliente.
 2. La migracion crea todas las tablas iniciales.

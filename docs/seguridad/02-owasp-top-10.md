@@ -87,6 +87,7 @@ OWASP define el Top 10 como un documento de concienciacion para desarrolladores 
 - Usar idempotencia en mutaciones repetibles.
 - Mantener transacciones para invariantes economicas.
 - Delegar revision independiente a subagentes en cambios criticos.
+- En mantenimiento/restauracion, bloquear mutaciones normales sin bloquear las rutas necesarias para recuperar el control operativo.
 
 ### A07 - Authentication Failures
 
@@ -128,6 +129,7 @@ OWASP define el Top 10 como un documento de concienciacion para desarrolladores 
 - No exponer stack traces ni detalles internos.
 - Registrar errores tecnicos con correlation id.
 - Disenar estados recuperables para integraciones externas.
+- Evitar lockout administrativo en modos excepcionales como mantenimiento o restauracion.
 
 ## 4. Checklist Para Pull Requests
 

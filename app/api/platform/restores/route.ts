@@ -10,6 +10,7 @@ import {
   requestRestore,
   requestRestoreSchema
 } from "@/modules/platform/application/restores";
+import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
 import {
   getCorrelationId,
   invalidJson,
@@ -78,6 +79,16 @@ export async function POST(request: Request) {
 
   if (!authorization.ok) {
     return jsonResponse(request, authorization.error, { status: authorization.status });
+  }
+
+  const maintenance = await requireMaintenanceModeInactive(
+    authorization.user,
+    request,
+    { correlationId }
+  );
+
+  if (!maintenance.ok) {
+    return jsonResponse(request, maintenance.error, { status: maintenance.status });
   }
 
   if (!isJsonRequest(request)) {

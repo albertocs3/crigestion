@@ -993,7 +993,88 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 
-## 13. Criterios de aceptacion
+## 13. Modo mantenimiento
+
+### `GET /api/platform/maintenance`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageMaintenance`.
+
+Respuesta `200`:
+
+```json
+{
+  "enabled": true,
+  "mode": "RESTORE",
+  "reason": "Ventana de restauracion controlada",
+  "restoreOperation": {
+    "id": "uuid",
+    "status": "VALIDATED",
+    "backupOperationId": "uuid"
+  },
+  "enabledBy": {
+    "id": "uuid",
+    "displayName": "Administrador",
+    "userName": "admin"
+  },
+  "disabledBy": null,
+  "enabledAt": "2026-07-02T12:00:00.000Z",
+  "disabledAt": null
+}
+```
+
+### `PATCH /api/platform/maintenance`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageMaintenance`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Activar:
+
+```json
+{
+  "enabled": true,
+  "restoreOperationId": "uuid",
+  "reason": "Ventana de restauracion controlada"
+}
+```
+
+Desactivar:
+
+```json
+{
+  "enabled": false
+}
+```
+
+Efectos:
+
+- Solo activa mantenimiento para una restauracion `VALIDATED`.
+- Audita `MAINTENANCE_MODE_ENABLED` o `MAINTENANCE_MODE_DISABLED`.
+- Durante mantenimiento, las mutaciones normales devuelven `423 MAINTENANCE_MODE_ACTIVE` y auditan `MAINTENANCE_MUTATION_BLOCKED`.
+- Se mantienen permitidos login, logout, sesion, CSRF, health, consultas de auditoria y lectura de backups/restores para evitar lockout operativo.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `RESTORE_OPERATION_NOT_FOUND` | La restauracion indicada no existe |
+| 409 | `RESTORE_OPERATION_NOT_VALIDATED` | La restauracion no esta validada |
+| 409 | `MAINTENANCE_MODE_ALREADY_ENABLED` | El mantenimiento ya esta activo |
+| 409 | `MAINTENANCE_MODE_NOT_ENABLED` | El mantenimiento no esta activo |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+| 423 | `MAINTENANCE_MODE_ACTIVE` | La plataforma esta en modo mantenimiento |
+
+## 14. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.
