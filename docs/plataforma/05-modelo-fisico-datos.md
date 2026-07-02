@@ -91,8 +91,29 @@ Entidades iniciales:
 - La migracion `20260701193000_add_active_session_unique_index` crea el indice unico parcial `sessions_one_active_per_user_idx` sobre `sessions("userId")` cuando `"revokedAt" IS NULL`. Prisma no expresa este indice en `schema.prisma`, por lo que se mantiene como SQL manual.
 - `BackupOperation` indexa `status + requestedAt`, `requestedAt + id` y `requestedById + requestedAt` para consultas operativas paginadas.
 - La migracion `20260702171000_add_active_backup_operation_index` crea el indice unico parcial `backup_operations_one_active_idx` para impedir mas de una copia `REQUESTED` o `RUNNING`.
+- `BackupOperation.storageKey` guarda solo el nombre logico del artefacto dentro del repositorio de copias, no una ruta absoluta expuesta por API.
 
-## 8. Modelo de accesos
+## 8. Copias de seguridad
+
+El proceso de copia manual se divide en dos pasos:
+
+1. La API registra `BackupOperation` en estado `REQUESTED`.
+2. El worker `npm run backup:run` procesa la siguiente solicitud.
+
+El worker:
+
+- Marca la operacion como `RUNNING` antes de hacer I/O.
+- Ejecuta `pg_dump` sin shell y sin aceptar argumentos del cliente.
+- Pasa la contrasena de PostgreSQL por `PGPASSWORD`, no como argumento de proceso.
+- Pasa a `pg_dump` un entorno minimo para evitar propagar otros secretos de aplicacion.
+- Cifra el volcado con AES-256-GCM y autentica el encabezado del artefacto como AAD.
+- Guarda un artefacto `.backup` en `BACKUP_DIRECTORY`.
+- Calcula `sha256` del artefacto cifrado y registra `sizeBytes`.
+- Marca la operacion como `VERIFIED` o `FAILED`.
+- Marca como `FAILED` las operaciones `RUNNING` que exceden `BACKUP_RUNNING_TIMEOUT_MINUTES`.
+- Audita `BACKUP_VERIFIED` o `BACKUP_FAILED` sin rutas absolutas ni secretos.
+
+## 9. Modelo de accesos
 
 Las sesiones usan token opaco en cookie segura. La base solo conserva `tokenHash`.
 
@@ -108,7 +129,7 @@ Reglas:
 - El rate limit de login usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
 - Las cabeceras de proxy para IP cliente solo se usan si `TRUST_PROXY_HEADERS=true` o fuera de produccion; en produccion sin proxy confiable no se aplica el bucket por IP para evitar un limite global compartido.
 
-## 9. Transacciones
+## 10. Transacciones
 
 La inicializacion de Plataforma se ejecuta con `prisma.$transaction`.
 
@@ -122,7 +143,7 @@ Debe crear o confirmar en una unica transaccion:
 
 Si cualquier paso falla, no debe quedar estado parcial.
 
-## 10. Auditoria
+## 11. Auditoria
 
 `AuditEvent` es append-only a nivel de aplicacion.
 
@@ -134,7 +155,7 @@ Reglas:
 - Guardar payload JSON minimo.
 - Indexar `createdAt` e `eventType` para consulta paginada del visor de auditoria.
 
-## 11. Migraciones
+## 12. Migraciones
 
 Desarrollo:
 
@@ -155,7 +176,7 @@ Reglas:
 3. Revisar cambios destructivos por etapas.
 4. Validar contra PostgreSQL real.
 
-## 12. Criterios de aceptacion
+## 13. Criterios de aceptacion
 
 1. Prisma genera cliente.
 2. La migracion crea todas las tablas iniciales.

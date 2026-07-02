@@ -28,6 +28,10 @@ Revisar como minimo:
 | `AUTH_COOKIE_SECURE` | No puede ser `false` | Las cookies deben ser seguras en produccion. |
 | `AUTH_COOKIE_SAME_SITE` | `lax` o `strict` | Valor por defecto `lax`. |
 | `TRUST_PROXY_HEADERS` | Segun despliegue | `true` solo detras de proxy confiable que sobrescribe cabeceras. |
+| `BACKUP_DIRECTORY` | Obligatoria si se ejecutan copias | Directorio server-side fuera de `public/`. |
+| `BACKUP_ENCRYPTION_KEY` | Obligatoria si se ejecutan copias | Clave hex de 64 caracteres o base64 de 32 bytes. |
+| `PG_DUMP_BINARY` | Opcional | Por defecto `pg_dump`. |
+| `BACKUP_RUNNING_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `RUNNING` antiguos como fallidos. |
 
 ## 4. Validacion previa
 
@@ -71,6 +75,7 @@ Orden recomendado:
 4. Aplicar migraciones con `npm run prisma:deploy`.
 5. Arrancar la aplicacion con variables runtime definitivas.
 6. Verificar health check.
+7. Verificar que el proceso que ejecuta `npm run backup:run` tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
 
 ## 7. Verificacion post-despliegue
 
@@ -108,3 +113,5 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - HSTS se emite en builds de produccion.
 - La validacion de entorno se ejecuta al iniciar runtime Node.js.
 - El rate limit de login por IP depende de una IP cliente confiable.
+- Las copias manuales se solicitan por API y se procesan fuera del request HTTP con `npm run backup:run`.
+- El worker de copias pasa a `pg_dump` un entorno minimo y no propaga secretos de aplicacion salvo la contrasena PostgreSQL como `PGPASSWORD`.
