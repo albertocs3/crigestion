@@ -108,10 +108,7 @@ test("shows access denied for a user without users or roles permissions", async 
 }) => {
   await createLimitedUser(page);
 
-  await page.goto("/login");
-  await page.getByLabel("Usuario").fill(limitedUserName);
-  await page.getByLabel("Contrasena").fill(limitedPassword);
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await loginLimitedUser(page);
 
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
@@ -142,6 +139,54 @@ test("shows access denied for a user without users or roles permissions", async 
     }
   });
   expect(deniedAuditCount).toBe(2);
+});
+
+test("propagates correlation ids through middleware, protected API errors, and audit", async ({
+  page
+}) => {
+  await createLimitedUser(page);
+  await loginLimitedUser(page);
+
+  const response = await page.evaluate(async () => {
+    const protectedResponse = await fetch("/api/platform/users");
+
+    return {
+      status: protectedResponse.status,
+      correlationId: protectedResponse.headers.get("X-Correlation-ID"),
+      body: await protectedResponse.json()
+    };
+  });
+
+  expect(response.status).toBe(403);
+  expect(response.correlationId).toEqual(expect.stringMatching(/^[a-zA-Z0-9._:-]{8,100}$/));
+  const correlationId = response.correlationId;
+
+  if (!correlationId) {
+    throw new Error("Protected API response did not include a correlation id.");
+  }
+
+  expect(response.body).toEqual({
+    code: "FORBIDDEN",
+    message: "No tienes permiso para realizar esta accion.",
+    correlationId
+  });
+  expect(JSON.stringify(response.body)).not.toContain(limitedPassword);
+
+  const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+    where: {
+      eventType: "ACCESS_DENIED",
+      payload: {
+        path: ["correlationId"],
+        equals: correlationId
+      }
+    }
+  });
+
+  expect(auditEvent.payload).toMatchObject({
+    permission: "Platform.ManageUsers",
+    correlationId
+  });
+  expect(JSON.stringify(auditEvent.payload)).not.toContain(limitedPassword);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
@@ -189,6 +234,15 @@ async function createLimitedUser(page: import("@playwright/test").Page): Promise
     });
 
   await page.context().clearCookies();
+}
+
+async function loginLimitedUser(page: import("@playwright/test").Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(limitedUserName);
+  await page.getByLabel("Contrasena").fill(limitedPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+
+  await expect(page).toHaveURL(/\/app$/);
 }
 
 async function createAuthenticatedResource(
