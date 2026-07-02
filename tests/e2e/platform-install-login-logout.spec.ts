@@ -22,6 +22,9 @@ test.afterAll(async () => {
 test("initializes the platform, logs in, shows the session, and logs out", async ({
   page
 }) => {
+  await page.goto("/app");
+  await expect(page).toHaveURL(/\/platform\/installation$/);
+
   await page.goto("/platform/installation");
 
   await expect(page.getByRole("heading", { name: "Estado de la instalacion" })).toBeVisible();
@@ -35,10 +38,8 @@ test("initializes the platform, logs in, shows the session, and logs out", async
 
   await expect(page.getByText("Instalacion completada")).toBeVisible();
   await page.reload();
-  await expect(page.getByText("Estado:")).toBeVisible();
-  await expect(page.getByText("INITIALIZED")).toBeVisible();
-  await expect(page.getByText(`Empresa: ${companyName}`)).toBeVisible();
-  await expect(page.getByText(`Administrador: ${userName}`)).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
 
   await page.goto("/login");
   await page.getByLabel("Usuario").fill(userName);
@@ -49,6 +50,11 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
   await expect(page.getByText(`Sesion activa de ${displayName}`)).toBeVisible();
   await expect(page.getByText(userName)).toBeVisible();
+
+  await page.goto("/login");
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/platform/installation");
+  await expect(page).toHaveURL(/\/app$/);
 
   const sessionCookie = (await page.context().cookies()).find(
     (cookie) => cookie.name === "crigestion_session"
@@ -61,6 +67,8 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
   await page.goto("/app");
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);
 
   const revokedSessionCount = await prisma.session.count({

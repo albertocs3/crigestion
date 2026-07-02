@@ -8,48 +8,42 @@ Define la experiencia web inicial de Plataforma para CriGestión con Next.js.
 
 | Ruta | Pantalla | Proposito |
 |---|---|---|
-| `/` | Inicio operativo | Mostrar estado general y acceso a inicializacion |
-| `/platform/installation` | Estado de instalacion | Mostrar si la plataforma esta inicializada |
+| `/` | Entrada | Redirigir a instalacion, login o inicio autenticado segun estado |
+| `/platform/installation` | Instalacion | Inicializar la plataforma cuando aun no esta operativa |
 | `/login` | Acceso | Autenticar usuarios internos |
 | `/app` | Inicio autenticado | Mostrar sesion activa y accesos operativos |
 | `/app/users` | Gestion de usuarios | Listar, crear, activar, desactivar y cambiar roles |
 | `/app/roles` | Gestion de roles | Listar y crear roles con permisos |
 | `/app/sessions` | Gestion de sesiones | Listar sesiones activas y revocar sesiones remotas |
 
-## 3. Inicio operativo
+## 3. Entrada
 
-Contenido:
+Comportamiento:
 
-- Marca `CriGestión`.
-- Estado de instalacion.
-- Acceso a `/platform/installation`.
+- Si la plataforma no esta inicializada, redirige a `/platform/installation`.
+- Si la plataforma esta inicializada y no hay sesion valida, redirige a `/login`.
+- Si existe sesion valida, redirige a `/app`.
 
-Estados:
+## 4. Instalacion
 
-- Pendiente de inicializacion.
-- Inicializado.
-- Error de conexion a base de datos, gestionado por error boundary futuro.
-
-## 4. Estado de instalacion
-
-Contenido cuando no existe instalacion:
+Contenido cuando la plataforma no esta inicializada:
 
 - Mensaje de instalacion pendiente.
 - Formulario de inicializacion con datos de empresa y primer administrador.
 - Validacion local orientativa y validacion final server-side.
 - Estados de carga, exito y error.
 
-Contenido cuando existe instalacion:
+Comportamiento cuando la plataforma ya esta inicializada:
 
-- Estado.
-- Empresa.
-- Administrador inicial.
+- Redireccion a `/app` si existe sesion valida.
+- Redireccion a `/login` si no existe sesion valida.
 
 ## 5. Acceso
 
 Contenido:
 
 - Formulario de usuario y contrasena.
+- Redireccion a `/platform/installation` si la plataforma no esta inicializada.
 - Redireccion a `/app` si ya existe sesion autenticada.
 - Estados de carga y error.
 
@@ -65,6 +59,8 @@ Contenido:
 - Acceso a sesiones activas cuando el rol lo permite.
 - Formulario de cambio de contrasena.
 - Accion de cierre de sesion.
+- Redireccion a `/platform/installation` si la plataforma no esta inicializada.
+- Redireccion a `/login` si no existe sesion valida.
 
 ## 7. Gestion de usuarios
 
@@ -75,6 +71,7 @@ Contenido:
 - Formulario para crear usuario.
 - Acciones para desactivar, reactivar y cambiar rol.
 - Estados de error cuando falta permiso o falla la validacion.
+- Redireccion a `/login` si no existe sesion valida.
 
 ## 8. Gestion de roles
 
@@ -85,6 +82,7 @@ Contenido:
 - Edicion de permisos en roles personalizados.
 - Roles protegidos en solo lectura.
 - Estados de error cuando falta permiso o falla la validacion.
+- Redireccion a `/login` si no existe sesion valida.
 
 ## 9. Gestion de sesiones
 
@@ -95,6 +93,7 @@ Contenido:
 - Accion para revocar sesiones remotas.
 - La sesion propia se cierra desde la accion de logout, no desde revocacion remota.
 - Estados de error cuando falta permiso o falla la validacion.
+- Redireccion a `/login` si no existe sesion valida.
 
 ## 10. Criterios UI
 

@@ -38,7 +38,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, edicion de permisos, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado, permisos insuficientes y revocacion de sesiones al cambiar permisos de rol.
-- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de instalacion, login, sesion activa, logout y permisos denegados.
+- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de redireccion por instalacion, login, sesion activa, logout y permisos denegados.
 
 ## 5. Verificaciones manuales iniciales
 

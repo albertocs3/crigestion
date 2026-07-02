@@ -1,22 +1,12 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import {
-  getSessionState,
-  sessionCookieName
-} from "@/modules/platform/application/auth";
+import { requireAuthenticatedPage } from "@/modules/platform/presentation/pageAccess";
 import { ChangePasswordForm } from "@/modules/platform/presentation/ChangePasswordForm";
 import { LogoutButton } from "@/modules/platform/presentation/LogoutButton";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppHomePage() {
-  const cookieStore = await cookies();
-  const session = await getSessionState(cookieStore.get(sessionCookieName)?.value);
-
-  if (!session.authenticated) {
-    redirect("/login");
-  }
+  const session = await requireAuthenticatedPage();
 
   return (
     <main className="shell">
