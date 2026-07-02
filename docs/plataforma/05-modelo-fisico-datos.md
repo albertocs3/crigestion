@@ -34,6 +34,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 | Identidad | `ReservedUserName` / `reserved_user_names` | Nombres de usuario no reutilizables |
 | Identidad | `Session` / `sessions` | Sesiones web activas, caducadas o revocadas |
 | Identidad | `LoginAttempt` / `login_attempts` | Intentos de acceso y bloqueo |
+| Seguridad | `RateLimitBucket` / `rate_limit_buckets` | Contadores atomicos por ventana para limites de peticiones |
 | Autorizacion | `Role` / `roles` | Roles base |
 | Autorizacion | `Permission` / `permissions` | Permisos funcionales |
 | Autorizacion | `RolePermission` / `role_permissions` | Relacion rol-permiso |
@@ -68,6 +69,7 @@ Entidades iniciales:
 - `ReservedUserName`.
 - `Session`.
 - `LoginAttempt`.
+- `RateLimitBucket`.
 - `IdempotencyRecord`.
 
 ## 7. Restricciones clave
@@ -81,6 +83,7 @@ Entidades iniciales:
 - `Permission.code` es unico.
 - `RolePermission` usa clave compuesta `roleId + permissionId`.
 - `Session.tokenHash` es unico.
+- `RateLimitBucket.key` es unico.
 - `IdempotencyRecord.key` es unico.
 - La migracion `20260701193000_add_active_session_unique_index` crea el indice unico parcial `sessions_one_active_per_user_idx` sobre `sessions("userId")` cuando `"revokedAt" IS NULL`. Prisma no expresa este indice en `schema.prisma`, por lo que se mantiene como SQL manual.
 
@@ -97,6 +100,8 @@ Reglas:
 - El cambio de contrasena, rol, permisos, bloqueo o desactivacion revoca sesiones.
 - Los intentos de login se registran sin guardar la contrasena.
 - El bloqueo por intentos fallidos se apoya en `failedLoginCount`, `lockedUntil` y `login_attempts`.
+- El rate limit de login usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
+- Las cabeceras de proxy para IP cliente solo se usan si `TRUST_PROXY_HEADERS=true` o fuera de produccion; en produccion sin proxy confiable no se aplica el bucket por IP para evitar un limite global compartido.
 
 ## 9. Transacciones
 
@@ -122,6 +127,7 @@ Reglas:
 - Guardar tipo de evento estable.
 - Guardar actor tecnico o usuario.
 - Guardar payload JSON minimo.
+- Indexar `createdAt` e `eventType` para consulta paginada del visor de auditoria.
 
 ## 11. Migraciones
 

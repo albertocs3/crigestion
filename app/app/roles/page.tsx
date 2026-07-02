@@ -1,31 +1,18 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import {
-  requirePermission,
-  sessionCookieName
-} from "@/modules/platform/application/auth";
 import {
   listPermissions,
   listRoles
 } from "@/modules/platform/application/roles";
+import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 import { RoleCreateForm } from "@/modules/platform/presentation/RoleCreateForm";
 import { RolePermissionsForm } from "@/modules/platform/presentation/RolePermissionsForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function RolesPage() {
-  const cookieStore = await cookies();
-  const authorization = await requirePermission(
-    cookieStore.get(sessionCookieName)?.value,
-    "Platform.ManageRoles"
-  );
+  const authorization = await authorizePagePermission("Platform.ManageRoles");
 
   if (!authorization.ok) {
-    if (authorization.status === 401) {
-      redirect("/login");
-    }
-
     return (
       <main className="shell">
         <header className="topbar">
@@ -37,7 +24,7 @@ export default async function RolesPage() {
         <section className="content">
           <div className="panel stack">
             <h1>Roles</h1>
-            <p className="message error">{authorization.error.message}</p>
+            <p className="message error">{authorization.message}</p>
           </div>
         </section>
       </main>

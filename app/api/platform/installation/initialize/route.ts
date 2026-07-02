@@ -1,9 +1,17 @@
-import { NextResponse } from "next/server";
 import {
   hashRequestBody,
   initializePlatform,
   initializeSchema
 } from "@/modules/platform/application/installation";
+import {
+  invalidJson,
+  isAllowedOrigin,
+  isJsonRequest,
+  jsonResponse,
+  originNotAllowed,
+  unsupportedMediaType,
+  validationError
+} from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -17,17 +25,6 @@ const initializeRateLimit =
 
 if (!globalForRateLimit.initializeRateLimit) {
   globalForRateLimit.initializeRateLimit = initializeRateLimit;
-}
-
-function isAllowedOrigin(request: Request) {
-  const origin = request.headers.get("Origin");
-  const appBaseUrl = process.env.APP_BASE_URL;
-
-  if (!origin || !appBaseUrl) {
-    return true;
-  }
-
-  return origin === appBaseUrl;
 }
 
 function isRateLimited(request: Request): boolean {
@@ -49,7 +46,8 @@ function isRateLimited(request: Request): boolean {
 
 export async function POST(request: Request) {
   if (isRateLimited(request)) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "RATE_LIMITED",
         message: "Demasiados intentos de inicializacion. Espera antes de reintentar."
@@ -59,31 +57,18 @@ export async function POST(request: Request) {
   }
 
   if (!isAllowedOrigin(request)) {
-    return NextResponse.json(
-      {
-        code: "ORIGIN_NOT_ALLOWED",
-        message: "Origen no permitido."
-      },
-      { status: 403 }
-    );
+    return jsonResponse(request, originNotAllowed(), { status: 403 });
   }
 
-  const contentType = request.headers.get("Content-Type") ?? "";
-
-  if (!contentType.toLocaleLowerCase("en-US").includes("application/json")) {
-    return NextResponse.json(
-      {
-        code: "UNSUPPORTED_MEDIA_TYPE",
-        message: "La peticion debe enviarse como JSON."
-      },
-      { status: 415 }
-    );
+  if (!isJsonRequest(request)) {
+    return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
 
   const idempotencyKey = request.headers.get("Idempotency-Key");
 
   if (!idempotencyKey) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "IDEMPOTENCY_KEY_REQUIRED",
         message: "La cabecera Idempotency-Key es obligatoria."
@@ -93,7 +78,8 @@ export async function POST(request: Request) {
   }
 
   if (idempotencyKey.length > 160) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       {
         code: "IDEMPOTENCY_KEY_INVALID",
         message: "La cabecera Idempotency-Key no puede superar 160 caracteres."
@@ -107,13 +93,7 @@ export async function POST(request: Request) {
   try {
     rawBody = await request.text();
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   let body: unknown;
@@ -121,25 +101,13 @@ export async function POST(request: Request) {
   try {
     body = JSON.parse(rawBody);
   } catch {
-    return NextResponse.json(
-      {
-        code: "INVALID_JSON",
-        message: "El cuerpo de la peticion no es JSON valido."
-      },
-      { status: 400 }
-    );
+    return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
   const payload = initializeSchema.safeParse(body);
 
   if (!payload.success) {
-    return NextResponse.json(
-      {
-        code: "VALIDATION_ERROR",
-        issues: payload.error.flatten()
-      },
-      { status: 422 }
-    );
+    return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
   const result = await initializePlatform(
@@ -149,11 +117,12 @@ export async function POST(request: Request) {
   );
 
   if (!result.ok) {
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       result.error,
       { status: result.status }
     );
   }
 
-  return NextResponse.json(result.value, { status: result.status });
+  return jsonResponse(request, result.value, { status: result.status });
 }

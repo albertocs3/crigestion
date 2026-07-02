@@ -183,6 +183,7 @@ Convenciones:
 La interfaz usa App Router:
 
 - Server Components por defecto.
+- Las paginas operativas usan guards server-side para validar instalacion, sesion y permisos antes de cargar datos.
 - Client Components solo para formularios, controles interactivos y estado de UI.
 - Server Actions solo cuando mantengan contratos claros y no sustituyan APIs necesarias para integraciones.
 - Formularios con validacion local orientativa y validacion final en servidor.
@@ -192,6 +193,8 @@ La interfaz usa App Router:
 - HTTPS obligatorio en produccion.
 - Secretos en variables de entorno o proveedor seguro.
 - Cookies de sesion `HttpOnly`, `Secure` y `SameSite`.
+- En produccion, las mutaciones validan origen contra `APP_BASE_URL` configurado.
+- El middleware propaga `X-Correlation-ID` para trazabilidad tecnica.
 - Tokens o sesiones siempre validados en servidor.
 - Permisos revalidados en cada accion.
 - Datos sensibles cifrados o protegidos con HMAC de busqueda cuando proceda.

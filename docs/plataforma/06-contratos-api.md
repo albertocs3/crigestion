@@ -13,7 +13,18 @@ La API no expone entidades de dominio ni modelos Prisma como contrato estable.
 - Validacion de entrada con Zod.
 - Errores con `code` funcional estable.
 - Operaciones de escritura idempotentes cuando puedan repetirse.
-- Correlation ID pendiente de integrar en middleware.
+- Todas las respuestas pasan por `X-Correlation-ID`; si la peticion no lo aporta, el middleware genera uno.
+- Los errores emitidos mediante helpers HTTP incluyen `correlationId` en el cuerpo cuando la peticion trae `X-Correlation-ID`.
+
+Formato de error con correlacion:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No tienes permiso para realizar esta accion.",
+  "correlationId": "request-id"
+}
+```
 
 ## 3. Health
 
@@ -67,7 +78,7 @@ Cabeceras:
 |---|---|---|
 | `Idempotency-Key` | Si | Evitar duplicados por reintentos |
 | `Content-Type: application/json` | Si | Rechazar cuerpos no JSON |
-| `Origin` | Cuando exista | Debe coincidir con `APP_BASE_URL` |
+| `Origin` | Cuando exista | Debe coincidir con el origen normalizado de `APP_BASE_URL`; en produccion `APP_BASE_URL` debe estar configurado |
 
 Request:
 
@@ -163,9 +174,10 @@ Efectos:
 
 - Crea una sesion en `sessions`.
 - Guarda solo hash del token.
-- Devuelve el token solo en cookie `HttpOnly`, `SameSite=Lax`, `Path=/`.
+- Devuelve el token solo en cookie `HttpOnly`, `Secure` en produccion, `SameSite=Lax` por defecto, `Path=/`.
 - Registra `login_attempts`.
 - Audita `LOGIN_SUCCEEDED` o `LOGIN_FAILED` sin contrasena.
+- Aplica rate limit atomico por IP confiable/ventana sobre intentos de login. En produccion solo se confia en cabeceras de proxy si `TRUST_PROXY_HEADERS=true`.
 
 Errores:
 
@@ -178,6 +190,9 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 | 423 | `ACCOUNT_LOCKED` | Cuenta bloqueada temporalmente |
+| 429 | `LOGIN_RATE_LIMITED` | Demasiados intentos recientes desde la misma IP confiable |
+
+La respuesta `429` incluye la cabecera `Retry-After` y el campo `retryAfterSeconds`.
 
 ### `GET /api/auth/session`
 
@@ -604,9 +619,123 @@ Errores:
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload o identificador invalido |
 
-Los siguientes contratos de seguridad se iran incorporando en rebanadas posteriores.
+## 10. Configuracion
 
-## 10. Criterios de aceptacion
+### `GET /api/platform/configuration`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageConfiguration`.
+
+Respuesta `200`:
+
+```json
+{
+  "company": {
+    "id": "uuid",
+    "legalName": "CriGestion SL",
+    "taxId": "B12345678",
+    "email": "admin@example.com",
+    "updatedAt": "2026-06-26T10:00:00.000Z"
+  },
+  "installation": {
+    "id": "uuid",
+    "status": "INITIALIZED",
+    "productVersion": "0.1.0",
+    "completedAt": "2026-06-26T10:00:00.000Z"
+  }
+}
+```
+
+### `PATCH /api/platform/configuration/company`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageConfiguration`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{
+  "legalName": "CriGestion SL",
+  "taxId": "B12345678",
+  "email": "admin@example.com"
+}
+```
+
+Respuesta `200`: empresa actualizada como DTO.
+
+Efectos:
+
+- Actualiza los datos base de empresa.
+- Audita `COMPANY_CONFIGURATION_UPDATED` con campos cambiados, sin guardar valores fiscales/email completos en el payload.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 404 | `CONFIGURATION_NOT_FOUND` | La configuracion no existe |
+| 409 | `COMPANY_TAX_ID_ALREADY_USED` | El NIF ya pertenece a otra empresa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+## 11. Auditoria
+
+### `GET /api/platform/audit`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ViewAudit`.
+
+Parametros query:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Tamano de pagina entre 1 y 100. Por defecto 25 |
+| `cursor` | Cursor devuelto por la pagina anterior |
+| `eventType` | Filtro opcional por tipo de evento |
+
+Respuesta `200`:
+
+```json
+{
+  "events": [
+    {
+      "id": "uuid",
+      "eventType": "LOGIN_SUCCEEDED",
+      "actorType": "USER",
+      "payload": {
+        "userId": "uuid"
+      },
+      "createdAt": "2026-06-26T10:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Efectos:
+
+- Devuelve DTOs de auditoria, no modelos Prisma.
+- Redacta claves sensibles conocidas en `payload`.
+- Audita la propia consulta como `AUDIT_VIEWED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 422 | `VALIDATION_ERROR` | Query invalida |
+
+## 12. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

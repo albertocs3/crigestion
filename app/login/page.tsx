@@ -1,20 +1,10 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import {
-  getSessionState,
-  sessionCookieName
-} from "@/modules/platform/application/auth";
 import { LoginForm } from "@/modules/platform/presentation/LoginForm";
+import { requireAnonymousInitializedPage } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
 
 export default async function LoginPage() {
-  const cookieStore = await cookies();
-  const session = await getSessionState(cookieStore.get(sessionCookieName)?.value);
-
-  if (session.authenticated) {
-    redirect("/app");
-  }
+  await requireAnonymousInitializedPage();
 
   return (
     <main className="shell">

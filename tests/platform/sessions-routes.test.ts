@@ -81,7 +81,7 @@ describe("sessions HTTP contracts", () => {
   });
 
   it("rejects unauthenticated session listing", async () => {
-    const response = await sessionsGet();
+    const response = await sessionsGet(apiRequest("/api/platform/sessions"));
     const body = await response.json();
 
     expect(response.status).toBe(401);
@@ -94,7 +94,7 @@ describe("sessions HTTP contracts", () => {
   it("lists active sessions for an authorized administrator without token material", async () => {
     await loginAsAdmin();
 
-    const response = await sessionsGet();
+    const response = await sessionsGet(apiRequest("/api/platform/sessions"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -176,7 +176,7 @@ describe("sessions HTTP contracts", () => {
     cookieMock.reset();
     await loginWith("auditor", managedPassword);
 
-    const response = await sessionsGet();
+    const response = await sessionsGet(apiRequest("/api/platform/sessions"));
     const body = await response.json();
 
     expect(response.status).toBe(403);
@@ -276,7 +276,7 @@ async function loginWith(userName: string, password: string): Promise<void> {
 }
 
 async function getCsrfToken(): Promise<string> {
-  const response = await csrfGet();
+  const response = await csrfGet(apiRequest("/api/auth/csrf"));
   const body = (await response.json()) as { csrfToken?: string };
 
   expect(response.status).toBe(200);
@@ -316,6 +316,10 @@ function jsonRequest(
   });
 }
 
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
+}
+
 function uniqueTestIp(): string {
   return `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
 }
@@ -340,6 +344,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

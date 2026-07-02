@@ -1,15 +1,13 @@
-import { prisma } from "@/lib/prisma";
+import { getInstallationState } from "@/modules/platform/application/installation";
 import { InstallationForm } from "@/modules/platform/presentation/InstallationForm";
+import { requireInstallationPageAccess } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
 
 export default async function InstallationPage() {
-  const installation = await prisma.installation.findFirst({
-    include: {
-      company: true,
-      initialAdministrator: true
-    }
-  });
+  await requireInstallationPageAccess();
+
+  const state = await getInstallationState();
 
   return (
     <main className="shell">
@@ -20,18 +18,12 @@ export default async function InstallationPage() {
       <section className="content">
         <div className="panel stack">
           <h1>Estado de la instalacion</h1>
-          {installation ? (
+          {state.installation ? (
             <div className="stack">
               <p>
-                Estado: <strong>{installation.status}</strong>
+                Estado: <strong>{state.installation.status}</strong>
               </p>
-              <p className="muted">
-                Empresa: {installation.company?.legalName ?? "Pendiente"}
-              </p>
-              <p className="muted">
-                Administrador:{" "}
-                {installation.initialAdministrator?.userName ?? "Pendiente"}
-              </p>
+              <p className="muted">La instalacion aun no esta operativa.</p>
             </div>
           ) : (
             <div className="stack">

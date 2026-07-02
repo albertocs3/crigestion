@@ -1,14 +1,9 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import {
-  requirePermission,
-  sessionCookieName
-} from "@/modules/platform/application/auth";
 import {
   listAssignableRoles,
   listUsers
 } from "@/modules/platform/application/users";
+import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 import { UserCreateForm } from "@/modules/platform/presentation/UserCreateForm";
 import { UserRoleSelect } from "@/modules/platform/presentation/UserRoleSelect";
 import { UserStatusButton } from "@/modules/platform/presentation/UserStatusButton";
@@ -16,17 +11,9 @@ import { UserStatusButton } from "@/modules/platform/presentation/UserStatusButt
 export const dynamic = "force-dynamic";
 
 export default async function UsersPage() {
-  const cookieStore = await cookies();
-  const authorization = await requirePermission(
-    cookieStore.get(sessionCookieName)?.value,
-    "Platform.ManageUsers"
-  );
+  const authorization = await authorizePagePermission("Platform.ManageUsers");
 
   if (!authorization.ok) {
-    if (authorization.status === 401) {
-      redirect("/login");
-    }
-
     return (
       <main className="shell">
         <header className="topbar">
@@ -38,7 +25,7 @@ export default async function UsersPage() {
         <section className="content">
           <div className="panel stack">
             <h1>Usuarios</h1>
-            <p className="message error">{authorization.error.message}</p>
+            <p className="message error">{authorization.message}</p>
           </div>
         </section>
       </main>

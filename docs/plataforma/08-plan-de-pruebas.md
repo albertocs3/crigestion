@@ -29,14 +29,21 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 
 - `tests/platform/installation.test.ts`: inicializacion transaccional, idempotencia, auditoria sin secretos y rechazo de segunda inicializacion.
 - `tests/platform/installation-routes.test.ts`: contrato HTTP de estado e inicializacion, errores estables, idempotencia, Origin y rate limit.
+- `tests/platform/http.test.ts`: politica compartida de validacion de origen, `APP_BASE_URL` y fallback de URL en produccion.
+- `tests/platform/middleware.test.ts`: propagacion y generacion de `X-Correlation-ID`.
+- `tests/platform/auth-config.test.ts`: configuracion efectiva de cookie de sesion `Secure` y `SameSite`.
 - `tests/platform/auth.test.ts`: login, sesion opaca, CSRF, bloqueo, logout, cambio de contrasena sin auditar secretos y limpieza de sesiones expiradas antes de abrir una nueva.
 - `tests/platform/auth-routes.test.ts`: contrato HTTP de login, sesion, CSRF, logout, cambio de contrasena y cookie `HttpOnly`.
 - `tests/platform/sessions.test.ts`: listado de sesiones activas sin material de token, revocacion remota y bloqueo de revocacion propia.
 - `tests/platform/sessions-routes.test.ts`: contrato HTTP de sesiones activas, permisos, CSRF y errores estables de revocacion.
+- `tests/platform/audit.test.ts`: listado paginado de auditoria, redaccion de payload sensible y evento `AUDIT_VIEWED`.
+- `tests/platform/audit-routes.test.ts`: contrato HTTP de auditoria, permisos, validacion de query y DTOs sin secretos.
+- `tests/platform/configuration.test.ts`: lectura y actualizacion de configuracion con auditoria sin valores fiscales completos.
+- `tests/platform/configuration-routes.test.ts`: contrato HTTP de configuracion, permisos, CSRF, validacion y DTOs.
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, edicion de permisos, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado, permisos insuficientes y revocacion de sesiones al cambiar permisos de rol.
-- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de instalacion, login, sesion activa, logout y permisos denegados.
+- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de redireccion por instalacion, login, sesion activa, logout y permisos denegados.
 
 ## 5. Verificaciones manuales iniciales
 

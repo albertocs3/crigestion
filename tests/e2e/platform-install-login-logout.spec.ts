@@ -22,6 +22,9 @@ test.afterAll(async () => {
 test("initializes the platform, logs in, shows the session, and logs out", async ({
   page
 }) => {
+  await page.goto("/app");
+  await expect(page).toHaveURL(/\/platform\/installation$/);
+
   await page.goto("/platform/installation");
 
   await expect(page.getByRole("heading", { name: "Estado de la instalacion" })).toBeVisible();
@@ -35,10 +38,8 @@ test("initializes the platform, logs in, shows the session, and logs out", async
 
   await expect(page.getByText("Instalacion completada")).toBeVisible();
   await page.reload();
-  await expect(page.getByText("Estado:")).toBeVisible();
-  await expect(page.getByText("INITIALIZED")).toBeVisible();
-  await expect(page.getByText(`Empresa: ${companyName}`)).toBeVisible();
-  await expect(page.getByText(`Administrador: ${userName}`)).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
 
   await page.goto("/login");
   await page.getByLabel("Usuario").fill(userName);
@@ -49,6 +50,24 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
   await expect(page.getByText(`Sesion activa de ${displayName}`)).toBeVisible();
   await expect(page.getByText(userName)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Configuracion" })).toBeVisible();
+
+  await page.getByRole("link", { name: "Configuracion" }).click();
+  await expect(page).toHaveURL(/\/app\/configuration$/);
+  await expect(page.getByRole("heading", { name: "Configuracion" })).toBeVisible();
+  await page.getByLabel("Nombre legal").fill("CriGestion E2E Actualizada SL");
+  await page.getByLabel("NIF").fill("B87654321");
+  await page.getByLabel("Email").fill("contabilidad-e2e@example.test");
+  await page.getByRole("button", { name: "Guardar configuracion" }).click();
+  await expect(page.getByText("Configuracion actualizada.")).toBeVisible();
+  await expect(page.locator('input[name="legalName"]')).toHaveValue(
+    "CriGestion E2E Actualizada SL"
+  );
+
+  await page.goto("/login");
+  await expect(page).toHaveURL(/\/app$/);
+  await page.goto("/platform/installation");
+  await expect(page).toHaveURL(/\/app$/);
 
   const sessionCookie = (await page.context().cookies()).find(
     (cookie) => cookie.name === "crigestion_session"
@@ -62,6 +81,8 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
   await page.goto("/app");
   await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/login$/);
 
   const revokedSessionCount = await prisma.session.count({
     where: {
@@ -73,7 +94,13 @@ test("initializes the platform, logs in, shows the session, and logs out", async
       }
     }
   });
+  const configurationAuditCount = await prisma.auditEvent.count({
+    where: {
+      eventType: "COMPANY_CONFIGURATION_UPDATED"
+    }
+  });
   expect(revokedSessionCount).toBe(1);
+  expect(configurationAuditCount).toBe(1);
 });
 
 test("shows access denied for a user without users or roles permissions", async ({
@@ -81,14 +108,12 @@ test("shows access denied for a user without users or roles permissions", async 
 }) => {
   await createLimitedUser(page);
 
-  await page.goto("/login");
-  await page.getByLabel("Usuario").fill(limitedUserName);
-  await page.getByLabel("Contrasena").fill(limitedPassword);
-  await page.getByRole("button", { name: "Entrar" }).click();
+  await loginLimitedUser(page);
 
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
   await expect(page.getByText("Sesion activa de Usuario Auditor E2E")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Ver auditoria" })).toBeVisible();
 
   await page.goto("/app/users");
   await expect(page).toHaveURL(/\/app\/users$/);
@@ -102,12 +127,66 @@ test("shows access denied for a user without users or roles permissions", async 
   await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
   await expect(page.getByText("Roles protegidos y personalizados")).not.toBeVisible();
 
+  await page.goto("/app/audit");
+  await expect(page).toHaveURL(/\/app\/audit$/);
+  await expect(page.getByRole("heading", { name: "Auditoria" })).toBeVisible();
+  await expect(page.getByText("LOGIN_SUCCEEDED").first()).toBeVisible();
+  await expect(page.getByText(limitedPassword)).not.toBeVisible();
+
   const deniedAuditCount = await prisma.auditEvent.count({
     where: {
       eventType: "ACCESS_DENIED"
     }
   });
   expect(deniedAuditCount).toBe(2);
+});
+
+test("propagates correlation ids through middleware, protected API errors, and audit", async ({
+  page
+}) => {
+  await createLimitedUser(page);
+  await loginLimitedUser(page);
+
+  const response = await page.evaluate(async () => {
+    const protectedResponse = await fetch("/api/platform/users");
+
+    return {
+      status: protectedResponse.status,
+      correlationId: protectedResponse.headers.get("X-Correlation-ID"),
+      body: await protectedResponse.json()
+    };
+  });
+
+  expect(response.status).toBe(403);
+  expect(response.correlationId).toEqual(expect.stringMatching(/^[a-zA-Z0-9._:-]{8,100}$/));
+  const correlationId = response.correlationId;
+
+  if (!correlationId) {
+    throw new Error("Protected API response did not include a correlation id.");
+  }
+
+  expect(response.body).toEqual({
+    code: "FORBIDDEN",
+    message: "No tienes permiso para realizar esta accion.",
+    correlationId
+  });
+  expect(JSON.stringify(response.body)).not.toContain(limitedPassword);
+
+  const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+    where: {
+      eventType: "ACCESS_DENIED",
+      payload: {
+        path: ["correlationId"],
+        equals: correlationId
+      }
+    }
+  });
+
+  expect(auditEvent.payload).toMatchObject({
+    permission: "Platform.ManageUsers",
+    correlationId
+  });
+  expect(JSON.stringify(auditEvent.payload)).not.toContain(limitedPassword);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
@@ -157,6 +236,15 @@ async function createLimitedUser(page: import("@playwright/test").Page): Promise
   await page.context().clearCookies();
 }
 
+async function loginLimitedUser(page: import("@playwright/test").Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(limitedUserName);
+  await page.getByLabel("Contrasena").fill(limitedPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+
+  await expect(page).toHaveURL(/\/app$/);
+}
+
 async function createAuthenticatedResource(
   page: import("@playwright/test").Page,
   path: string,
@@ -193,6 +281,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

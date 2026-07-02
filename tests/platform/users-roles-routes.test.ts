@@ -82,7 +82,7 @@ describe("users and roles HTTP contracts", () => {
   });
 
   it("rejects unauthenticated user listing", async () => {
-    const response = await usersGet();
+    const response = await usersGet(apiRequest("/api/platform/users"));
     const body = await response.json();
 
     expect(response.status).toBe(401);
@@ -95,7 +95,7 @@ describe("users and roles HTTP contracts", () => {
   it("lists users as DTOs for an authorized administrator", async () => {
     await loginAsAdmin();
 
-    const response = await usersGet();
+    const response = await usersGet(apiRequest("/api/platform/users"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -211,7 +211,7 @@ describe("users and roles HTTP contracts", () => {
   it("lists roles and permissions for an authorized administrator", async () => {
     await loginAsAdmin();
 
-    const response = await rolesGet();
+    const response = await rolesGet(apiRequest("/api/platform/roles"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -384,8 +384,8 @@ describe("users and roles HTTP contracts", () => {
     cookieMock.reset();
     await loginWith("auditor", createUserPayload().password);
 
-    const usersResponse = await usersGet();
-    const rolesResponse = await rolesGet();
+    const usersResponse = await usersGet(apiRequest("/api/platform/users"));
+    const rolesResponse = await rolesGet(apiRequest("/api/platform/roles"));
     const usersBody = await usersResponse.json();
     const rolesBody = await rolesResponse.json();
 
@@ -398,6 +398,67 @@ describe("users and roles HTTP contracts", () => {
     expect(rolesBody).toEqual({
       code: "FORBIDDEN",
       message: "No tienes permiso para realizar esta accion."
+    });
+  });
+
+  it("propagates correlation id in forbidden user responses and audit events", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const correlationId = "test-correlation-001";
+
+    await rolesPost(
+      jsonRequest(
+        "/api/platform/roles",
+        {
+          code: "ConsultaAuditoria",
+          name: "Consulta auditoria",
+          permissionCodes: ["Platform.ViewAudit"]
+        },
+        { csrfToken }
+      )
+    );
+    await usersPost(
+      jsonRequest(
+        "/api/platform/users",
+        {
+          ...createUserPayload(),
+          userName: "auditor",
+          roleCode: "ConsultaAuditoria"
+        },
+        { csrfToken }
+      )
+    );
+    cookieMock.reset();
+    await loginWith("auditor", createUserPayload().password);
+
+    const response = await usersGet(
+      new Request("http://localhost/api/platform/users", {
+        headers: {
+          "X-Correlation-ID": correlationId
+        }
+      })
+    );
+    const body = await response.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        eventType: "ACCESS_DENIED",
+        payload: {
+          path: ["correlationId"],
+          equals: correlationId
+        }
+      }
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("X-Correlation-ID")).toBe(correlationId);
+    expect(body).toEqual({
+      code: "FORBIDDEN",
+      message: "No tienes permiso para realizar esta accion.",
+      correlationId
+    });
+    expect(auditEvent.payload).toMatchObject({
+      permission: "Platform.ManageUsers",
+      correlationId
     });
   });
 });
@@ -435,7 +496,7 @@ async function loginWith(userName: string, password: string): Promise<void> {
 }
 
 async function getCsrfToken(): Promise<string> {
-  const response = await csrfGet();
+  const response = await csrfGet(apiRequest("/api/auth/csrf"));
   const body = (await response.json()) as { csrfToken?: string };
 
   expect(response.status).toBe(200);
@@ -490,6 +551,10 @@ function jsonRequest(
   });
 }
 
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
+}
+
 function uniqueTestIp(): string {
   return `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
 }
@@ -514,6 +579,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

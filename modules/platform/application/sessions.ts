@@ -36,9 +36,13 @@ export type RevokeSessionResult =
 export async function listActiveSessions(
   currentSessionId: string
 ): Promise<ActiveSessionListItem[]> {
+  const now = new Date();
   const sessions = await prisma.session.findMany({
     where: {
-      revokedAt: null
+      revokedAt: null,
+      expiresAt: {
+        gt: now
+      }
     },
     orderBy: [{ lastActivityAt: "desc" }, { startedAt: "desc" }],
     select: {

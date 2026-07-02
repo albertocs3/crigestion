@@ -41,7 +41,7 @@ export function InstallationForm() {
     if (response.ok) {
       setState({
         status: "success",
-        message: "Instalacion completada. Actualiza la pagina para ver el estado."
+        message: "Instalacion completada. Ya puedes iniciar sesion."
       });
       event.currentTarget.reset();
       return;

@@ -32,7 +32,7 @@ describe("platform installation HTTP contracts", () => {
   });
 
   it("reports an uninitialized platform as a stable DTO", async () => {
-    const response = await getInstallation();
+    const response = await getInstallation(apiRequest("/api/platform/installation"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -207,6 +207,10 @@ function jsonRequest(
   });
 }
 
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
+}
+
 function uniqueTestIp(): string {
   testIpCounter += 1;
   return `203.0.113.${testIpCounter}`;
@@ -219,6 +223,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
+    prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

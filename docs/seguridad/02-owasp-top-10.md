@@ -43,6 +43,7 @@ OWASP define el Top 10 como un documento de concienciacion para desarrolladores 
   - `X-Frame-Options`.
   - `Referrer-Policy`.
   - `Permissions-Policy`.
+  - `Strict-Transport-Security` en produccion HTTPS.
 - Los errores no exponen stack traces en produccion.
 - Las variables de entorno se validan al arranque.
 - Las rutas internas no revelan topologia, secretos ni configuracion sensible.

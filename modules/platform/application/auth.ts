@@ -3,6 +3,7 @@ import "server-only";
 import {
   createHmac,
   randomBytes,
+  randomUUID,
   timingSafeEqual
 } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -18,6 +19,8 @@ import {
 const sessionDurationMs = 5 * 60 * 60 * 1000;
 const maxFailedAttempts = 5;
 const lockDurationMs = 30 * 60 * 1000;
+const loginRateLimitWindowMs = 15 * 60 * 1000;
+const maxLoginAttemptsByIp = 20;
 const genericLoginError = {
   code: "INVALID_CREDENTIALS",
   message: "Usuario o contrasena incorrectos."
@@ -25,6 +28,16 @@ const genericLoginError = {
 
 export const sessionCookieName =
   process.env.AUTH_COOKIE_NAME ?? "crigestion_session";
+
+export function isSessionCookieSecure(): boolean {
+  return process.env.NODE_ENV === "production" || process.env.AUTH_COOKIE_SECURE === "true";
+}
+
+export function getSessionCookieSameSite(): "lax" | "strict" {
+  const configured = process.env.AUTH_COOKIE_SAME_SITE?.toLocaleLowerCase("en-US");
+
+  return configured === "strict" ? "strict" : "lax";
+}
 
 export const loginSchema = z.object({
   userName: z.string().trim().min(1).max(80),
@@ -51,6 +64,7 @@ export type ChangePasswordCommand = z.infer<typeof changePasswordSchema>;
 export type RequestContext = {
   ipAddress?: string;
   userAgent?: string;
+  correlationId?: string;
 };
 
 export type LoginResult =
@@ -64,10 +78,15 @@ export type LoginResult =
     }
   | {
       ok: false;
-      status: 401 | 409 | 423;
+      status: 401 | 409 | 423 | 429;
       error: {
-        code: "INVALID_CREDENTIALS" | "ACCOUNT_LOCKED" | "ACTIVE_SESSION_EXISTS";
+        code:
+          | "INVALID_CREDENTIALS"
+          | "ACCOUNT_LOCKED"
+          | "ACTIVE_SESSION_EXISTS"
+          | "LOGIN_RATE_LIMITED";
         message: string;
+        retryAfterSeconds?: number;
       };
     };
 
@@ -129,6 +148,27 @@ export async function login(
 ): Promise<LoginResult> {
   const normalizedUserName = normalizeUserName(command.userName);
   const now = new Date();
+
+  const rateLimit = await consumeLoginRateLimit(context, now);
+
+  if (rateLimit.limited) {
+    await recordLoginAttempt(normalizedUserName, false, "LOGIN_RATE_LIMITED", context);
+    await auditLogin("LOGIN_FAILED", {
+      normalizedUserName,
+      reason: "LOGIN_RATE_LIMITED"
+    });
+
+    return {
+      ok: false,
+      status: 429,
+      error: {
+        code: "LOGIN_RATE_LIMITED",
+        message: "Demasiados intentos de acceso. Espera antes de reintentar.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds
+      }
+    };
+  }
+
   const user = await prisma.user.findUnique({
     where: { normalizedUserName },
     include: {
@@ -506,7 +546,8 @@ export async function getValidSession(token: string | undefined) {
 
 export async function requirePermission(
   token: string | undefined,
-  permission: string
+  permission: string,
+  context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<
   | { ok: true; user: SessionUser; sessionId: string }
   | {
@@ -540,7 +581,8 @@ export async function requirePermission(
         actorType: "USER",
         payload: {
           userId: user.id,
-          permission
+          permission,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
     });
@@ -655,18 +697,76 @@ async function recordLoginAttempt(
   });
 }
 
+async function consumeLoginRateLimit(
+  context: RequestContext,
+  now: Date
+): Promise<{ limited: false } | { limited: true; retryAfterSeconds: number }> {
+  if (!context.ipAddress) {
+    return { limited: false };
+  }
+
+  const windowStart = new Date(now.getTime() - loginRateLimitWindowMs);
+  const key = `login:${context.ipAddress}`;
+  const bucketId = randomUUID();
+  const [bucket] = await prisma.$queryRaw<Array<{ count: number; windowStart: Date }>>`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (${bucketId}::uuid, ${key}, ${now}, 1, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN 1
+        ELSE "rate_limit_buckets"."count" + 1
+      END,
+      "windowStart" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN ${now}
+        ELSE "rate_limit_buckets"."windowStart"
+      END,
+      "updatedAt" = ${now}
+    RETURNING "count", "windowStart"
+  `;
+
+  if (!bucket || bucket.count <= maxLoginAttemptsByIp) {
+    return { limited: false };
+  }
+
+  const retryAfterMs = Math.max(
+    1_000,
+    bucket.windowStart.getTime() + loginRateLimitWindowMs - now.getTime()
+  );
+
+  return {
+    limited: true,
+    retryAfterSeconds: Math.ceil(retryAfterMs / 1_000)
+  };
+}
+
 async function revokeExpiredSessionsForUser(userId: string, now: Date): Promise<void> {
-  await prisma.session.updateMany({
-    where: {
-      userId,
-      revokedAt: null,
-      expiresAt: {
-        lte: now
+  await prisma.$transaction(async (transaction) => {
+    const expiredSessions = await transaction.session.updateManyAndReturn({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: {
+          lte: now
+        }
+      },
+      data: {
+        revokedAt: now,
+        revokeReason: "SESSION_EXPIRED"
       }
-    },
-    data: {
-      revokedAt: now,
-      revokeReason: "SESSION_EXPIRED"
+    });
+
+    for (const session of expiredSessions) {
+      await transaction.auditEvent.create({
+        data: {
+          eventType: "SESSION_REVOKED",
+          actorType: "SYSTEM",
+          payload: {
+            sessionId: session.id,
+            userId: session.userId,
+            reason: "SESSION_EXPIRED"
+          }
+        }
+      });
     }
   });
 }
