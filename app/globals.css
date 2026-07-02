@@ -92,6 +92,22 @@ a {
   background: var(--accent);
 }
 
+.status-dot-requested {
+  background: #475467;
+}
+
+.status-dot-running {
+  background: #b54708;
+}
+
+.status-dot-verified {
+  background: var(--accent);
+}
+
+.status-dot-failed {
+  background: var(--danger);
+}
+
 .button {
   display: inline-flex;
   align-items: center;

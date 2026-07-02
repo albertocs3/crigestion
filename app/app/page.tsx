@@ -64,6 +64,11 @@ export default async function AppHomePage() {
                   Ver auditoria
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Platform.ManageBackups") ? (
+                <Link className="button button-secondary" href="/app/backups">
+                  Copias de seguridad
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>
