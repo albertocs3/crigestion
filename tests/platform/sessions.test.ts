@@ -69,6 +69,33 @@ describe("platform sessions", () => {
     expect(serialized).not.toContain(admin.token);
   });
 
+  it("excludes expired sessions from active session listings", async () => {
+    const admin = await loginAsAdminWithPermission();
+    await createUser(managedUserCommand, admin.authorization.user);
+    const managedLogin = await login({
+      userName: managedUserCommand.userName,
+      password: managedUserCommand.password
+    });
+
+    expect(managedLogin.ok).toBe(true);
+
+    if (!managedLogin.ok) {
+      return;
+    }
+
+    await prisma.session.update({
+      where: { tokenHash: hashSessionToken(managedLogin.value.token) },
+      data: {
+        expiresAt: new Date(Date.now() - 1_000)
+      }
+    });
+
+    const sessions = await listActiveSessions(admin.authorization.sessionId);
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.id).toBe(admin.authorization.sessionId);
+  });
+
   it("revokes a remote active session and audits the action", async () => {
     const admin = await loginAsAdminWithPermission();
     await createUser(managedUserCommand, admin.authorization.user);

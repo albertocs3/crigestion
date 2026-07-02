@@ -669,17 +669,33 @@ async function recordLoginAttempt(
 }
 
 async function revokeExpiredSessionsForUser(userId: string, now: Date): Promise<void> {
-  await prisma.session.updateMany({
-    where: {
-      userId,
-      revokedAt: null,
-      expiresAt: {
-        lte: now
+  await prisma.$transaction(async (transaction) => {
+    const expiredSessions = await transaction.session.updateManyAndReturn({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: {
+          lte: now
+        }
+      },
+      data: {
+        revokedAt: now,
+        revokeReason: "SESSION_EXPIRED"
       }
-    },
-    data: {
-      revokedAt: now,
-      revokeReason: "SESSION_EXPIRED"
+    });
+
+    for (const session of expiredSessions) {
+      await transaction.auditEvent.create({
+        data: {
+          eventType: "SESSION_REVOKED",
+          actorType: "SYSTEM",
+          payload: {
+            sessionId: session.id,
+            userId: session.userId,
+            reason: "SESSION_EXPIRED"
+          }
+        }
+      });
     }
   });
 }

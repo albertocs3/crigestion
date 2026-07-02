@@ -115,6 +115,15 @@ describe("platform authentication", () => {
     const oldSession = await prisma.session.findUniqueOrThrow({
       where: { tokenHash: hashSessionToken(first.value.token) }
     });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        eventType: "SESSION_REVOKED",
+        payload: {
+          path: ["sessionId"],
+          equals: oldSession.id
+        }
+      }
+    });
     const user = await prisma.user.findUniqueOrThrow({
       where: { normalizedUserName: "admin" }
     });
@@ -127,6 +136,12 @@ describe("platform authentication", () => {
 
     expect(oldSession.revokedAt).toBeInstanceOf(Date);
     expect(oldSession.revokeReason).toBe("SESSION_EXPIRED");
+    expect(auditEvent.actorType).toBe("SYSTEM");
+    expect(auditEvent.payload).toMatchObject({
+      sessionId: oldSession.id,
+      userId: oldSession.userId,
+      reason: "SESSION_EXPIRED"
+    });
     expect(activeSessionCount).toBe(1);
   });
 
