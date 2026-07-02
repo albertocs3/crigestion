@@ -39,6 +39,10 @@ enum RestoreOperationStatus {
   REQUIRES_RECOVERY
 }
 
+enum PlatformMaintenanceMode {
+  RESTORE
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -92,6 +96,8 @@ model User {
   sessions              Session[]
   requestedBackups      BackupOperation[]
   requestedRestores     RestoreOperation[]
+  enabledMaintenances   PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
+  disabledMaintenances  PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
   initialInstallation   Installation?
 
   @@map("users")
@@ -258,10 +264,35 @@ model RestoreOperation {
   backupOperation             BackupOperation        @relation("RestoreSourceBackup", fields: [backupOperationId], references: [id], onDelete: Restrict)
   requestedBy                 User                   @relation(fields: [requestedById], references: [id], onDelete: Restrict)
   preRestoreBackupOperation   BackupOperation?       @relation("PreRestoreBackup", fields: [preRestoreBackupOperationId], references: [id], onDelete: Restrict)
+  maintenanceStates           PlatformMaintenanceState[]
 
   @@index([status, requestedAt])
   @@index([requestedAt, id])
   @@index([backupOperationId, requestedAt])
   @@index([requestedById, requestedAt])
   @@map("restore_operations")
+}
+
+model PlatformMaintenanceState {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  singletonKey       Int                      @default(1)
+  enabled            Boolean                  @default(false)
+  mode               PlatformMaintenanceMode?
+  reason             String?                  @db.VarChar(500)
+  restoreOperationId String?                  @db.Uuid
+  enabledById        String?                  @db.Uuid
+  disabledById       String?                  @db.Uuid
+  enabledAt          DateTime?                @db.Timestamptz(3)
+  disabledAt         DateTime?                @db.Timestamptz(3)
+  createdAt          DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @db.Timestamptz(3)
+
+  restoreOperation   RestoreOperation?        @relation(fields: [restoreOperationId], references: [id], onDelete: Restrict)
+  enabledBy          User?                    @relation("MaintenanceEnabledBy", fields: [enabledById], references: [id], onDelete: Restrict)
+  disabledBy         User?                    @relation("MaintenanceDisabledBy", fields: [disabledById], references: [id], onDelete: Restrict)
+
+  @@unique([singletonKey])
+  @@index([enabled, mode])
+  @@index([restoreOperationId])
+  @@map("platform_maintenance_state")
 }

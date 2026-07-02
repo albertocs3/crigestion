@@ -96,6 +96,7 @@ Validar ademas:
 - Acceso denegado con usuario sin permiso.
 - Visor de auditoria.
 - Configuracion de plataforma.
+- Si se usa restauracion, comprobar que `GET/PATCH /api/platform/maintenance` permite activar y desactivar mantenimiento con una restauracion `VALIDATED`.
 
 ## 8. Rollback
 
@@ -118,3 +119,4 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - Las copias manuales se solicitan por API y se procesan fuera del request HTTP con `npm run backup:run`.
 - El worker de copias pasa a `pg_dump` un entorno minimo y no propaga secretos de aplicacion salvo la contrasena PostgreSQL como `PGPASSWORD`.
 - Las restauraciones se validan primero de forma no destructiva con `npm run restore:validate`; este comando no ejecuta `pg_restore` ni modifica datos de negocio.
+- Antes de una restauracion real debe activarse modo mantenimiento; las mutaciones normales quedan bloqueadas, pero login/logout/sesion/CSRF y el endpoint de mantenimiento siguen disponibles para evitar lockout.

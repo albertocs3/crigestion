@@ -41,7 +41,8 @@ const platformPermissions = [
   ["Platform.ManageSessions", "Gestionar sesiones"],
   ["Platform.ManageConfiguration", "Gestionar configuracion"],
   ["Platform.ViewAudit", "Consultar auditoria"],
-  ["Platform.ManageBackups", "Gestionar copias de seguridad"]
+  ["Platform.ManageBackups", "Gestionar copias de seguridad"],
+  ["Platform.ManageMaintenance", "Gestionar modo mantenimiento"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;

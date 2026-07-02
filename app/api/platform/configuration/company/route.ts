@@ -18,6 +18,7 @@ import {
   unsupportedMediaType,
   validationError
 } from "@/modules/platform/application/http";
+import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -37,14 +38,25 @@ export async function PATCH(request: Request) {
     return jsonResponse(request, csrf.error, { status: csrf.status });
   }
 
+  const correlationId = getCorrelationId(request);
   const authorization = await requirePermission(
     sessionToken,
     requiredPermission,
-    { correlationId: getCorrelationId(request) }
+    { correlationId }
   );
 
   if (!authorization.ok) {
     return jsonResponse(request, authorization.error, { status: authorization.status });
+  }
+
+  const maintenance = await requireMaintenanceModeInactive(
+    authorization.user,
+    request,
+    { correlationId }
+  );
+
+  if (!maintenance.ok) {
+    return jsonResponse(request, maintenance.error, { status: maintenance.status });
   }
 
   if (!isJsonRequest(request)) {

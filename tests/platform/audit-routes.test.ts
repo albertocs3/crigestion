@@ -223,7 +223,8 @@ async function initializeForRoutes(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
-    prisma.idempotencyRecord.deleteMany(),
+    prisma.platformMaintenanceState.deleteMany(),
+prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
