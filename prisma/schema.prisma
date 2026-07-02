@@ -20,6 +20,13 @@ enum UserStatus {
   LOCKED
 }
 
+enum BackupOperationStatus {
+  REQUESTED
+  RUNNING
+  VERIFIED
+  FAILED
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -71,6 +78,7 @@ model User {
 
   role                  Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
   sessions              Session[]
+  requestedBackups      BackupOperation[]
   initialInstallation   Installation?
 
   @@map("users")
@@ -192,4 +200,27 @@ model IdempotencyRecord {
 
   @@index([createdAt])
   @@map("idempotency_records")
+}
+
+model BackupOperation {
+  id              String                @id @default(uuid()) @db.Uuid
+  status          BackupOperationStatus @default(REQUESTED)
+  requestedById   String                @db.Uuid
+  requestedAt     DateTime              @default(now()) @db.Timestamptz(3)
+  startedAt       DateTime?             @db.Timestamptz(3)
+  completedAt     DateTime?             @db.Timestamptz(3)
+  productVersion  String                @db.VarChar(32)
+  storageKey      String?               @db.VarChar(500)
+  sizeBytes       BigInt?
+  sha256          String?               @db.Char(64)
+  errorCode       String?               @db.VarChar(120)
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+
+  requestedBy     User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([status, requestedAt])
+  @@index([requestedAt, id])
+  @@index([requestedById, requestedAt])
+  @@map("backup_operations")
 }

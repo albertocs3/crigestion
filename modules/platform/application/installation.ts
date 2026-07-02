@@ -5,8 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
-
-const productVersion = "0.1.0";
+import { productVersion } from "@/modules/platform/application/version";
 
 export const initializeSchema = z.object({
   company: z.object({
@@ -41,7 +40,8 @@ const platformPermissions = [
   ["Platform.ManageRoles", "Gestionar roles"],
   ["Platform.ManageSessions", "Gestionar sesiones"],
   ["Platform.ManageConfiguration", "Gestionar configuracion"],
-  ["Platform.ViewAudit", "Consultar auditoria"]
+  ["Platform.ViewAudit", "Consultar auditoria"],
+  ["Platform.ManageBackups", "Gestionar copias de seguridad"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;
