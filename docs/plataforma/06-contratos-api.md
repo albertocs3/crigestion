@@ -791,7 +791,7 @@ Errores:
 | 403 | `FORBIDDEN` | Falta permiso |
 | 422 | `VALIDATION_ERROR` | Query invalida |
 
-La creacion fisica, cifrado y verificacion de la copia se implementaran en una rebanada posterior de `PLT-CU-032`.
+La creacion fisica, cifrado y verificacion de la copia se procesa fuera del request HTTP con `npm run backup:run`.
 
 ### `POST /api/platform/backups`
 
@@ -833,7 +833,19 @@ Efectos:
 - Registra una operacion `REQUESTED`.
 - Impide otra operacion `REQUESTED` o `RUNNING` simultanea.
 - Audita `BACKUP_REQUESTED`.
-- No ejecuta todavia el volcado fisico ni la restauracion.
+- No ejecuta el volcado fisico dentro del request HTTP.
+
+El worker `npm run backup:run` procesa la siguiente operacion `REQUESTED`:
+
+1. La marca como `RUNNING`.
+2. Ejecuta `pg_dump` sin shell.
+3. Cifra el volcado con AES-256-GCM.
+4. Guarda el artefacto en `BACKUP_DIRECTORY`.
+5. Calcula SHA-256 del artefacto cifrado.
+6. Marca `VERIFIED` o `FAILED`.
+7. Audita `BACKUP_VERIFIED` o `BACKUP_FAILED`.
+
+Antes de procesar nuevas solicitudes, el worker marca como `FAILED` las operaciones `RUNNING` que superen `BACKUP_RUNNING_TIMEOUT_MINUTES`, con error `BACKUP_WORKER_TIMEOUT`.
 
 Errores:
 
