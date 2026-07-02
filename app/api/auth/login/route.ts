@@ -1,11 +1,13 @@
 import { cookies } from "next/headers";
 import {
-  getSessionCookieSameSite,
-  isSessionCookieSecure,
   login,
   loginSchema,
   sessionCookieName
 } from "@/modules/platform/application/auth";
+import {
+  getSessionCookieSameSite,
+  isSessionCookieSecure
+} from "@/modules/platform/application/environment";
 import {
   getRequestContext,
   invalidJson,

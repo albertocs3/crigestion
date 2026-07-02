@@ -45,7 +45,7 @@ OWASP define el Top 10 como un documento de concienciacion para desarrolladores 
   - `Permissions-Policy`.
   - `Strict-Transport-Security` en produccion HTTPS.
 - Los errores no exponen stack traces en produccion.
-- Las variables de entorno se validan al arranque.
+- Las variables de entorno se validan al arrancar con esquema tipado para evitar secretos por defecto, cookies inseguras o URL base de produccion sin HTTPS.
 - Las rutas internas no revelan topologia, secretos ni configuracion sensible.
 
 ### A03 - Software Supply Chain Failures

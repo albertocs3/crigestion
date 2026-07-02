@@ -2,6 +2,11 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import {
+  getConfiguredAppBaseUrl,
+  isProductionEnvironment,
+  shouldTrustProxyHeaders
+} from "@/modules/platform/application/environment";
 
 export const correlationIdHeaderName = "X-Correlation-ID";
 const generatedCorrelationIds = new WeakMap<Request, string>();
@@ -15,7 +20,7 @@ export function getRequestContext(request: Request) {
 }
 
 function getClientIpAddress(request: Request): string | undefined {
-  if (!trustProxyHeaders()) {
+  if (!shouldTrustProxyHeaders()) {
     return undefined;
   }
 
@@ -23,10 +28,6 @@ function getClientIpAddress(request: Request): string | undefined {
   const forwardedIp = forwardedFor?.split(",")[0]?.trim();
 
   return forwardedIp || request.headers.get("x-real-ip")?.trim() || undefined;
-}
-
-function trustProxyHeaders(): boolean {
-  return process.env.TRUST_PROXY_HEADERS === "true" || process.env.NODE_ENV !== "production";
 }
 
 export function getCorrelationId(request: Request): string {
@@ -76,18 +77,18 @@ export function isAllowedOrigin(request: Request): boolean {
   const expectedOrigin = getConfiguredAppOrigin();
 
   if (!expectedOrigin) {
-    return process.env.NODE_ENV !== "production";
+    return !isProductionEnvironment();
   }
 
   if (!origin) {
-    return process.env.NODE_ENV !== "production" || requestOrigin(request) === expectedOrigin;
+    return !isProductionEnvironment() || requestOrigin(request) === expectedOrigin;
   }
 
   return normalizeOrigin(origin) === expectedOrigin;
 }
 
 function getConfiguredAppOrigin(): string | null {
-  const appBaseUrl = process.env.APP_BASE_URL?.trim();
+  const appBaseUrl = getConfiguredAppBaseUrl();
 
   if (!appBaseUrl) {
     return null;

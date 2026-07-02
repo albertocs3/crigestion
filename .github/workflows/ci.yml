@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 15
     env:
       DATABASE_URL: postgresql://crigestion:crigestion@localhost:5432/crigestion?schema=public
+      APP_ENV: test
+      APP_SESSION_SECRET: ci-session-secret-0123456789abcdef
 
     steps:
       - name: Checkout
