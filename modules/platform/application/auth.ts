@@ -61,6 +61,7 @@ export type ChangePasswordCommand = z.infer<typeof changePasswordSchema>;
 export type RequestContext = {
   ipAddress?: string;
   userAgent?: string;
+  correlationId?: string;
 };
 
 export type LoginResult =
@@ -516,7 +517,8 @@ export async function getValidSession(token: string | undefined) {
 
 export async function requirePermission(
   token: string | undefined,
-  permission: string
+  permission: string,
+  context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<
   | { ok: true; user: SessionUser; sessionId: string }
   | {
@@ -550,7 +552,8 @@ export async function requirePermission(
         actorType: "USER",
         payload: {
           userId: user.id,
-          permission
+          permission,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
     });

@@ -13,7 +13,18 @@ La API no expone entidades de dominio ni modelos Prisma como contrato estable.
 - Validacion de entrada con Zod.
 - Errores con `code` funcional estable.
 - Operaciones de escritura idempotentes cuando puedan repetirse.
-- Correlation ID pendiente de integrar en middleware.
+- Todas las respuestas pasan por `X-Correlation-ID`; si la peticion no lo aporta, el middleware genera uno.
+- Los errores emitidos mediante helpers HTTP incluyen `correlationId` en el cuerpo cuando la peticion trae `X-Correlation-ID`.
+
+Formato de error con correlacion:
+
+```json
+{
+  "code": "FORBIDDEN",
+  "message": "No tienes permiso para realizar esta accion.",
+  "correlationId": "request-id"
+}
+```
 
 ## 3. Health
 

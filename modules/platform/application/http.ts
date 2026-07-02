@@ -1,12 +1,46 @@
 import "server-only";
 
+import { randomUUID } from "node:crypto";
+import { NextResponse } from "next/server";
+
+export const correlationIdHeaderName = "X-Correlation-ID";
+
 export function getRequestContext(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
 
   return {
     ipAddress: forwardedFor?.split(",")[0]?.trim(),
-    userAgent: request.headers.get("user-agent") ?? undefined
+    userAgent: request.headers.get("user-agent") ?? undefined,
+    correlationId: getCorrelationId(request)
   };
+}
+
+export function getCorrelationId(request: Request): string {
+  const headerValue = request.headers.get(correlationIdHeaderName);
+
+  return isValidCorrelationId(headerValue) ? headerValue : randomUUID();
+}
+
+export function jsonResponse<TBody>(
+  request: Request,
+  body: TBody,
+  init: ResponseInit = {}
+) {
+  const correlationId = getCorrelationId(request);
+  const shouldIncludeCorrelationId = isValidCorrelationId(
+    request.headers.get(correlationIdHeaderName)
+  );
+  const responseBody = isErrorBody(body) && shouldIncludeCorrelationId
+    ? {
+        ...body,
+        correlationId
+      }
+    : body;
+  const response = NextResponse.json(responseBody, init);
+
+  response.headers.set(correlationIdHeaderName, correlationId);
+
+  return response;
 }
 
 export function isAllowedOrigin(request: Request): boolean {
@@ -82,4 +116,17 @@ export function validationError(issues: unknown) {
     code: "VALIDATION_ERROR",
     issues
   } as const;
+}
+
+function isValidCorrelationId(value: string | null): value is string {
+  return Boolean(value && /^[a-zA-Z0-9._:-]{8,100}$/.test(value));
+}
+
+function isErrorBody(body: unknown): body is { code: string; message?: string } {
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    "code" in body &&
+    typeof (body as { code?: unknown }).code === "string"
+  );
 }

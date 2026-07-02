@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAllowedOrigin } from "@/modules/platform/application/http";
+import {
+  jsonResponse,
+  isAllowedOrigin
+} from "@/modules/platform/application/http";
 
 const originalAppBaseUrl = process.env.APP_BASE_URL;
 
@@ -54,5 +57,28 @@ describe("platform HTTP security helpers", () => {
     expect(
       isAllowedOrigin(new Request("https://evil.example.test/api/auth/logout"))
     ).toBe(false);
+  });
+
+  it("adds correlation id to error responses when the request carries one", async () => {
+    const response = jsonResponse(
+      new Request("http://localhost/api/platform/users", {
+        headers: {
+          "X-Correlation-ID": "test-correlation-001"
+        }
+      }),
+      {
+        code: "FORBIDDEN",
+        message: "No tienes permiso para realizar esta accion."
+      },
+      { status: 403 }
+    );
+    const body = await response.json();
+
+    expect(response.headers.get("X-Correlation-ID")).toBe("test-correlation-001");
+    expect(body).toEqual({
+      code: "FORBIDDEN",
+      message: "No tienes permiso para realizar esta accion.",
+      correlationId: "test-correlation-001"
+    });
   });
 });

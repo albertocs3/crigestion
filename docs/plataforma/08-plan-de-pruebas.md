@@ -30,6 +30,7 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/installation.test.ts`: inicializacion transaccional, idempotencia, auditoria sin secretos y rechazo de segunda inicializacion.
 - `tests/platform/installation-routes.test.ts`: contrato HTTP de estado e inicializacion, errores estables, idempotencia, Origin y rate limit.
 - `tests/platform/http.test.ts`: politica compartida de validacion de origen, `APP_BASE_URL` y fallback de URL en produccion.
+- `tests/platform/middleware.test.ts`: propagacion y generacion de `X-Correlation-ID`.
 - `tests/platform/auth-config.test.ts`: configuracion efectiva de cookie de sesion `Secure` y `SameSite`.
 - `tests/platform/auth.test.ts`: login, sesion opaca, CSRF, bloqueo, logout, cambio de contrasena sin auditar secretos y limpieza de sesiones expiradas antes de abrir una nueva.
 - `tests/platform/auth-routes.test.ts`: contrato HTTP de login, sesion, CSRF, logout, cambio de contrasena y cookie `HttpOnly`.
