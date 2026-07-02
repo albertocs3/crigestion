@@ -13,6 +13,6 @@ test-results/
 prisma/dev.db
 tmp/
 uploads/
-backups/
+/backups/
 conversacionChatGPT.txt
 tsconfig.tsbuildinfo

@@ -735,7 +735,120 @@ Errores:
 | 403 | `FORBIDDEN` | Falta permiso |
 | 422 | `VALIDATION_ERROR` | Query invalida |
 
-## 12. Criterios de aceptacion
+## 12. Copias de seguridad
+
+### `GET /api/platform/backups`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageBackups`.
+
+Parametros query:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Tamano de pagina entre 1 y 100. Por defecto 25 |
+| `cursor` | Cursor devuelto por la pagina anterior |
+| `status` | Filtro opcional: `REQUESTED`, `RUNNING`, `VERIFIED` o `FAILED` |
+
+Respuesta `200`:
+
+```json
+{
+  "backups": [
+    {
+      "id": "uuid",
+      "status": "VERIFIED",
+      "requestedBy": {
+        "id": "uuid",
+        "displayName": "Administrador",
+        "userName": "admin"
+      },
+      "requestedAt": "2026-07-02T10:00:00.000Z",
+      "startedAt": "2026-07-02T10:00:01.000Z",
+      "completedAt": "2026-07-02T10:01:00.000Z",
+      "productVersion": "0.1.0",
+      "sizeBytes": "123456",
+      "sha256": "hex-sha256",
+      "errorCode": null
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Efectos:
+
+- Devuelve DTOs de operaciones de copia, no modelos Prisma.
+- No expone rutas fisicas ni `storageKey`.
+- Audita la propia consulta como `BACKUP_OPERATIONS_VIEWED`.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 422 | `VALIDATION_ERROR` | Query invalida |
+
+La creacion fisica, cifrado y verificacion de la copia se implementaran en una rebanada posterior de `PLT-CU-032`.
+
+### `POST /api/platform/backups`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageBackups`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{}
+```
+
+Respuesta `202`:
+
+```json
+{
+  "id": "uuid",
+  "status": "REQUESTED",
+  "requestedBy": {
+    "id": "uuid",
+    "displayName": "Administrador",
+    "userName": "admin"
+  },
+  "requestedAt": "2026-07-02T10:00:00.000Z",
+  "startedAt": null,
+  "completedAt": null,
+  "productVersion": "0.1.0",
+  "sizeBytes": null,
+  "sha256": null,
+  "errorCode": null
+}
+```
+
+Efectos:
+
+- Registra una operacion `REQUESTED`.
+- Impide otra operacion `REQUESTED` o `RUNNING` simultanea.
+- Audita `BACKUP_REQUESTED`.
+- No ejecuta todavia el volcado fisico ni la restauracion.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `BACKUP_OPERATION_ALREADY_ACTIVE` | Ya existe una copia solicitada o en ejecucion |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+## 13. Criterios de aceptacion
 
 1. Ningun contrato devuelve modelos Prisma completos como compromiso publico.
 2. Los errores son estables.

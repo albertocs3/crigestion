@@ -8,7 +8,8 @@ async function main() {
     ["Platform.ManageRoles", "Gestionar roles"],
     ["Platform.ManageSessions", "Gestionar sesiones"],
     ["Platform.ManageConfiguration", "Gestionar configuracion"],
-    ["Platform.ViewAudit", "Consultar auditoria"]
+    ["Platform.ViewAudit", "Consultar auditoria"],
+    ["Platform.ManageBackups", "Gestionar copias de seguridad"]
   ] as const;
 
   for (const [code, name] of permissions) {

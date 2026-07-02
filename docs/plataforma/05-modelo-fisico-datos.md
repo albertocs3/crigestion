@@ -40,6 +40,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 | Autorizacion | `RolePermission` / `role_permissions` | Relacion rol-permiso |
 | Auditoria | `AuditEvent` / `audit_events` | Eventos auditables |
 | Idempotencia | `IdempotencyRecord` / `idempotency_records` | Repeticion segura de mutaciones iniciales |
+| Copias | `BackupOperation` / `backup_operations` | Estado y metadatos de copias manuales |
 
 ## 5. Diagrama logico
 
@@ -49,6 +50,7 @@ erDiagram
     Installation ||--o| User : initial_administrator
     Role ||--o{ User : assigns
     User ||--o{ Session : opens
+    User ||--o{ BackupOperation : requests
     Role ||--o{ RolePermission : grants
     Permission ||--o{ RolePermission : assigned
 ```
@@ -71,6 +73,7 @@ Entidades iniciales:
 - `LoginAttempt`.
 - `RateLimitBucket`.
 - `IdempotencyRecord`.
+- `BackupOperation`.
 
 ## 7. Restricciones clave
 
@@ -86,6 +89,8 @@ Entidades iniciales:
 - `RateLimitBucket.key` es unico.
 - `IdempotencyRecord.key` es unico.
 - La migracion `20260701193000_add_active_session_unique_index` crea el indice unico parcial `sessions_one_active_per_user_idx` sobre `sessions("userId")` cuando `"revokedAt" IS NULL`. Prisma no expresa este indice en `schema.prisma`, por lo que se mantiene como SQL manual.
+- `BackupOperation` indexa `status + requestedAt`, `requestedAt + id` y `requestedById + requestedAt` para consultas operativas paginadas.
+- La migracion `20260702171000_add_active_backup_operation_index` crea el indice unico parcial `backup_operations_one_active_idx` para impedir mas de una copia `REQUESTED` o `RUNNING`.
 
 ## 8. Modelo de accesos
 
