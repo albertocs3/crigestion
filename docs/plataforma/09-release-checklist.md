@@ -1,0 +1,108 @@
+# Checklist de release de Plataforma
+
+## 1. Objetivo
+
+Este checklist define los pasos minimos para preparar y validar una release de CriGestion antes de desplegarla.
+
+Aplica a cambios de Plataforma, seguridad, persistencia, configuracion, auditoria y despliegue.
+
+## 2. Precondiciones
+
+- Rama de release mergeada o lista para mergear en `main`.
+- Revision de cambios completada.
+- Migraciones Prisma revisadas.
+- Variables del entorno destino preparadas fuera del repositorio.
+- Backup disponible antes de aplicar migraciones en produccion.
+
+## 3. Variables requeridas
+
+Revisar como minimo:
+
+| Variable | Produccion | Nota |
+|---|---|---|
+| `DATABASE_URL` | Obligatoria | Base PostgreSQL del entorno destino. |
+| `APP_ENV` | `production` | Activa validaciones runtime estrictas. |
+| `APP_BASE_URL` | HTTPS obligatorio | Debe ser el origen publico de la aplicacion. |
+| `APP_SESSION_SECRET` | Obligatoria | Minimo 32 caracteres, no usar placeholders. |
+| `AUTH_COOKIE_NAME` | Opcional | Por defecto `crigestion_session`. |
+| `AUTH_COOKIE_SECURE` | No puede ser `false` | Las cookies deben ser seguras en produccion. |
+| `AUTH_COOKIE_SAME_SITE` | `lax` o `strict` | Valor por defecto `lax`. |
+| `TRUST_PROXY_HEADERS` | Segun despliegue | `true` solo detras de proxy confiable que sobrescribe cabeceras. |
+
+## 4. Validacion previa
+
+Ejecutar:
+
+```powershell
+npm run verify:release
+```
+
+Si el cambio toca flujos de navegador criticos, ejecutar tambien:
+
+```powershell
+npm run test:e2e
+```
+
+## 5. Migraciones
+
+En produccion, aplicar migraciones como paso controlado y unico:
+
+```powershell
+npm run prisma:deploy
+```
+
+No ejecutar `prisma migrate dev` en produccion.
+
+Antes de migrar:
+
+- Confirmar backup PostgreSQL.
+- Revisar SQL nuevo en `prisma/migrations/`.
+- Confirmar que no hay migraciones editadas ya aplicadas.
+
+## 6. Despliegue
+
+Orden recomendado:
+
+1. Instalar dependencias con lockfile.
+2. Generar Prisma Client.
+3. Construir la aplicacion.
+4. Aplicar migraciones con `npm run prisma:deploy`.
+5. Arrancar la aplicacion con variables runtime definitivas.
+6. Verificar health check.
+
+## 7. Verificacion post-despliegue
+
+Comprobar:
+
+```powershell
+Invoke-WebRequest https://TU-DOMINIO/api/health
+```
+
+La respuesta no debe exponer secretos ni topologia interna.
+
+Validar ademas:
+
+- Login de administrador.
+- Logout.
+- Acceso denegado con usuario sin permiso.
+- Visor de auditoria.
+- Configuracion de plataforma.
+
+## 8. Rollback
+
+Si falla el despliegue:
+
+1. Detener trafico o activar mantenimiento si existe.
+2. Revisar logs con correlation id.
+3. Restaurar version anterior de la aplicacion.
+4. Si una migracion dejo la base incompatible, seguir el procedimiento de restauracion desde backup.
+5. Registrar la incidencia y el resultado de recuperacion.
+
+No revertir migraciones de produccion manualmente sin plan de datos revisado.
+
+## 9. Notas operativas
+
+- `TRUST_PROXY_HEADERS=true` solo debe usarse si el proxy elimina o sobrescribe `X-Forwarded-For` y `X-Real-IP`.
+- HSTS se emite en builds de produccion.
+- La validacion de entorno se ejecuta al iniciar runtime Node.js.
+- El rate limit de login por IP depende de una IP cliente confiable.
