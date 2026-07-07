@@ -16,11 +16,14 @@ import type {
 const defaultLimit = 25;
 const maxLimit = 100;
 
-const dateOnlySchema = z
-  .string()
-  .trim()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe tener formato AAAA-MM-DD.")
-  .refine(isValidDateOnly, "La fecha no es valida.");
+const dateOnlySchema = z.preprocess(
+  (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
+  z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe tener formato AAAA-MM-DD.")
+    .refine(isValidDateOnly, "La fecha no es valida.")
+);
 const moneySchema = z
   .string()
   .trim()
@@ -1069,6 +1072,19 @@ function addUtcDays(date: Date, days: number): Date {
 
 function formatInvoiceNumber(series: string, year: number, sequence: number): string {
   return `${series}${year.toString().slice(-2)}${sequence.toString().padStart(5, "0")}`;
+}
+
+function normalizeDateOnlyInput(value: string): string {
+  const text = value.trim();
+  const spanishDate = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
+
+  if (!spanishDate) {
+    return text;
+  }
+
+  const [, day, month, year] = spanishDate;
+
+  return `${year}-${month}-${day}`;
 }
 
 function isValidDateOnly(value: string): boolean {

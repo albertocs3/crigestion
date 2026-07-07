@@ -4,7 +4,9 @@ import { prisma } from "@/lib/prisma";
 import {
   addInvoiceLine,
   createInvoiceDraft,
-  issueInvoice
+  createInvoiceDraftSchema,
+  issueInvoice,
+  issueInvoiceSchema
 } from "@/modules/billing/application/invoices";
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
@@ -38,6 +40,23 @@ describe("billing invoices application service", () => {
   afterAll(async () => {
     await resetPlatformTables();
     await prisma.$disconnect();
+  });
+
+  it("normalizes localized form dates before running invoice commands", () => {
+    expect(
+      createInvoiceDraftSchema.parse({
+        customerId: randomUUID(),
+        issueDate: "07/07/2026",
+        operationDate: "08/07/2026",
+        notes: null
+      })
+    ).toMatchObject({
+      issueDate: "2026-07-07",
+      operationDate: "2026-07-08"
+    });
+    expect(issueInvoiceSchema.parse({ issueDate: "07/07/2026" })).toMatchObject({
+      issueDate: "2026-07-07"
+    });
   });
 
   it("creates a draft, adds a catalog line and issues with safe audit payloads", async () => {
