@@ -440,9 +440,9 @@ function formatMoney(value: string): string {
   const amount = Number(value);
 
   return new Intl.NumberFormat("es-ES", {
-    style: "currency",
-    currency: "EUR"
-  }).format(Number.isFinite(amount) ? amount : 0);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number.isFinite(amount) ? amount : 0) + " EUR";
 }
 
 function trimDecimal(value: string): string {
@@ -654,7 +654,18 @@ function colorCommand(
 }
 
 function pdfText(value: string): string {
-  return `<FEFF${Buffer.from(value, "utf16le").swap16().toString("hex").toUpperCase()}>`;
+  return `(${escapePdfText(normalizePdfText(value))})`;
+}
+
+function normalizePdfText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "?");
+}
+
+function escapePdfText(value: string): string {
+  return value.replace(/[\\()]/g, (character) => `\\${character}`);
 }
 
 function number(value: number): string {
