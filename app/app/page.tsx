@@ -84,6 +84,11 @@ export default async function AppHomePage() {
                   Catalogo
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Billing.View") ? (
+                <Link className="button button-secondary" href="/app/invoices">
+                  Facturas
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>
