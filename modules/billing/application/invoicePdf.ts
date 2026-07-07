@@ -14,6 +14,8 @@ const pageHeight = 841.89;
 const margin = 42;
 const regularFont = "F1";
 const boldFont = "F2";
+const millimetersToPoints = 72 / 25.4;
+const verifactuQrSize = 35 * millimetersToPoints;
 
 export type InvoicePdfResult =
   | {
@@ -171,9 +173,10 @@ function drawHeader(
 
   content.rect(margin, 748, 92, 50, { stroke: accent, lineWidth: 1.2 });
   content.text("LOGO", margin + 25, 774, 15, boldFont, accent);
-  content.rect(500, 746, 45, 45, { stroke: accent, lineWidth: 1.2 });
-  content.text("QR", 514, 770, 12, boldFont, accent);
-  content.text("VERIFACTU", 495, 734, 7, regularFont, [0.35, 0.35, 0.35]);
+
+  if (pageNumber === 1) {
+    drawVerifactuQr(content, configuration);
+  }
 
   content.text(company.legalName, margin, 718, 12, boldFont);
   content.text(`NIF: ${company.taxId}`, margin, 703, 9);
@@ -181,13 +184,51 @@ function drawHeader(
     content.text(company.email, margin, 690, 9);
   }
 
-  content.rect(322, 670, 172, 78, { fill: lighten(accent, 0.86) });
-  content.rect(322, 670, 172, 78, { stroke: accent, lineWidth: 1 });
-  content.text(invoiceTitle(invoice), 338, 724, 16, boldFont, accent);
-  content.text(`Numero: ${invoice.number ?? "-"}`, 338, 704, 9, boldFont);
-  content.text(`Fecha: ${formatDate(invoice.issueDate)}`, 338, 689, 9);
-  content.text(`Operacion: ${formatDate(invoice.operationDate)}`, 338, 674, 9);
+  content.rect(298, 648, 140, 76, { fill: lighten(accent, 0.86) });
+  content.rect(298, 648, 140, 76, { stroke: accent, lineWidth: 1 });
+  content.text(invoiceTitle(invoice), 312, 704, 14, boldFont, accent);
+  content.text(`Numero: ${invoice.number ?? "-"}`, 312, 686, 9, boldFont);
+  content.text(`Fecha: ${formatDate(invoice.issueDate)}`, 312, 671, 9);
+  content.text(`Operacion: ${formatDate(invoice.operationDate)}`, 312, 656, 9);
   content.text(`Pagina ${pageNumber} de ${pageCount}`, 480, 812, 8, regularFont, [0.35, 0.35, 0.35]);
+}
+
+function drawVerifactuQr(
+  content: PdfPageContent,
+  configuration: PdfConfiguration
+): void {
+  const accent = rgb(configuration.invoiceAccentColor);
+  const x = pageWidth - margin - verifactuQrSize;
+  const y = pageHeight - margin - verifactuQrSize;
+  const centerX = x + verifactuQrSize / 2;
+  const centerY = y + verifactuQrSize / 2;
+
+  content.rect(x, y, verifactuQrSize, verifactuQrSize, {
+    stroke: accent,
+    lineWidth: 1.2
+  });
+  content.text("QR", centerX - 8, centerY - 4, 14, boldFont, accent);
+
+  if (!isRealVerifactuMode()) {
+    return;
+  }
+
+  content.text(
+    "Factura verificable en la sede",
+    x - 4,
+    y - 13,
+    7,
+    regularFont,
+    [0.35, 0.35, 0.35]
+  );
+  content.text(
+    "electronica de la AEAT",
+    x + 14,
+    y - 23,
+    7,
+    regularFont,
+    [0.35, 0.35, 0.35]
+  );
 }
 
 function drawCustomerBox(
@@ -453,6 +494,13 @@ function lighten(
     number,
     number
   ];
+}
+
+function isRealVerifactuMode(): boolean {
+  const enabled = process.env.VERIFACTU_ENABLED === "true";
+  const environment = process.env.VERIFACTU_ENVIRONMENT?.trim().toLowerCase();
+
+  return enabled && (environment === "real" || environment === "production");
 }
 
 class PdfPageContent {
