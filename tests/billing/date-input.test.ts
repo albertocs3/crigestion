@@ -8,5 +8,9 @@ describe("normalizeDateInputValue", () => {
 
   it("normalizes Spanish date format for API payloads", () => {
     expect(normalizeDateInputValue("07/07/2026")).toBe("2026-07-07");
+    expect(normalizeDateInputValue("7/7/2026")).toBe("2026-07-07");
+    expect(normalizeDateInputValue("07-07-2026")).toBe("2026-07-07");
+    expect(normalizeDateInputValue("07.07.2026")).toBe("2026-07-07");
+    expect(normalizeDateInputValue("2026-07-07T00:00:00.000Z")).toBe("2026-07-07");
   });
 });

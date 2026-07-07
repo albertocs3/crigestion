@@ -57,6 +57,16 @@ describe("billing invoices application service", () => {
     expect(issueInvoiceSchema.parse({ issueDate: "07/07/2026" })).toMatchObject({
       issueDate: "2026-07-07"
     });
+    expect(issueInvoiceSchema.parse({ issueDate: "7/7/2026" })).toMatchObject({
+      issueDate: "2026-07-07"
+    });
+    expect(issueInvoiceSchema.parse({ issueDate: "07-07-2026" })).toMatchObject({
+      issueDate: "2026-07-07"
+    });
+    expect(issueInvoiceSchema.parse({ issueDate: "2026-07-07T00:00:00.000Z" }))
+      .toMatchObject({
+        issueDate: "2026-07-07"
+      });
   });
 
   it("creates a draft, adds a catalog line and issues with safe audit payloads", async () => {

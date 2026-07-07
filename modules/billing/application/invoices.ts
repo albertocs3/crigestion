@@ -1075,8 +1075,13 @@ function formatInvoiceNumber(series: string, year: number, sequence: number): st
 }
 
 function normalizeDateOnlyInput(value: string): string {
-  const text = value.trim();
-  const spanishDate = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(text);
+  const text = value.trim().replace(/[\u200e\u200f]/g, "");
+
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
+    return text.slice(0, 10);
+  }
+
+  const spanishDate = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(text);
 
   if (!spanishDate) {
     return text;
@@ -1084,7 +1089,7 @@ function normalizeDateOnlyInput(value: string): string {
 
   const [, day, month, year] = spanishDate;
 
-  return `${year}-${month}-${day}`;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
 function isValidDateOnly(value: string): boolean {
