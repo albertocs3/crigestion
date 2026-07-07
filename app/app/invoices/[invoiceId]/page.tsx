@@ -118,7 +118,18 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                 {invoice.customerSnapshot.code} - {invoice.customerSnapshot.legalName}
               </p>
             </div>
-            {renderStatus(invoice.status)}
+            <div className="button-row">
+              {invoice.status !== "DRAFT" ? (
+                <Link
+                  className="button button-secondary"
+                  href={`/api/invoices/${invoice.id}/pdf`}
+                  target="_blank"
+                >
+                  Descargar PDF
+                </Link>
+              ) : null}
+              {renderStatus(invoice.status)}
+            </div>
           </div>
 
           <div className="data-grid">
