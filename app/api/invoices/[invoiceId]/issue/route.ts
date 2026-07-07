@@ -82,7 +82,7 @@ export async function POST(
     return jsonResponse(request, invalidJson(), { status: 400 });
   }
 
-  const payload = issueInvoiceSchema.safeParse(body);
+  const payload = issueInvoiceSchema.safeParse(normalizeIssueInvoiceBody(body));
 
   if (!payload.success) {
     return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
@@ -100,4 +100,43 @@ export async function POST(
   }
 
   return jsonResponse(request, result.value, { status: result.status });
+}
+
+function normalizeIssueInvoiceBody(body: unknown): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return body;
+  }
+
+  const candidate = body as { issueDate?: unknown };
+
+  if (typeof candidate.issueDate !== "string") {
+    return body;
+  }
+
+  return {
+    ...body,
+    issueDate: normalizeDateOnlyInput(candidate.issueDate)
+  };
+}
+
+function normalizeDateOnlyInput(value: string): string {
+  const text = value.trim().replace(/[\u200e\u200f]/g, "");
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
+    return text.slice(0, 10);
+  }
+
+  const localized = /^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/.exec(text);
+
+  if (!localized) {
+    return text;
+  }
+
+  const [, day, month, year] = localized;
+
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
