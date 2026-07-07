@@ -49,8 +49,8 @@ La base tecnologica vigente es:
 
 | Modulo | Especificacion |
 |---|---|
-| Clientes y Tiendas | [Especificacion funcional](clientes/01-especificacion-funcional.md) |
-| Catalogo e Inventario | [Especificacion funcional](catalogo/01-especificacion-funcional.md) |
+| Clientes y Tiendas | [Especificacion funcional](clientes/01-especificacion-funcional.md), [Contratos HTTP](clientes/02-contratos-api.md), [Modelo fisico](clientes/03-modelo-fisico-datos.md) |
+| Catalogo e Inventario | [Especificacion funcional](catalogo/01-especificacion-funcional.md), [Contratos HTTP](catalogo/02-contratos-api.md), [Modelo fisico](catalogo/03-modelo-fisico-datos.md) |
 | Suscripciones | [Especificacion funcional](suscripciones/01-especificacion-funcional.md) |
 | Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md) |
 | Atencion al Cliente | [Especificacion funcional](atencion-cliente/01-especificacion-funcional.md) |
