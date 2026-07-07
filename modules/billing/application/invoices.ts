@@ -13,6 +13,9 @@ import type {
   SessionUser
 } from "@/modules/platform/application/auth";
 
+const defaultLimit = 25;
+const maxLimit = 100;
+
 const dateOnlySchema = z
   .string()
   .trim()
@@ -57,10 +60,44 @@ export const addInvoiceLineSchema = z.object({
 export const issueInvoiceSchema = z.object({
   issueDate: dateOnlySchema
 }).strict();
+export const listInvoicesSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(maxLimit).default(defaultLimit),
+  cursor: z.string().uuid().optional(),
+  status: z.enum(["DRAFT", "ISSUED", "RECTIFIED", "VOIDED"]).optional(),
+  paymentStatus: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "UNPAID"]).optional(),
+  customerId: z.string().uuid().optional(),
+  search: z.string().trim().min(1).max(120).optional()
+});
 
 export type CreateInvoiceDraftCommand = z.infer<typeof createInvoiceDraftSchema>;
 export type AddInvoiceLineCommand = z.infer<typeof addInvoiceLineSchema>;
 export type IssueInvoiceCommand = z.infer<typeof issueInvoiceSchema>;
+export type ListInvoicesCommand = z.infer<typeof listInvoicesSchema>;
+
+export type InvoiceListItem = {
+  id: string;
+  status: InvoiceDetail["status"];
+  number: string | null;
+  series: string;
+  year: number;
+  customer: {
+    id: string;
+    code: string;
+    legalName: string;
+  };
+  issueDate: string;
+  operationDate: string;
+  paymentStatus: InvoiceDetail["paymentStatus"];
+  verifactuStatus: InvoiceDetail["verifactuStatus"];
+  total: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InvoiceList = {
+  invoices: InvoiceListItem[];
+  nextCursor: string | null;
+};
 
 export type InvoiceDetail = {
   id: string;
@@ -214,6 +251,91 @@ export type IssueInvoiceResult =
   | { ok: true; status: 200; value: InvoiceDetail }
   | InvoiceNotFoundResult
   | InvoiceNotIssuableResult;
+
+export async function listInvoices(
+  command: ListInvoicesCommand,
+  actor: SessionUser
+): Promise<InvoiceList> {
+  const where: Prisma.InvoiceWhereInput = {
+    ...(command.status ? { status: command.status } : {}),
+    ...(command.paymentStatus ? { paymentStatus: command.paymentStatus } : {}),
+    ...(command.customerId ? { customerId: command.customerId } : {}),
+    ...(command.search
+      ? {
+          OR: [
+            { number: { contains: command.search, mode: "insensitive" } },
+            { customerCodeSnapshot: { contains: command.search, mode: "insensitive" } },
+            {
+              customerLegalNameSnapshot: {
+                contains: command.search,
+                mode: "insensitive"
+              }
+            }
+          ]
+        }
+      : {})
+  };
+  const invoices = await prisma.invoice.findMany({
+    where,
+    orderBy: [{ issueDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    cursor: command.cursor ? { id: command.cursor } : undefined,
+    skip: command.cursor ? 1 : 0,
+    take: command.limit + 1,
+    select: invoiceListSelect
+  });
+  const page = invoices.slice(0, command.limit);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "INVOICES_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        status: command.status ?? null,
+        paymentStatus: command.paymentStatus ?? null,
+        customerId: command.customerId ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        cursor: command.cursor ?? null,
+        resultCount: page.length
+      }
+    }
+  });
+
+  return {
+    invoices: page.map(mapInvoiceListItem),
+    nextCursor: invoices.length > command.limit ? page.at(-1)?.id ?? null : null
+  };
+}
+
+export async function getInvoiceDetail(
+  invoiceId: string,
+  actor: SessionUser
+): Promise<InvoiceDetail | null> {
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: invoiceDetailSelect
+  });
+
+  if (!invoice) {
+    return null;
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "INVOICE_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        invoiceId,
+        status: invoice.status,
+        number: invoice.number
+      }
+    }
+  });
+
+  return mapInvoiceDetail(invoice);
+}
 
 export async function createInvoiceDraft(
   command: CreateInvoiceDraftCommand,
@@ -636,6 +758,24 @@ const invoiceDetailSelect = {
   updatedAt: true
 } satisfies Prisma.InvoiceSelect;
 
+const invoiceListSelect = {
+  id: true,
+  status: true,
+  number: true,
+  series: true,
+  year: true,
+  customerId: true,
+  customerCodeSnapshot: true,
+  customerLegalNameSnapshot: true,
+  issueDate: true,
+  operationDate: true,
+  paymentStatus: true,
+  verifactuStatus: true,
+  total: true,
+  createdAt: true,
+  updatedAt: true
+} satisfies Prisma.InvoiceSelect;
+
 async function findInvoiceDetail(
   tx: Prisma.TransactionClient,
   invoiceId: string
@@ -648,6 +788,9 @@ async function findInvoiceDetail(
 
 type InvoiceDetailRecord = Prisma.InvoiceGetPayload<{
   select: typeof invoiceDetailSelect;
+}>;
+type InvoiceListRecord = Prisma.InvoiceGetPayload<{
+  select: typeof invoiceListSelect;
 }>;
 
 async function recalculateInvoice(
@@ -845,6 +988,28 @@ function mapInvoiceDetail(invoice: InvoiceDetailRecord): InvoiceDetail {
       taxAmount: invoice.taxAmount.toFixed(2),
       total: invoice.total.toFixed(2)
     },
+    createdAt: invoice.createdAt.toISOString(),
+    updatedAt: invoice.updatedAt.toISOString()
+  };
+}
+
+function mapInvoiceListItem(invoice: InvoiceListRecord): InvoiceListItem {
+  return {
+    id: invoice.id,
+    status: invoice.status,
+    number: invoice.number,
+    series: invoice.series,
+    year: invoice.year,
+    customer: {
+      id: invoice.customerId,
+      code: invoice.customerCodeSnapshot,
+      legalName: invoice.customerLegalNameSnapshot
+    },
+    issueDate: formatDateOnly(invoice.issueDate),
+    operationDate: formatDateOnly(invoice.operationDate),
+    paymentStatus: invoice.paymentStatus,
+    verifactuStatus: invoice.verifactuStatus,
+    total: invoice.total.toFixed(2),
     createdAt: invoice.createdAt.toISOString(),
     updatedAt: invoice.updatedAt.toISOString()
   };
