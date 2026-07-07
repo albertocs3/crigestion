@@ -52,7 +52,7 @@ La base tecnologica vigente es:
 | Clientes y Tiendas | [Especificacion funcional](clientes/01-especificacion-funcional.md), [Contratos HTTP](clientes/02-contratos-api.md), [Modelo fisico](clientes/03-modelo-fisico-datos.md) |
 | Catalogo e Inventario | [Especificacion funcional](catalogo/01-especificacion-funcional.md), [Contratos HTTP](catalogo/02-contratos-api.md), [Modelo fisico](catalogo/03-modelo-fisico-datos.md) |
 | Suscripciones | [Especificacion funcional](suscripciones/01-especificacion-funcional.md) |
-| Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md) |
+| Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md), [Contratos HTTP](facturacion/02-contratos-api.md), [Modelo fisico](facturacion/03-modelo-fisico-datos.md), [Diseno de pantallas](facturacion/04-diseno-pantallas.md), [Plan de pruebas](facturacion/05-plan-de-pruebas.md) |
 | Atencion al Cliente | [Especificacion funcional](atencion-cliente/01-especificacion-funcional.md) |
 | Contabilidad, Compras y Proveedores | [Especificacion funcional](contabilidad/01-especificacion-funcional.md) |
 | Tesoreria y SEPA | [Especificacion funcional](tesoreria/01-especificacion-funcional.md) |
