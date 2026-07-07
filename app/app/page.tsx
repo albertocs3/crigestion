@@ -69,6 +69,21 @@ export default async function AppHomePage() {
                   Copias de seguridad
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Platform.ManageBackups") ? (
+                <Link className="button button-secondary" href="/app/restores">
+                  Restauraciones
+                </Link>
+              ) : null}
+              {session.user.permissions.includes("Customers.View") ? (
+                <Link className="button button-secondary" href="/app/customers">
+                  Clientes
+                </Link>
+              ) : null}
+              {session.user.permissions.includes("Catalog.View") ? (
+                <Link className="button button-secondary" href="/app/catalog">
+                  Catalogo
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>

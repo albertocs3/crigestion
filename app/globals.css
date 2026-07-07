@@ -67,11 +67,20 @@ a {
 }
 
 .compact-stack {
+  display: grid;
   gap: 8px;
 }
 
 .muted {
   color: var(--muted);
+}
+
+.split-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .status {
@@ -100,12 +109,30 @@ a {
   background: #b54708;
 }
 
-.status-dot-verified {
+.status-dot-validating,
+.status-dot-preparing,
+.status-dot-restoring,
+.status-dot-verifying {
+  background: #b54708;
+}
+
+.status-dot-verified,
+.status-dot-validated,
+.status-dot-completed {
   background: var(--accent);
 }
 
-.status-dot-failed {
+.status-dot-failed,
+.status-dot-requires_recovery {
   background: var(--danger);
+}
+
+.status-dot-active {
+  background: var(--accent);
+}
+
+.status-dot-inactive {
+  background: #475467;
 }
 
 .button {
@@ -150,6 +177,24 @@ a {
   min-width: 280px;
 }
 
+.details-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.details-panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.details-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.details-panel[open] > summary {
+  margin-bottom: 10px;
+}
+
 fieldset {
   display: grid;
   gap: 12px;
@@ -171,7 +216,8 @@ label {
   font-size: 14px;
 }
 
-input {
+input,
+textarea {
   min-height: 40px;
   width: 100%;
   border: 1px solid var(--border);
@@ -179,6 +225,10 @@ input {
   padding: 8px 10px;
   color: var(--foreground);
   font: inherit;
+}
+
+textarea {
+  resize: vertical;
 }
 
 select {
@@ -215,6 +265,7 @@ select {
 }
 
 input:focus-visible,
+textarea:focus-visible,
 select:focus-visible,
 .button:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
@@ -309,9 +360,27 @@ tr:last-child td {
 
 .filter-row {
   display: grid;
-  grid-template-columns: minmax(220px, 360px) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) auto;
   align-items: end;
   gap: 14px;
+}
+
+.form-two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.form-three-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.form-four-columns {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.4fr) minmax(120px, 0.7fr) minmax(180px, 1fr);
+  gap: 12px;
 }
 
 .json-block {
@@ -325,7 +394,10 @@ tr:last-child td {
 }
 
 @media (max-width: 760px) {
-  .filter-row {
+  .filter-row,
+  .form-two-columns,
+  .form-three-columns,
+  .form-four-columns {
     grid-template-columns: 1fr;
   }
 }

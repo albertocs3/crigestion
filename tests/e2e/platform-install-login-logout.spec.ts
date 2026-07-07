@@ -9,6 +9,8 @@ const userName = "admin-e2e";
 const password = "Cambiar-e2e-2026";
 const limitedUserName = "auditor-e2e";
 const limitedPassword = "Cambiar-auditor-2026";
+const restoreReason = "Restauracion operativa E2E sin datos sensibles";
+const maintenanceReason = "Ventana de mantenimiento E2E controlada";
 
 test.beforeEach(async () => {
   await resetPlatformTables();
@@ -127,6 +129,12 @@ test("shows access denied for a user without users or roles permissions", async 
   await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
   await expect(page.getByText("Roles protegidos y personalizados")).not.toBeVisible();
 
+  await page.goto("/app/customers");
+  await expect(page).toHaveURL(/\/app\/customers$/);
+  await expect(page.getByRole("heading", { name: "Clientes" })).toBeVisible();
+  await expect(page.getByText("No tienes permiso para realizar esta accion.")).toBeVisible();
+  await expect(page.getByText("Maestro fiscal inicial")).not.toBeVisible();
+
   await page.goto("/app/audit");
   await expect(page).toHaveURL(/\/app\/audit$/);
   await expect(page.getByRole("heading", { name: "Auditoria" })).toBeVisible();
@@ -138,7 +146,7 @@ test("shows access denied for a user without users or roles permissions", async 
       eventType: "ACCESS_DENIED"
     }
   });
-  expect(deniedAuditCount).toBe(2);
+  expect(deniedAuditCount).toBe(3);
 });
 
 test("propagates correlation ids through middleware, protected API errors, and audit", async ({
@@ -189,7 +197,205 @@ test("propagates correlation ids through middleware, protected API errors, and a
   expect(JSON.stringify(auditEvent.payload)).not.toContain(limitedPassword);
 });
 
+test("requests restore validation and manages maintenance mode from the UI", async ({
+  page
+}) => {
+  await initializeAndLoginAdmin(page, "e2e-restore-maintenance-setup");
+
+  await page.getByRole("link", { name: "Restauraciones" }).click();
+  await expect(page).toHaveURL(/\/app\/restores$/);
+  await expect(page.getByRole("heading", { name: "Restauraciones" })).toBeVisible();
+  await expect(page.getByLabel("Copia verificada")).toBeDisabled();
+  await expect(page.getByLabel("Copia verificada")).toHaveValue("");
+  await expect(page.getByText("No hay restauraciones para mostrar.")).toBeVisible();
+  await expect(page.getByText("Inactivo", { exact: true })).toBeVisible();
+
+  const backup = await createVerifiedBackupForAdmin();
+
+  await page.reload();
+  await page.getByLabel("Copia verificada").selectOption(backup.id);
+  await page.getByLabel("Motivo").first().fill(restoreReason);
+  await page.getByRole("button", { name: "Solicitar validacion" }).click();
+  await expect(page.getByText("Restauracion solicitada.")).toBeVisible();
+  await expect(page.getByText(restoreReason)).toBeVisible();
+  await expect(page.getByText("Solicitada").first()).toBeVisible();
+
+  const restore = await prisma.restoreOperation.findFirstOrThrow({
+    where: {
+      backupOperationId: backup.id,
+      reason: restoreReason
+    }
+  });
+  const restoreAudit = await prisma.auditEvent.findFirstOrThrow({
+    where: { eventType: "RESTORE_REQUESTED" }
+  });
+  expect(restoreAudit.payload).toMatchObject({
+    restoreOperationId: restore.id,
+    reasonLength: restoreReason.length
+  });
+  expect(JSON.stringify(restoreAudit.payload)).not.toContain(restoreReason);
+
+  await prisma.restoreOperation.update({
+    where: { id: restore.id },
+    data: {
+      status: "VALIDATED",
+      validatedAt: new Date("2026-07-03T10:00:00.000Z")
+    }
+  });
+
+  await page.reload();
+  await expect(page.getByText("Validada").first()).toBeVisible();
+  await expect(page.getByText("Lista para mantenimiento")).toBeVisible();
+  await page.getByLabel("Restauracion validada").selectOption(restore.id);
+  await page.getByLabel("Motivo").nth(1).fill(maintenanceReason);
+  await page.getByRole("button", { name: "Activar mantenimiento" }).click();
+  await expect(page.getByText("Modo mantenimiento actualizado.")).toBeVisible();
+  await expect(page.getByText("Activo", { exact: true })).toBeVisible();
+  await expect(page.getByText(restore.id).first()).toBeVisible();
+
+  await page.goto("/app/backups");
+  await page.getByRole("button", { name: "Solicitar copia" }).click();
+  await expect(page.getByText("La plataforma esta en modo mantenimiento.")).toBeVisible();
+
+  const blockedEvent = await prisma.auditEvent.findFirstOrThrow({
+    where: { eventType: "MAINTENANCE_MUTATION_BLOCKED" }
+  });
+  expect(blockedEvent.payload).toMatchObject({
+    method: "POST",
+    path: "/api/platform/backups",
+    mode: "RESTORE",
+    restoreOperationId: restore.id
+  });
+
+  await page.goto("/app");
+  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await page.getByRole("button", { name: "Cerrar sesion" }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel("Usuario").fill(userName);
+  await page.getByLabel("Contrasena").fill(password);
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+
+  await page.goto("/app/restores");
+  await expect(page.getByText("Activo", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Desactivar mantenimiento" }).click();
+  await expect(page.getByText("Modo mantenimiento actualizado.")).toBeVisible();
+  await expect(page.getByText("Inactivo", { exact: true })).toBeVisible();
+
+  const maintenanceState = await prisma.platformMaintenanceState.findUniqueOrThrow({
+    where: { singletonKey: 1 }
+  });
+  const enabledAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "MAINTENANCE_MODE_ENABLED" }
+  });
+  const disabledAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "MAINTENANCE_MODE_DISABLED" }
+  });
+  expect(maintenanceState.enabled).toBe(false);
+  expect(enabledAuditCount).toBe(1);
+  expect(disabledAuditCount).toBe(1);
+});
+
+test("creates a customer and primary store from the UI", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-customers-setup");
+
+  await page.getByRole("link", { name: "Clientes" }).click();
+  await expect(page).toHaveURL(/\/app\/customers$/);
+  await expect(page.getByRole("heading", { name: "Clientes" })).toBeVisible();
+  await expect(page.getByText("No hay clientes para mostrar.")).toBeVisible();
+
+  await fillCustomerForm(page);
+  await page.getByRole("button", { name: "Crear cliente" }).click();
+  await expect(page.getByText("Cliente creado.")).toBeVisible();
+  const customer = await prisma.customer.findUniqueOrThrow({
+    where: { normalizedTaxId: "B12345674" }
+  });
+  await expect(page.getByText("Cliente E2E SL").first()).toBeVisible();
+  await expect(page.getByText(customer.code).first()).toBeVisible();
+  await expect(page.getByText("Limite: 1200.00")).toBeVisible();
+  await expect(page.getByText("Observacion interna E2E")).not.toBeVisible();
+
+  await page.getByRole("link", { name: "Tiendas" }).click();
+  await expect(page).toHaveURL(new RegExp(`/app/customers/${customer.id}/stores$`));
+  await expect(page.getByRole("heading", { name: "Tiendas" })).toBeVisible();
+  await expect(page.getByText("No hay tiendas para mostrar.")).toBeVisible();
+
+  await fillStoreForm(page);
+  await page.getByRole("button", { name: "Crear tienda" }).click();
+  await expect(page.getByText("Tienda creada.")).toBeVisible();
+  const store = await prisma.customerStore.findFirstOrThrow({
+    where: { customerId: customer.id, name: "Tienda E2E Centro" }
+  });
+  await expect(page.getByText("Tienda E2E Centro").first()).toBeVisible();
+  await expect(page.getByText(store.code).first()).toBeVisible();
+  await expect(page.getByText("Principal").first()).toBeVisible();
+  await expect(page.getByText("Observacion tienda E2E")).not.toBeVisible();
+  const customerAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_CREATED" }
+  });
+  const storeAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_STORE_CREATED" }
+  });
+  expect(customerAuditCount).toBe(1);
+  expect(storeAuditCount).toBe(1);
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
+  await initializeAndLoginAdmin(page, "e2e-permissions-setup");
+
+  await createAuthenticatedResource(page, "/api/platform/roles", {
+      code: "ConsultaAuditoria",
+      name: "Consulta auditoria",
+      permissionCodes: ["Platform.ViewAudit"]
+    });
+  await createAuthenticatedResource(page, "/api/platform/users", {
+      displayName: "Usuario Auditor E2E",
+      userName: limitedUserName,
+      password: limitedPassword,
+      roleCode: "ConsultaAuditoria"
+    });
+
+  await page.context().clearCookies();
+}
+
+async function fillCustomerForm(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByLabel("Razon social").fill("Cliente E2E SL");
+  await page.getByLabel("Nombre comercial").fill("Cliente E2E");
+  await page.getByLabel("NIF / VAT").fill("B12345674");
+  await page.getByLabel("Email").fill("cliente-e2e@example.test");
+  await page.getByLabel("Telefono").fill("+34910000000");
+  await page.getByLabel("Direccion fiscal").fill("Calle E2E 1");
+  await page.getByLabel("Codigo postal").fill("28001");
+  await page.getByLabel("Localidad").fill("Madrid");
+  await page.getByLabel("Provincia").fill("Madrid");
+  await page.getByLabel("Limite de credito").fill("1200.00");
+  await page.getByLabel("Observaciones").fill("Observacion interna E2E");
+}
+
+async function fillStoreForm(page: import("@playwright/test").Page): Promise<void> {
+  await page.getByLabel("Nombre comercial").fill("Tienda E2E Centro");
+  await page.getByLabel("Tienda principal").check();
+  await page.getByLabel("Direccion").fill("Calle Tienda E2E 2");
+  await page.getByLabel("Codigo postal").fill("28002");
+  await page.getByLabel("Localidad").fill("Madrid");
+  await page.getByLabel("Provincia").fill("Madrid");
+  await page.getByLabel("Email", { exact: true }).fill("tienda-e2e@example.test");
+  await page.getByLabel("Telefono", { exact: true }).fill("+34910000001");
+  await page.getByLabel("WhatsApp", { exact: true }).fill("+34910000002");
+  await page.getByLabel("Contacto", { exact: true }).fill("Contacto E2E");
+  await page.getByLabel("Funcion").fill("Gerencia");
+  await page.getByLabel("Telefono contacto").fill("+34910000003");
+  await page.getByLabel("Movil contacto").fill("+34600000001");
+  await page.getByLabel("Email contacto").fill("contacto-e2e@example.test");
+  await page.getByLabel("WhatsApp contacto").fill("+34600000002");
+  await page.getByLabel("Observaciones").fill("Observacion tienda E2E");
+}
+
+async function initializeAndLoginAdmin(
+  page: import("@playwright/test").Page,
+  idempotencyKey: string
+): Promise<void> {
   const command = {
     company: {
       legalName: companyName,
@@ -208,7 +414,7 @@ async function createLimitedUser(page: import("@playwright/test").Page): Promise
     "/api/platform/installation/initialize",
     {
       headers: {
-        "Idempotency-Key": "e2e-permissions-setup"
+        "Idempotency-Key": idempotencyKey
       },
       data: command
     }
@@ -220,20 +426,6 @@ async function createLimitedUser(page: import("@playwright/test").Page): Promise
   await page.getByLabel("Contrasena").fill(password);
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page).toHaveURL(/\/app$/);
-
-  await createAuthenticatedResource(page, "/api/platform/roles", {
-      code: "ConsultaAuditoria",
-      name: "Consulta auditoria",
-      permissionCodes: ["Platform.ViewAudit"]
-    });
-  await createAuthenticatedResource(page, "/api/platform/users", {
-      displayName: "Usuario Auditor E2E",
-      userName: limitedUserName,
-      password: limitedPassword,
-      roleCode: "ConsultaAuditoria"
-    });
-
-  await page.context().clearCookies();
 }
 
 async function loginLimitedUser(page: import("@playwright/test").Page): Promise<void> {
@@ -274,16 +466,42 @@ async function createAuthenticatedResource(
   expect(response.status).toBe(201);
 }
 
+async function createVerifiedBackupForAdmin() {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: userName }
+  });
+
+  return prisma.backupOperation.create({
+    data: {
+      status: "VERIFIED",
+      requestedById: admin.id,
+      productVersion: "0.1.0",
+      storageKey: "e2e-verified.backup",
+      sizeBytes: 2048n,
+      sha256: "c".repeat(64),
+      completedAt: new Date("2026-07-03T09:00:00.000Z")
+    }
+  });
+}
+
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
-prisma.idempotencyRecord.deleteMany(),
+    prisma.restoreOperation.deleteMany(),
+    prisma.backupOperation.deleteMany(),
+    prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
