@@ -1,5 +1,6 @@
 import "server-only";
 
+import { existsSync, readFileSync } from "node:fs";
 import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
 import { getBillingConfiguration } from "@/modules/billing/application/configuration";
@@ -11,11 +12,12 @@ import { getPlatformConfiguration } from "@/modules/platform/application/configu
 
 const pageWidth = 595.28;
 const pageHeight = 841.89;
-const margin = 42;
+const centimetersToPoints = 72 / 2.54;
 const regularFont = "F1";
 const boldFont = "F2";
-const millimetersToPoints = 72 / 25.4;
-const verifactuQrSize = 35 * millimetersToPoints;
+const invoiceImagePath =
+  "C:\\Users\\USER\\iCloudDrive\\Documents\\IA\\M\u00e1ster IA\\mockup\\logo_con_datos_fiscales.jpg";
+const verifactuQrSize = cm(3.5);
 
 export type InvoicePdfResult =
   | {
@@ -47,6 +49,12 @@ type PdfCompany = {
 type PdfConfiguration = {
   invoiceLegalFooter: string;
   invoiceAccentColor: string;
+};
+
+type JpegImage = {
+  data: Buffer;
+  width: number;
+  height: number;
 };
 
 export async function generateInvoicePdf(
@@ -130,7 +138,9 @@ function renderInvoicePdf({
   configuration: PdfConfiguration;
 }): Uint8Array {
   const document = new PdfDocument();
-  const linesPerFirstPage = 13;
+  const issuerImage = loadIssuerImage();
+  const issuerImageName = issuerImage ? document.addJpegImage(issuerImage) : null;
+  const linesPerFirstPage = 8;
   const linesPerNextPage = 20;
   const chunks = chunkInvoiceLines(invoice.lines, linesPerFirstPage, linesPerNextPage);
 
@@ -144,14 +154,22 @@ function renderInvoicePdf({
       95
     );
 
-    drawHeader(content, invoice, company, configuration, pageIndex + 1, chunks.length);
+    drawHeader(
+      content,
+      invoice,
+      company,
+      configuration,
+      pageIndex + 1,
+      chunks.length,
+      issuerImageName
+    );
     drawCustomerBox(content, invoice, configuration);
-    const tableBottomY = drawLinesTable(content, lines, isFirstPage ? 510 : 650, configuration);
+    drawLinesTable(content, lines, isFirstPage ? 10 : 6.5, configuration);
 
     if (isLastPage) {
-      drawTaxSummary(content, invoice, Math.min(tableBottomY - 32, 330), configuration);
-      drawTotals(content, invoice, Math.min(tableBottomY - 32, 330), configuration);
-      drawDueDates(content, invoice, 205, configuration);
+      drawTaxSummary(content, invoice, 19, configuration);
+      drawTotals(content, invoice, 19, configuration);
+      drawDueDates(content, invoice, 22, configuration);
     }
 
     drawFooter(content, footerLines);
@@ -167,29 +185,37 @@ function drawHeader(
   company: PdfCompany,
   configuration: PdfConfiguration,
   pageNumber: number,
-  pageCount: number
+  pageCount: number,
+  issuerImageName: string | null
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
 
-  content.rect(margin, 748, 92, 50, { stroke: accent, lineWidth: 1.2 });
-  content.text("LOGO", margin + 25, 774, 15, boldFont, accent);
+  if (issuerImageName) {
+    content.image(issuerImageName, cm(1.5), yFromTop(1.5, 4.5), cm(9), cm(4.5));
+  } else {
+    content.rect(cm(1.5), yFromTop(1.5, 4.5), cm(9), cm(4.5), {
+      stroke: accent,
+      lineWidth: 1.2
+    });
+    content.text("IMAGEN LOGO CON", cm(2.7), yText(3.25), 15, regularFont, accent);
+    content.text("DATOS FISCALES", cm(2.7), yText(3.95), 15, regularFont, accent);
+  }
 
   if (pageNumber === 1) {
     drawVerifactuQr(content, configuration);
   }
 
-  content.text(company.legalName, margin, 718, 12, boldFont);
-  content.text(`NIF: ${company.taxId}`, margin, 703, 9);
-  if (company.email) {
-    content.text(company.email, margin, 690, 9);
-  }
-
-  content.rect(298, 648, 140, 76, { fill: lighten(accent, 0.86) });
-  content.rect(298, 648, 140, 76, { stroke: accent, lineWidth: 1 });
-  content.text(invoiceTitle(invoice), 312, 704, 14, boldFont, accent);
-  content.text(`Numero: ${invoice.number ?? "-"}`, 312, 686, 9, boldFont);
-  content.text(`Fecha: ${formatDate(invoice.issueDate)}`, 312, 671, 9);
-  content.text(`Operacion: ${formatDate(invoice.operationDate)}`, 312, 656, 9);
+  content.rect(cm(1.5), yFromTop(6.5, 3), cm(8), cm(3), {
+    fill: lighten(accent, 0.9)
+  });
+  content.rect(cm(1.5), yFromTop(6.5, 3), cm(8), cm(3), {
+    stroke: accent,
+    lineWidth: 0.8
+  });
+  content.text(invoiceTitle(invoice), cm(1.95), yText(7.15), 13, boldFont, accent);
+  content.text(`Numero: ${invoice.number ?? "-"}`, cm(1.95), yText(7.85), 10, boldFont);
+  content.text(`Fecha: ${formatDate(invoice.issueDate)}`, cm(1.95), yText(8.55), 10);
+  content.text(`Operacion: ${formatDate(invoice.operationDate)}`, cm(1.95), yText(9.25), 10);
   content.text(`Pagina ${pageNumber} de ${pageCount}`, 480, 812, 8, regularFont, [0.35, 0.35, 0.35]);
 }
 
@@ -198,8 +224,8 @@ function drawVerifactuQr(
   configuration: PdfConfiguration
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
-  const x = pageWidth - margin - verifactuQrSize;
-  const y = pageHeight - margin - verifactuQrSize;
+  const x = cm(13.25);
+  const y = yFromTop(1.5, 3.5);
   const centerX = x + verifactuQrSize / 2;
   const centerY = y + verifactuQrSize / 2;
 
@@ -209,25 +235,13 @@ function drawVerifactuQr(
   });
   content.text("QR", centerX - 8, centerY - 4, 14, boldFont, accent);
 
-  if (!isRealVerifactuMode()) {
-    return;
-  }
-
   content.text(
-    "Factura verificable en la sede",
-    x - 4,
-    y - 13,
-    7,
+    "Factura verificable en la sede electronica de la AEAT",
+    cm(10.95),
+    yText(5.65),
+    8,
     regularFont,
-    [0.35, 0.35, 0.35]
-  );
-  content.text(
-    "electronica de la AEAT",
-    x + 14,
-    y - 23,
-    7,
-    regularFont,
-    [0.35, 0.35, 0.35]
+    isRealVerifactuMode() ? [0.05, 0.09, 0.16] : [0.7, 0.7, 0.7]
   );
 }
 
@@ -239,115 +253,126 @@ function drawCustomerBox(
   const accent = rgb(configuration.invoiceAccentColor);
   const addressLines = fiscalAddressLines(invoice.customerSnapshot.fiscalAddress);
 
-  content.rect(margin, 565, 511, 80, { fill: lighten(accent, 0.9) });
-  content.rect(margin, 565, 511, 80, { stroke: accent, lineWidth: 0.8 });
-  content.text("CLIENTE", margin + 14, 625, 8, boldFont, accent);
-  content.text(invoice.customerSnapshot.legalName, margin + 14, 606, 12, boldFont);
-  content.text(`NIF: ${invoice.customerSnapshot.taxId}`, margin + 14, 589, 9);
+  content.rect(cm(11.5), yFromTop(6.5, 3), cm(8), cm(3), {
+    fill: lighten(accent, 0.9)
+  });
+  content.rect(cm(11.5), yFromTop(6.5, 3), cm(8), cm(3), {
+    stroke: accent,
+    lineWidth: 0.8
+  });
+  content.text("CLIENTE", cm(17.55), yText(7.05), 10, boldFont, accent);
+  content.text(invoice.customerSnapshot.legalName, cm(17.95), yText(7.55), 11, boldFont);
+  content.text(`NIF: ${invoice.customerSnapshot.taxId}`, cm(16.7), yText(8), 10);
   addressLines.slice(0, 2).forEach((line, index) => {
-    content.text(line, 285, 606 - index * 15, 9);
+    content.text(line, cm(16.1), yText(8.45 + index * 0.45), 10);
   });
 }
 
 function drawLinesTable(
   content: PdfPageContent,
   lines: InvoiceDetail["lines"],
-  topY: number,
+  topCm: number,
   configuration: PdfConfiguration
-): number {
+): void {
   const accent = rgb(configuration.invoiceAccentColor);
+  const x = cm(1.5);
+  const width = cm(18);
+  const headerHeight = cm(0.8);
+  const rowHeight = cm(0.85);
+  const headerY = yFromTop(topCm, 0.8);
   const columns = [
-    { x: margin + 8, label: "Concepto" },
-    { x: 284, label: "Cant." },
-    { x: 334, label: "Precio" },
-    { x: 395, label: "Dto." },
-    { x: 448, label: "IVA" },
-    { x: 500, label: "Total" }
+    { x: cm(1.75), label: "Concepto" },
+    { x: cm(10.05), label: "Cant." },
+    { x: cm(11.8), label: "Precio" },
+    { x: cm(14.1), label: "Dto." },
+    { x: cm(15.9), label: "IVA" },
+    { x: cm(17.7), label: "Total" }
   ];
 
-  content.rect(margin, topY, 511, 22, { fill: accent });
-  columns.forEach((column) => content.text(column.label, column.x, topY + 7, 8, boldFont, [1, 1, 1]));
+  content.rect(x, headerY, width, headerHeight, { fill: accent });
+  columns.forEach((column) => content.text(column.label, column.x, yText(topCm + 0.47), 8, boldFont, [1, 1, 1]));
 
-  let y = topY - 20;
+  let rowTop = topCm + 0.8;
   lines.forEach((line, index) => {
+    const rowY = yFromTop(rowTop, 0.85);
+    const baseline = yText(rowTop + 0.52);
     if (index % 2 === 0) {
-      content.rect(margin, y - 4, 511, 20, { fill: [0.97, 0.98, 0.98] });
+      content.rect(x, rowY, width, rowHeight, { fill: [0.97, 0.98, 0.98] });
     }
-    content.text(truncate(line.description, 42), margin + 8, y + 2, 8);
-    content.text(trimDecimal(line.quantity), 288, y + 2, 8);
-    content.text(formatMoney(line.unitPrice), 326, y + 2, 8);
-    content.text(`${trimDecimal(line.discountPercent)}%`, 400, y + 2, 8);
-    content.text(`${trimDecimal(line.taxRate.rate)}%`, 452, y + 2, 8);
-    content.text(formatMoney(line.totals.total), 494, y + 2, 8, boldFont);
-    y -= 20;
+    content.text(truncate(line.description, 42), cm(1.75), baseline, 8);
+    content.text(trimDecimal(line.quantity), cm(10.2), baseline, 8);
+    content.text(formatMoney(line.unitPrice), cm(11.55), baseline, 8);
+    content.text(`${trimDecimal(line.discountPercent)}%`, cm(14.25), baseline, 8);
+    content.text(`${trimDecimal(line.taxRate.rate)}%`, cm(16.05), baseline, 8);
+    content.text(formatMoney(line.totals.total), cm(17.45), baseline, 8, boldFont);
+    rowTop += 0.85;
   });
 
-  content.line(margin, y + 14, 553, y + 14, [0.75, 0.78, 0.8], 0.5);
-
-  return y;
+  content.line(x, yFromTop(rowTop, 0), x + width, yFromTop(rowTop, 0), [0.75, 0.78, 0.8], 0.5);
 }
 
 function drawTaxSummary(
   content: PdfPageContent,
   invoice: InvoiceDetail,
-  topY: number,
+  topCm: number,
   configuration: PdfConfiguration
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
-  content.text("Desglose fiscal", margin, topY + 18, 10, boldFont, accent);
-  content.rect(margin, topY - 4, 235, 20, { fill: accent });
-  content.text("IVA", margin + 8, topY + 3, 8, boldFont, [1, 1, 1]);
-  content.text("Base", margin + 58, topY + 3, 8, boldFont, [1, 1, 1]);
-  content.text("Cuota", margin + 128, topY + 3, 8, boldFont, [1, 1, 1]);
-  content.text("Total", margin + 190, topY + 3, 8, boldFont, [1, 1, 1]);
+  const x = cm(1.5);
+  content.text("Desglose fiscal", x, yText(topCm + 0.15), 10, boldFont, accent);
+  content.rect(x, yFromTop(topCm + 0.35, 0.75), cm(8), cm(0.75), { fill: accent });
+  content.text("IVA", cm(1.75), yText(topCm + 0.85), 8, boldFont, [1, 1, 1]);
+  content.text("Base", cm(3.55), yText(topCm + 0.85), 8, boldFont, [1, 1, 1]);
+  content.text("Cuota", cm(6), yText(topCm + 0.85), 8, boldFont, [1, 1, 1]);
+  content.text("Total", cm(8.2), yText(topCm + 0.85), 8, boldFont, [1, 1, 1]);
 
   invoice.taxSummary.forEach((summary, index) => {
-    const y = topY - 22 - index * 18;
-    content.text(`${trimDecimal(summary.taxRate)}%`, margin + 8, y, 8);
-    content.text(formatMoney(summary.taxableBase), margin + 48, y, 8);
-    content.text(formatMoney(summary.taxAmount), margin + 122, y, 8);
-    content.text(formatMoney(summary.total), margin + 178, y, 8);
+    const y = yText(topCm + 1.45 + index * 0.65);
+    content.text(`${trimDecimal(summary.taxRate)}%`, cm(1.75), y, 8);
+    content.text(formatMoney(summary.taxableBase), cm(3.2), y, 8);
+    content.text(formatMoney(summary.taxAmount), cm(5.75), y, 8);
+    content.text(formatMoney(summary.total), cm(7.55), y, 8);
   });
 }
 
 function drawTotals(
   content: PdfPageContent,
   invoice: InvoiceDetail,
-  topY: number,
+  topCm: number,
   configuration: PdfConfiguration
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
-  const x = 365;
+  const x = cm(13);
 
-  content.rect(x, topY - 58, 188, 84, { fill: lighten(accent, 0.9) });
-  content.rect(x, topY - 58, 188, 84, { stroke: accent, lineWidth: 0.8 });
-  drawTotalLine(content, "Base imponible", invoice.totals.taxableBase, x + 12, topY + 8);
-  drawTotalLine(content, "Descuento", invoice.totals.discountTotal, x + 12, topY - 10);
-  drawTotalLine(content, "IVA", invoice.totals.taxAmount, x + 12, topY - 28);
-  content.text("TOTAL", x + 12, topY - 48, 10, boldFont, accent);
-  content.text(formatMoney(invoice.totals.total), x + 103, topY - 48, 11, boldFont, accent);
+  content.rect(x, yFromTop(topCm, 3), cm(6.5), cm(3), { fill: lighten(accent, 0.9) });
+  content.rect(x, yFromTop(topCm, 3), cm(6.5), cm(3), { stroke: accent, lineWidth: 0.8 });
+  drawTotalLine(content, "Base imponible", invoice.totals.taxableBase, x + cm(0.3), yText(topCm + 0.7));
+  drawTotalLine(content, "Descuento", invoice.totals.discountTotal, x + cm(0.3), yText(topCm + 1.35));
+  drawTotalLine(content, "IVA", invoice.totals.taxAmount, x + cm(0.3), yText(topCm + 2));
+  content.text("TOTAL", x + cm(0.3), yText(topCm + 2.65), 10, boldFont, accent);
+  content.text(formatMoney(invoice.totals.total), x + cm(3.45), yText(topCm + 2.65), 11, boldFont, accent);
 }
 
 function drawDueDates(
   content: PdfPageContent,
   invoice: InvoiceDetail,
-  y: number,
+  topCm: number,
   configuration: PdfConfiguration
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
-  content.text("Vencimientos", margin, y + 18, 10, boldFont, accent);
+  content.text("Vencimientos", cm(1.5), yText(topCm + 0.25), 10, boldFont, accent);
   invoice.dueDates.forEach((dueDate, index) => {
-    const rowY = y - index * 16;
-    content.text(formatDate(dueDate.dueDate), margin, rowY, 8);
-    content.text(formatMoney(dueDate.amount), margin + 82, rowY, 8, boldFont);
-    content.text(paymentMethodLabel(dueDate.paymentMethod), margin + 160, rowY, 8);
+    const rowY = yText(topCm + 0.9 + index * 0.55);
+    content.text(formatDate(dueDate.dueDate), cm(1.5), rowY, 8);
+    content.text(formatMoney(dueDate.amount), cm(4.45), rowY, 8, boldFont);
+    content.text(paymentMethodLabel(dueDate.paymentMethod), cm(7.2), rowY, 8);
   });
 }
 
 function drawFooter(content: PdfPageContent, footerLines: string[]): void {
-  content.line(margin, 70, 553, 70, [0.8, 0.82, 0.84], 0.5);
+  content.line(cm(1.5), yFromTop(28.2, 0), cm(19.5), yFromTop(28.2, 0), [0.8, 0.82, 0.84], 0.5);
   footerLines.slice(0, 4).forEach((line, index) => {
-    content.text(line, margin, 55 - index * 10, 7, regularFont, [0.35, 0.35, 0.35]);
+    content.text(line, cm(1.5), yText(25.25 + index * 0.35), 8, regularFont, [0.05, 0.09, 0.16]);
   });
 }
 
@@ -359,7 +384,7 @@ function drawTotalLine(
   y: number
 ): void {
   content.text(label, x, y, 8);
-  content.text(formatMoney(amount), x + 95, y, 8, boldFont);
+  content.text(formatMoney(amount), x + cm(3.35), y, 8, boldFont);
 }
 
 function chunkInvoiceLines(
@@ -433,7 +458,9 @@ function paymentMethodLabel(
 }
 
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("es-ES").format(new Date(`${value}T00:00:00.000Z`));
+  const [year, month, day] = value.split("-");
+
+  return `${day}/${month}/${year}`;
 }
 
 function formatMoney(value: string): string {
@@ -503,6 +530,66 @@ function isRealVerifactuMode(): boolean {
   return enabled && (environment === "real" || environment === "production");
 }
 
+function loadIssuerImage(): JpegImage | null {
+  if (!existsSync(invoiceImagePath)) {
+    return null;
+  }
+
+  const data = readFileSync(invoiceImagePath);
+  const dimensions = readJpegDimensions(data);
+
+  if (!dimensions) {
+    return null;
+  }
+
+  return {
+    data,
+    width: dimensions.width,
+    height: dimensions.height
+  };
+}
+
+function readJpegDimensions(data: Buffer): { width: number; height: number } | null {
+  let offset = 2;
+
+  if (data[0] !== 0xff || data[1] !== 0xd8) {
+    return null;
+  }
+
+  while (offset < data.length) {
+    if (data[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+
+    const marker = data[offset + 1];
+    const length = data.readUInt16BE(offset + 2);
+
+    if (marker >= 0xc0 && marker <= 0xc3) {
+      return {
+        height: data.readUInt16BE(offset + 5),
+        width: data.readUInt16BE(offset + 7)
+      };
+    }
+
+    offset += 2 + length;
+  }
+
+  return null;
+}
+
+function cm(value: number): number {
+  return value * centimetersToPoints;
+}
+
+function yFromTop(topCm: number, heightCm: number): number {
+  return pageHeight - cm(topCm) - cm(heightCm);
+}
+
+function yText(topCm: number): number {
+  return pageHeight - cm(topCm);
+}
+
 class PdfPageContent {
   private readonly operations: string[] = [];
 
@@ -556,14 +643,21 @@ class PdfPageContent {
     }
   }
 
+  image(name: string, x: number, y: number, width: number, height: number): void {
+    this.operations.push(
+      `q ${number(width)} 0 0 ${number(height)} ${number(x)} ${number(y)} cm /${name} Do Q`
+    );
+  }
+
   toString(): string {
     return this.operations.join("\n");
   }
 }
 
 class PdfDocument {
-  private readonly objects = new Map<number, string>();
+  private readonly objects = new Map<number, string | Buffer>();
   private readonly pageIds: number[] = [];
+  private readonly imageResources = new Map<string, number>();
   private nextObjectId = 1;
   private readonly catalogObjectId = this.reserveObject();
   private readonly pagesObjectId = this.reserveObject();
@@ -585,6 +679,28 @@ class PdfDocument {
     );
   }
 
+  addJpegImage(image: JpegImage): string {
+    const imageName = `Im${this.imageResources.size + 1}`;
+    const objectId = this.reserveObject();
+    const header = [
+      `<< /Type /XObject /Subtype /Image /Width ${image.width}`,
+      `/Height ${image.height}`,
+      "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+      `/Length ${image.data.length} >>`,
+      "stream\n"
+    ].join(" ");
+    const object = Buffer.concat([
+      Buffer.from(header, "binary"),
+      image.data,
+      Buffer.from("\nendstream", "binary")
+    ]);
+
+    this.objects.set(objectId, object);
+    this.imageResources.set(imageName, objectId);
+
+    return imageName;
+  }
+
   addPage(content: string): void {
     const contentObjectId = this.reserveObject();
     const pageObjectId = this.reserveObject();
@@ -599,7 +715,7 @@ class PdfDocument {
         "<< /Type /Page",
         `/Parent ${this.pagesObjectId} 0 R`,
         `/MediaBox [0 0 ${pageWidth} ${pageHeight}]`,
-        `/Resources << /Font << /${regularFont} ${this.regularFontObjectId} 0 R /${boldFont} ${this.boldFontObjectId} 0 R >> >>`,
+        `/Resources << /Font << /${regularFont} ${this.regularFontObjectId} 0 R /${boldFont} ${this.boldFontObjectId} 0 R >>${this.imageResourceDictionary()} >>`,
         `/Contents ${contentObjectId} 0 R`,
         ">>"
       ].join(" ")
@@ -613,29 +729,42 @@ class PdfDocument {
       `<< /Type /Pages /Kids [${this.pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${this.pageIds.length} >>`
     );
 
-    const chunks: string[] = ["%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n"];
+    const chunks: Buffer[] = [Buffer.from("%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n", "binary")];
     const offsets = [0];
+    let offset = chunks[0].length;
 
     Array.from(this.objects.keys())
       .sort((left, right) => left - right)
       .forEach((objectId) => {
-        offsets[objectId] = Buffer.byteLength(chunks.join(""), "binary");
-        chunks.push(`${objectId} 0 obj\n${this.objects.get(objectId) ?? ""}\nendobj\n`);
+        const object = this.objects.get(objectId) ?? "";
+        const objectBuffer = typeof object === "string"
+          ? Buffer.from(object, "binary")
+          : object;
+        const chunk = Buffer.concat([
+          Buffer.from(`${objectId} 0 obj\n`, "binary"),
+          objectBuffer,
+          Buffer.from("\nendobj\n", "binary")
+        ]);
+
+        offsets[objectId] = offset;
+        chunks.push(chunk);
+        offset += chunk.length;
       });
 
-    const xrefOffset = Buffer.byteLength(chunks.join(""), "binary");
-    chunks.push(`xref\n0 ${this.nextObjectId}\n`);
-    chunks.push("0000000000 65535 f \n");
+    const xrefOffset = offset;
+    chunks.push(Buffer.from(`xref\n0 ${this.nextObjectId}\n`, "binary"));
+    chunks.push(Buffer.from("0000000000 65535 f \n", "binary"));
 
     for (let objectId = 1; objectId < this.nextObjectId; objectId += 1) {
-      chunks.push(`${String(offsets[objectId] ?? 0).padStart(10, "0")} 00000 n \n`);
+      chunks.push(Buffer.from(`${String(offsets[objectId] ?? 0).padStart(10, "0")} 00000 n \n`, "binary"));
     }
 
-    chunks.push(
-      `trailer\n<< /Size ${this.nextObjectId} /Root ${this.catalogObjectId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`
-    );
+    chunks.push(Buffer.from(
+      `trailer\n<< /Size ${this.nextObjectId} /Root ${this.catalogObjectId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+      "binary"
+    ));
 
-    return Buffer.from(chunks.join(""), "binary");
+    return Buffer.concat(chunks);
   }
 
   private reserveObject(): number {
@@ -643,6 +772,18 @@ class PdfDocument {
     this.nextObjectId += 1;
 
     return objectId;
+  }
+
+  private imageResourceDictionary(): string {
+    if (this.imageResources.size === 0) {
+      return "";
+    }
+
+    const entries = Array.from(this.imageResources.entries())
+      .map(([name, objectId]) => `/${name} ${objectId} 0 R`)
+      .join(" ");
+
+    return ` /XObject << ${entries} >>`;
   }
 }
 
