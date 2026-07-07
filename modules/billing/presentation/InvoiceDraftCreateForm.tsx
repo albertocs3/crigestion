@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { normalizeDateInputValue } from "@/modules/billing/presentation/dateInput";
 import type { CustomerListItem } from "@/modules/customers/application/customers";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
 
@@ -99,8 +100,8 @@ export function InvoiceDraftCreateForm({
 function invoiceDraftPayload(formData: FormData) {
   return {
     customerId: String(formData.get("customerId") ?? ""),
-    issueDate: String(formData.get("issueDate") ?? ""),
-    operationDate: String(formData.get("operationDate") ?? ""),
+    issueDate: normalizeDateInputValue(formData.get("issueDate")),
+    operationDate: normalizeDateInputValue(formData.get("operationDate")),
     notes: nullableString(formData.get("notes"))
   };
 }

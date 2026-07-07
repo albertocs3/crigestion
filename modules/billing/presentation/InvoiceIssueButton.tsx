@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { normalizeDateInputValue } from "@/modules/billing/presentation/dateInput";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
 
 type SubmissionState =
@@ -34,7 +35,7 @@ export function InvoiceIssueButton({
         "X-CSRF-Token": csrfToken
       },
       body: JSON.stringify({
-        issueDate: String(new FormData(form).get("issueDate") ?? "")
+        issueDate: normalizeDateInputValue(new FormData(form).get("issueDate"))
       })
     });
 
