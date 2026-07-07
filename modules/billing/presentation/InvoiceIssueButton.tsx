@@ -24,9 +24,12 @@ export function InvoiceIssueButton({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setState({ status: "submitting" });
 
     const form = event.currentTarget;
+    const issueDate = normalizeDateInputValue(new FormData(form).get("issueDate"));
+
+    setState({ status: "submitting" });
+
     const csrfToken = await fetchCsrfToken();
     const response = await fetch(`/api/invoices/${invoiceId}/issue`, {
       method: "POST",
@@ -35,7 +38,7 @@ export function InvoiceIssueButton({
         "X-CSRF-Token": csrfToken
       },
       body: JSON.stringify({
-        issueDate: normalizeDateInputValue(new FormData(form).get("issueDate"))
+        issueDate
       })
     });
 
