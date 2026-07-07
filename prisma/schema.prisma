@@ -43,6 +43,84 @@ enum PlatformMaintenanceMode {
   RESTORE
 }
 
+enum CustomerType {
+  COMPANY
+  SELF_EMPLOYED
+  INDIVIDUAL
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CustomerFiscalTreatment {
+  DOMESTIC
+  EU
+  EXPORT
+  CANARY_CEUTA_MELILLA
+}
+
+enum CustomerPaymentMethod {
+  BANK_TRANSFER
+  CASH
+  DIRECT_DEBIT
+}
+
+enum CustomerPaymentTermsType {
+  IMMEDIATE
+  DAYS
+  FIXED_DAY_OF_MONTH
+}
+
+enum CustomerSepaMandateStatus {
+  ACTIVE
+  REVOKED
+  INVALIDATED
+}
+
+enum CustomerAddressType {
+  BILLING
+  SHIPPING
+  OTHER
+}
+
+enum CustomerAddressStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CatalogItemKind {
+  PRODUCT
+  SERVICE
+  SOFTWARE
+  LICENSE
+}
+
+enum CatalogItemStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CatalogCategoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CatalogTaxRateStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CatalogStockMovementType {
+  ADJUSTMENT
+}
+
+enum CustomerStoreStatus {
+  ACTIVE
+  INACTIVE
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -56,51 +134,278 @@ model Installation {
   createdAt              DateTime           @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime           @updatedAt @db.Timestamptz(3)
 
-  company                Company?           @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  initialAdministrator   User?              @relation(fields: [initialAdministratorId], references: [id], onDelete: Restrict)
+  company              Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  initialAdministrator User?    @relation(fields: [initialAdministratorId], references: [id], onDelete: Restrict)
 
   @@unique([singletonKey])
   @@map("installations")
 }
 
 model Company {
-  id           String        @id @default(uuid()) @db.Uuid
-  legalName    String        @db.VarChar(200)
-  taxId        String        @unique @db.VarChar(32)
-  email        String?       @db.VarChar(254)
-  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+  id        String   @id @default(uuid()) @db.Uuid
+  legalName String   @db.VarChar(200)
+  taxId     String   @unique @db.VarChar(32)
+  email     String?  @db.VarChar(254)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   installation Installation?
 
   @@map("companies")
 }
 
-model User {
-  id                    String        @id @default(uuid()) @db.Uuid
-  displayName           String        @db.VarChar(160)
-  userName              String        @unique @db.VarChar(80)
-  normalizedUserName    String        @unique @db.VarChar(80)
-  passwordHash          String        @db.VarChar(500)
-  status                UserStatus    @default(ACTIVE)
-  roleId                String        @db.Uuid
-  failedLoginCount      Int           @default(0)
-  lockedUntil           DateTime?     @db.Timestamptz(3)
-  lastLoginAt           DateTime?     @db.Timestamptz(3)
-  passwordChangedAt     DateTime      @default(now()) @db.Timestamptz(3)
-  securityVersion       Int           @default(1)
-  createdAt             DateTime      @default(now()) @db.Timestamptz(3)
-  updatedAt             DateTime      @updatedAt @db.Timestamptz(3)
+model Customer {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  code                 String                   @unique @db.VarChar(20)
+  type                 CustomerType
+  status               CustomerStatus           @default(ACTIVE)
+  legalName            String                   @db.VarChar(200)
+  tradeName            String?                  @db.VarChar(160)
+  taxId                String                   @db.VarChar(32)
+  normalizedTaxId      String                   @unique @db.VarChar(64)
+  fiscalTreatment      CustomerFiscalTreatment
+  email                String?                  @db.VarChar(254)
+  phone                String?                  @db.VarChar(40)
+  fiscalAddressLine    String                   @db.VarChar(240)
+  fiscalPostalCode     String                   @db.VarChar(20)
+  fiscalCity           String                   @db.VarChar(120)
+  fiscalProvince       String?                  @db.VarChar(120)
+  fiscalCountry        String                   @db.VarChar(2)
+  defaultPaymentMethod CustomerPaymentMethod    @default(BANK_TRANSFER)
+  paymentTermsType     CustomerPaymentTermsType @default(IMMEDIATE)
+  paymentDays          Int?
+  paymentFixedDay      Int?
+  creditLimit          Decimal?                 @db.Decimal(12, 2)
+  bankIban             String?                  @db.VarChar(34)
+  notes                String?                  @db.VarChar(1000)
+  createdById          String                   @db.Uuid
+  updatedById          String?                  @db.Uuid
+  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  role                  Role          @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  sessions              Session[]
-  requestedBackups      BackupOperation[]
-  requestedRestores     RestoreOperation[]
-  enabledMaintenances   PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
-  disabledMaintenances  PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
-  initialInstallation   Installation?
+  createdBy    User                  @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy    User?                 @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  addresses    CustomerAddress[]
+  stores       CustomerStore[]
+  sepaMandates CustomerSepaMandate[]
+
+  @@index([status, legalName, id])
+  @@index([createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("customers")
+}
+
+model CustomerSepaMandate {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  customerId          String                    @db.Uuid
+  reference           String                    @db.VarChar(80)
+  referenceNormalized String                    @unique @db.VarChar(80)
+  status              CustomerSepaMandateStatus @default(ACTIVE)
+  signedAt            DateTime                  @db.Date
+  revokedAt           DateTime?                 @db.Timestamptz(3)
+  createdById         String                    @db.Uuid
+  revokedById         String?                   @db.Uuid
+  createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime                  @updatedAt @db.Timestamptz(3)
+
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy User     @relation("CustomerSepaMandatesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  revokedBy User?    @relation("CustomerSepaMandatesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+
+  @@index([customerId, status])
+  @@index([createdById, createdAt])
+  @@map("customer_sepa_mandates")
+}
+
+model CustomerAddress {
+  id          String                @id @default(uuid()) @db.Uuid
+  customerId  String                @db.Uuid
+  type        CustomerAddressType
+  status      CustomerAddressStatus @default(ACTIVE)
+  label       String                @db.VarChar(120)
+  isPrimary   Boolean               @default(false)
+  addressLine String                @db.VarChar(240)
+  postalCode  String                @db.VarChar(20)
+  city        String                @db.VarChar(120)
+  province    String?               @db.VarChar(120)
+  country     String                @db.VarChar(2)
+  contactName String?               @db.VarChar(160)
+  phone       String?               @db.VarChar(40)
+  email       String?               @db.VarChar(254)
+  notes       String?               @db.VarChar(1000)
+  createdById String                @db.Uuid
+  updatedById String?               @db.Uuid
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime              @updatedAt @db.Timestamptz(3)
+
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy User     @relation("CustomerAddressesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?    @relation("CustomerAddressesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([customerId, type, status, isPrimary])
+  @@index([customerId, status, label, id])
+  @@index([createdById, createdAt])
+  @@map("customer_addresses")
+}
+
+model CustomerStore {
+  id              String              @id @default(uuid()) @db.Uuid
+  customerId      String              @db.Uuid
+  code            String              @unique @db.VarChar(20)
+  name            String              @db.VarChar(160)
+  status          CustomerStoreStatus @default(ACTIVE)
+  isPrimary       Boolean             @default(false)
+  addressLine     String              @db.VarChar(240)
+  postalCode      String              @db.VarChar(20)
+  city            String              @db.VarChar(120)
+  province        String?             @db.VarChar(120)
+  country         String              @db.VarChar(2)
+  email           String?             @db.VarChar(254)
+  phone           String?             @db.VarChar(40)
+  whatsapp        String?             @db.VarChar(40)
+  contactName     String?             @db.VarChar(160)
+  contactRole     String?             @db.VarChar(120)
+  contactPhone    String?             @db.VarChar(40)
+  contactMobile   String?             @db.VarChar(40)
+  contactWhatsapp String?             @db.VarChar(40)
+  contactEmail    String?             @db.VarChar(254)
+  notes           String?             @db.VarChar(1000)
+  createdById     String              @db.Uuid
+  updatedById     String?             @db.Uuid
+  createdAt       DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
+
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy User     @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?    @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@index([customerId, status, name, id])
+  @@index([customerId, isPrimary])
+  @@index([createdById, createdAt])
+  @@map("customer_stores")
+}
+
+model User {
+  id                 String     @id @default(uuid()) @db.Uuid
+  displayName        String     @db.VarChar(160)
+  userName           String     @unique @db.VarChar(80)
+  normalizedUserName String     @unique @db.VarChar(80)
+  passwordHash       String     @db.VarChar(500)
+  status             UserStatus @default(ACTIVE)
+  roleId             String     @db.Uuid
+  failedLoginCount   Int        @default(0)
+  lockedUntil        DateTime?  @db.Timestamptz(3)
+  lastLoginAt        DateTime?  @db.Timestamptz(3)
+  passwordChangedAt  DateTime   @default(now()) @db.Timestamptz(3)
+  securityVersion    Int        @default(1)
+  createdAt          DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
+
+  role                         Role                       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  sessions                     Session[]
+  requestedBackups             BackupOperation[]
+  requestedRestores            RestoreOperation[]
+  enabledMaintenances          PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
+  disabledMaintenances         PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
+  createdCustomers             Customer[]                 @relation("CustomersCreatedBy")
+  updatedCustomers             Customer[]                 @relation("CustomersUpdatedBy")
+  createdCustomerAddresses     CustomerAddress[]          @relation("CustomerAddressesCreatedBy")
+  updatedCustomerAddresses     CustomerAddress[]          @relation("CustomerAddressesUpdatedBy")
+  createdCustomerSepaMandates  CustomerSepaMandate[]      @relation("CustomerSepaMandatesCreatedBy")
+  revokedCustomerSepaMandates  CustomerSepaMandate[]      @relation("CustomerSepaMandatesRevokedBy")
+  createdCustomerStores        CustomerStore[]            @relation("CustomerStoresCreatedBy")
+  updatedCustomerStores        CustomerStore[]            @relation("CustomerStoresUpdatedBy")
+  createdCatalogItems          CatalogItem[]              @relation("CatalogItemsCreatedBy")
+  updatedCatalogItems          CatalogItem[]              @relation("CatalogItemsUpdatedBy")
+  createdCatalogStockMovements CatalogStockMovement[]     @relation("CatalogStockMovementsCreatedBy")
+  initialInstallation          Installation?
 
   @@map("users")
+}
+
+model CatalogItem {
+  id           String            @id @default(uuid()) @db.Uuid
+  code         String            @unique @db.VarChar(20)
+  categoryId   String?           @db.Uuid
+  kind         CatalogItemKind
+  status       CatalogItemStatus @default(ACTIVE)
+  name         String            @unique @db.VarChar(200)
+  description  String?           @db.VarChar(1000)
+  unitName     String            @default("Unidades") @db.VarChar(40)
+  salePrice    Decimal           @db.Decimal(12, 2)
+  costPrice    Decimal           @default(0) @db.Decimal(12, 2)
+  taxRateId    String            @db.Uuid
+  taxRate      Decimal           @default(21) @db.Decimal(5, 2)
+  stockTracked Boolean           @default(false)
+  stockCurrent Decimal           @default(0) @db.Decimal(12, 3)
+  stockMinimum Decimal           @default(0) @db.Decimal(12, 3)
+  createdById  String            @db.Uuid
+  updatedById  String?           @db.Uuid
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
+
+  category          CatalogCategory?       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  taxRateDefinition CatalogTaxRate         @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+  createdBy         User                   @relation("CatalogItemsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy         User?                  @relation("CatalogItemsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  stockMovements    CatalogStockMovement[]
+
+  @@index([status, name, id])
+  @@index([kind, status, name, id])
+  @@index([categoryId, status, name, id])
+  @@index([taxRateId])
+  @@index([createdById, createdAt])
+  @@map("catalog_items")
+}
+
+model CatalogStockMovement {
+  id            String                   @id @default(uuid()) @db.Uuid
+  itemId        String                   @db.Uuid
+  type          CatalogStockMovementType @default(ADJUSTMENT)
+  quantity      Decimal                  @db.Decimal(12, 3)
+  previousStock Decimal                  @db.Decimal(12, 3)
+  newStock      Decimal                  @db.Decimal(12, 3)
+  reason        String                   @db.VarChar(500)
+  createdById   String                   @db.Uuid
+  createdAt     DateTime                 @default(now()) @db.Timestamptz(3)
+
+  item      CatalogItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  createdBy User        @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([itemId, createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("catalog_stock_movements")
+}
+
+model CatalogCategory {
+  id          String                @id @default(uuid()) @db.Uuid
+  code        String                @unique @db.VarChar(20)
+  name        String                @unique @db.VarChar(120)
+  description String?               @db.VarChar(500)
+  status      CatalogCategoryStatus @default(ACTIVE)
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime              @updatedAt @db.Timestamptz(3)
+
+  items CatalogItem[]
+
+  @@index([status, name, id])
+  @@map("catalog_categories")
+}
+
+model CatalogTaxRate {
+  id        String               @id @default(uuid()) @db.Uuid
+  code      String               @unique @db.VarChar(40)
+  name      String               @db.VarChar(120)
+  rate      Decimal              @db.Decimal(5, 2)
+  status    CatalogTaxRateStatus @default(ACTIVE)
+  isDefault Boolean              @default(false)
+  createdAt DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime             @updatedAt @db.Timestamptz(3)
+
+  items CatalogItem[]
+
+  @@index([status, name, id])
+  @@map("catalog_tax_rates")
 }
 
 model ReservedUserName {
@@ -114,12 +419,12 @@ model ReservedUserName {
 }
 
 model Role {
-  id          String           @id @default(uuid()) @db.Uuid
-  code        String           @unique @db.VarChar(80)
-  name        String           @db.VarChar(120)
-  isProtected Boolean          @default(false)
-  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique @db.VarChar(80)
+  name        String   @db.VarChar(120)
+  isProtected Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
   users       User[]
   permissions RolePermission[]
@@ -128,34 +433,34 @@ model Role {
 }
 
 model Permission {
-  id        String           @id @default(uuid()) @db.Uuid
-  code      String           @unique @db.VarChar(120)
-  name      String           @db.VarChar(160)
-  createdAt DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime         @updatedAt @db.Timestamptz(3)
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(120)
+  name      String   @db.VarChar(160)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  roles     RolePermission[]
+  roles RolePermission[]
 
   @@map("permissions")
 }
 
 model RolePermission {
-  roleId       String     @db.Uuid
-  permissionId String     @db.Uuid
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
 
-  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
   @@map("role_permissions")
 }
 
 model AuditEvent {
-  id          String   @id @default(uuid()) @db.Uuid
-  eventType   String   @db.VarChar(120)
-  actorType   String   @db.VarChar(40)
-  payload     Json
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  id        String   @id @default(uuid()) @db.Uuid
+  eventType String   @db.VarChar(120)
+  actorType String   @db.VarChar(40)
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   @@index([createdAt, id])
   @@index([eventType, createdAt])
@@ -163,19 +468,19 @@ model AuditEvent {
 }
 
 model Session {
-  id               String    @id @default(uuid()) @db.Uuid
-  userId           String    @db.Uuid
-  tokenHash        String    @unique @db.VarChar(128)
-  startedAt        DateTime  @default(now()) @db.Timestamptz(3)
-  lastActivityAt   DateTime  @default(now()) @db.Timestamptz(3)
-  expiresAt        DateTime  @db.Timestamptz(3)
-  revokedAt        DateTime? @db.Timestamptz(3)
-  revokeReason     String?   @db.VarChar(120)
-  ipAddress        String?   @db.VarChar(64)
-  userAgent        String?   @db.VarChar(500)
-  securityVersion  Int
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @db.Uuid
+  tokenHash       String    @unique @db.VarChar(128)
+  startedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  lastActivityAt  DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt       DateTime  @db.Timestamptz(3)
+  revokedAt       DateTime? @db.Timestamptz(3)
+  revokeReason    String?   @db.VarChar(120)
+  ipAddress       String?   @db.VarChar(64)
+  userAgent       String?   @db.VarChar(500)
+  securityVersion Int
 
-  user             User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([userId, revokedAt])
   @@index([expiresAt])
@@ -222,23 +527,23 @@ model IdempotencyRecord {
 }
 
 model BackupOperation {
-  id              String                @id @default(uuid()) @db.Uuid
-  status          BackupOperationStatus @default(REQUESTED)
-  requestedById   String                @db.Uuid
-  requestedAt     DateTime              @default(now()) @db.Timestamptz(3)
-  startedAt       DateTime?             @db.Timestamptz(3)
-  completedAt     DateTime?             @db.Timestamptz(3)
-  productVersion  String                @db.VarChar(32)
-  storageKey      String?               @db.VarChar(500)
-  sizeBytes       BigInt?
-  sha256          String?               @db.Char(64)
-  errorCode       String?               @db.VarChar(120)
-  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  id             String                @id @default(uuid()) @db.Uuid
+  status         BackupOperationStatus @default(REQUESTED)
+  requestedById  String                @db.Uuid
+  requestedAt    DateTime              @default(now()) @db.Timestamptz(3)
+  startedAt      DateTime?             @db.Timestamptz(3)
+  completedAt    DateTime?             @db.Timestamptz(3)
+  productVersion String                @db.VarChar(32)
+  storageKey     String?               @db.VarChar(500)
+  sizeBytes      BigInt?
+  sha256         String?               @db.Char(64)
+  errorCode      String?               @db.VarChar(120)
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
 
-  requestedBy     User                  @relation(fields: [requestedById], references: [id], onDelete: Restrict)
-  restoreSources  RestoreOperation[]    @relation("RestoreSourceBackup")
-  preRestoreUses  RestoreOperation[]    @relation("PreRestoreBackup")
+  requestedBy    User               @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  restoreSources RestoreOperation[] @relation("RestoreSourceBackup")
+  preRestoreUses RestoreOperation[] @relation("PreRestoreBackup")
 
   @@index([status, requestedAt])
   @@index([requestedAt, id])
@@ -261,10 +566,10 @@ model RestoreOperation {
   createdAt                   DateTime               @default(now()) @db.Timestamptz(3)
   updatedAt                   DateTime               @updatedAt @db.Timestamptz(3)
 
-  backupOperation             BackupOperation        @relation("RestoreSourceBackup", fields: [backupOperationId], references: [id], onDelete: Restrict)
-  requestedBy                 User                   @relation(fields: [requestedById], references: [id], onDelete: Restrict)
-  preRestoreBackupOperation   BackupOperation?       @relation("PreRestoreBackup", fields: [preRestoreBackupOperationId], references: [id], onDelete: Restrict)
-  maintenanceStates           PlatformMaintenanceState[]
+  backupOperation           BackupOperation            @relation("RestoreSourceBackup", fields: [backupOperationId], references: [id], onDelete: Restrict)
+  requestedBy               User                       @relation(fields: [requestedById], references: [id], onDelete: Restrict)
+  preRestoreBackupOperation BackupOperation?           @relation("PreRestoreBackup", fields: [preRestoreBackupOperationId], references: [id], onDelete: Restrict)
+  maintenanceStates         PlatformMaintenanceState[]
 
   @@index([status, requestedAt])
   @@index([requestedAt, id])
@@ -287,9 +592,9 @@ model PlatformMaintenanceState {
   createdAt          DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime                 @updatedAt @db.Timestamptz(3)
 
-  restoreOperation   RestoreOperation?        @relation(fields: [restoreOperationId], references: [id], onDelete: Restrict)
-  enabledBy          User?                    @relation("MaintenanceEnabledBy", fields: [enabledById], references: [id], onDelete: Restrict)
-  disabledBy         User?                    @relation("MaintenanceDisabledBy", fields: [disabledById], references: [id], onDelete: Restrict)
+  restoreOperation RestoreOperation? @relation(fields: [restoreOperationId], references: [id], onDelete: Restrict)
+  enabledBy        User?             @relation("MaintenanceEnabledBy", fields: [enabledById], references: [id], onDelete: Restrict)
+  disabledBy       User?             @relation("MaintenanceDisabledBy", fields: [disabledById], references: [id], onDelete: Restrict)
 
   @@unique([singletonKey])
   @@index([enabled, mode])
