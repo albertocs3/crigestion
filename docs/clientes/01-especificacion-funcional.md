@@ -129,11 +129,9 @@ En clientes particulares, el campo de razón social podrá utilizarse para regis
 
 El código será automático y correlativo.
 
-Formato:
+Formato: numerico correlativo independiente.
 
-`CLI{NÚMERO}`
-
-Ejemplo: `CLI00001`.
+Ejemplo: `1`, `2`, `3`.
 
 ### 4.4 Estados
 
@@ -250,11 +248,9 @@ El contacto general no pertenece a ninguna tienda.
 
 ### 9.2 Código
 
-Formato:
+Formato: numerico correlativo independiente.
 
-`T{NÚMERO}`
-
-Ejemplo: `T00001`.
+Ejemplo: `1`, `2`, `3`.
 
 ### 9.3 Contacto de tienda
 
