@@ -228,7 +228,7 @@ describe("backup HTTP contracts", () => {
     });
   });
 
-  it("rejects manual backup requests while a restore is active", async () => {
+  it("rejects manual backup requests while a validated restore is awaiting apply", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
     const admin = await prisma.user.findUniqueOrThrow({
@@ -247,10 +247,12 @@ describe("backup HTTP contracts", () => {
     });
     await prisma.restoreOperation.create({
       data: {
-        status: "REQUESTED",
+        status: "VALIDATED",
         backupOperationId: backup.id,
         requestedById: admin.id,
-        reason: "Restauracion de prueba controlada"
+        reason: "Restauracion de prueba controlada",
+        startedAt: new Date("2026-07-02T10:02:00.000Z"),
+        validatedAt: new Date("2026-07-02T10:03:00.000Z")
       }
     });
 
@@ -399,6 +401,12 @@ prisma.restoreOperation.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),

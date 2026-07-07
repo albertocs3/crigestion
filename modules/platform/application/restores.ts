@@ -15,6 +15,7 @@ const operationExclusionAdvisoryLockKey = 72072072;
 const activeRestoreStatuses = [
   "REQUESTED",
   "VALIDATING",
+  "VALIDATED",
   "PREPARING",
   "RESTORING",
   "VERIFYING"
@@ -41,7 +42,7 @@ export const listRestoreOperationsSchema = z.object({
 export const requestRestoreSchema = z.object({
   backupOperationId: z.string().uuid(),
   reason: z.string().trim().min(10).max(500)
-});
+}).strict();
 
 export type ListRestoreOperationsCommand = z.infer<
   typeof listRestoreOperationsSchema

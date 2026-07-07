@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type SubmissionState =
   | { status: "idle" }
@@ -9,13 +10,15 @@ type SubmissionState =
   | { status: "error"; message: string };
 
 export function InstallationForm() {
+  const router = useRouter();
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setState({ status: "submitting" });
 
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
     const payload = {
       company: {
         legalName: String(formData.get("legalName") ?? ""),
@@ -43,7 +46,8 @@ export function InstallationForm() {
         status: "success",
         message: "Instalacion completada. Ya puedes iniciar sesion."
       });
-      event.currentTarget.reset();
+      form.reset();
+      router.replace("/login");
       return;
     }
 

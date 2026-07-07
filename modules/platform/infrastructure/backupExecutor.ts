@@ -43,6 +43,7 @@ export type BackupExecutorOptions = {
   prisma: PrismaClient;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  operationId?: string;
   createDumpStream?: (databaseUrl: string) => Readable;
   createDumpSource?: (databaseUrl: string) => DumpSource;
 };
@@ -79,7 +80,11 @@ export async function processNextRequestedBackup(
 
   await failStaleRunningBackups(options.prisma, now, staleTimeoutMinutes);
 
-  const operation = await claimNextRequestedBackup(options.prisma, now);
+  const operation = await claimNextRequestedBackup(
+    options.prisma,
+    now,
+    options.operationId
+  );
 
   if (!operation) {
     return {
@@ -212,11 +217,15 @@ async function failStaleRunningBackups(
 
 async function claimNextRequestedBackup(
   prisma: PrismaClient,
-  now: () => Date
+  now: () => Date,
+  operationId?: string
 ): Promise<ClaimedBackupOperation | null> {
   return prisma.$transaction(async (tx) => {
     const operation = await tx.backupOperation.findFirst({
-      where: { status: "REQUESTED" },
+      where: {
+        status: "REQUESTED",
+        ...(operationId ? { id: operationId } : {})
+      },
       orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
       select: { id: true }
     });
@@ -347,6 +356,28 @@ export async function verifyEncryptedBackupArtifact(
       }
     })
   );
+}
+
+export async function createDecryptedBackupArtifactStream(
+  filePath: string,
+  key: Buffer
+): Promise<Readable> {
+  const fileStat = await stat(filePath);
+  const header = await readBackupHeader(filePath, fileStat.size);
+  const authTag = await readAuthTag(filePath, fileStat.size);
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    key,
+    header.iv
+  );
+
+  decipher.setAAD(header.frame);
+  decipher.setAuthTag(authTag);
+
+  return createReadStream(filePath, {
+    start: header.endOffset,
+    end: fileStat.size - authTagLength - 1
+  }).pipe(decipher);
 }
 
 async function readBackupHeader(
@@ -483,6 +514,7 @@ function createPgDumpSource(databaseUrl: string, pgDumpBinary: string): DumpSour
     ],
     {
       env: pgDumpEnvironment(connection.password),
+      shell: isWindowsCommandScript(pgDumpBinary),
       stdio: ["ignore", "pipe", "pipe"]
     }
   );
@@ -518,6 +550,8 @@ function createPgDumpSource(databaseUrl: string, pgDumpBinary: string): DumpSour
 function pgDumpEnvironment(password: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
+    ComSpec: process.env.ComSpec,
+    PATHEXT: process.env.PATHEXT,
     SystemRoot: process.env.SystemRoot,
     WINDIR: process.env.WINDIR,
     LANG: process.env.LANG,
@@ -525,6 +559,10 @@ function pgDumpEnvironment(password: string): NodeJS.ProcessEnv {
     NODE_ENV: process.env.NODE_ENV,
     PGPASSWORD: password
   };
+}
+
+function isWindowsCommandScript(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command);
 }
 
 function toPgDumpConnection(databaseUrl: string): {

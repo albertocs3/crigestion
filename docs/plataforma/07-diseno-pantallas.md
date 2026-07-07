@@ -17,6 +17,8 @@ Define la experiencia web inicial de Plataforma para CriGestión con Next.js.
 | `/app/sessions` | Gestion de sesiones | Listar sesiones activas y revocar sesiones remotas |
 | `/app/audit` | Auditoria | Consultar eventos auditables con filtros basicos |
 | `/app/configuration` | Configuracion | Consultar y editar datos base de empresa |
+| `/app/backups` | Copias de seguridad | Solicitar y consultar copias manuales |
+| `/app/restores` | Restauraciones | Solicitar validacion de restauraciones y gestionar mantenimiento |
 
 ## 3. Entrada
 
@@ -61,6 +63,7 @@ Contenido:
 - Acceso a sesiones activas cuando el rol lo permite.
 - Acceso a auditoria cuando el rol lo permite.
 - Acceso a configuracion cuando el rol lo permite.
+- Acceso a copias y restauraciones cuando el rol lo permite.
 - Formulario de cambio de contrasena.
 - Accion de cierre de sesion.
 - Redireccion a `/platform/installation` si la plataforma no esta inicializada.
@@ -119,7 +122,32 @@ Contenido:
 - Redireccion a `/login` si no existe sesion valida.
 - Estado de error cuando falta permiso.
 
-## 12. Criterios UI
+## 12. Copias de seguridad
+
+Contenido:
+
+- Listado paginado de copias como DTOs sin rutas fisicas ni `storageKey`.
+- Estado, usuario solicitante, version, fechas, tamano y SHA-256 si esta verificada.
+- Accion para solicitar una copia manual.
+- Filtro por estado.
+- Redireccion a `/login` si no existe sesion valida.
+- Estado de error cuando falta permiso.
+
+## 13. Restauraciones y mantenimiento
+
+Contenido:
+
+- Listado paginado de restauraciones como DTOs sin rutas fisicas ni `storageKey`.
+- Estado, usuario solicitante, copia origen, motivo y resultado.
+- Formulario para solicitar validacion de restauracion sobre copias verificadas.
+- Panel de modo mantenimiento para usuarios con `Platform.ManageMaintenance`.
+- Activacion de mantenimiento solo sobre restauraciones `VALIDATED`.
+- Desactivacion explicita del modo mantenimiento cuando esta activo.
+- Filtro por estado.
+- Redireccion a `/login` si no existe sesion valida.
+- Estado de error cuando falta permiso.
+
+## 14. Criterios UI
 
 - Server Components por defecto.
 - Client Components solo para formularios.

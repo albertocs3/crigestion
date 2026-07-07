@@ -151,6 +151,7 @@ export async function requestManualBackup(
             in: [
               "REQUESTED",
               "VALIDATING",
+              "VALIDATED",
               "PREPARING",
               "RESTORING",
               "VERIFYING"

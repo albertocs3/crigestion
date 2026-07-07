@@ -2,16 +2,14 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
-import { PATCH as companyPatch } from "@/app/api/platform/configuration/company/route";
-import { GET as configurationGet } from "@/app/api/platform/configuration/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
-import { hashPassword } from "@/modules/platform/application/passwords";
 import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { hashPassword } from "@/modules/platform/application/passwords";
 
 type CookieSetOptions = {
   httpOnly?: boolean;
@@ -50,7 +48,7 @@ vi.mock("next/headers", () => ({
 }));
 
 const adminPassword = "Cambiar-esta-clave-2026";
-const limitedPassword = "Cambiar-gestion-2026";
+const limitedPassword = "Cambiar-auditor-2026";
 const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
@@ -64,7 +62,7 @@ const baseCommand: InitializeCommand = {
   }
 };
 
-describe("configuration HTTP contracts", () => {
+describe("restore apply HTTP contract", () => {
   beforeEach(async () => {
     process.env.APP_BASE_URL = "http://localhost:3000";
     process.env.AUTH_COOKIE_SECURE = "false";
@@ -78,57 +76,14 @@ describe("configuration HTTP contracts", () => {
     await prisma.$disconnect();
   });
 
-  it("rejects unauthenticated configuration reads", async () => {
-    const response = await configurationGet(apiRequest("/api/platform/configuration"));
-    const body = await response.json();
-
-    expect(response.status).toBe(401);
-    expect(body).toEqual({
-      code: "UNAUTHENTICATED",
-      message: "No hay una sesion activa."
-    });
-  });
-
-  it("rejects users without Platform.ManageConfiguration", async () => {
-    await createLimitedUserWithoutConfigurationPermission();
-    await loginWith("gestion", limitedPassword);
-
-    const response = await configurationGet(apiRequest("/api/platform/configuration"));
-    const body = await response.json();
-
-    expect(response.status).toBe(403);
-    expect(body).toEqual({
-      code: "FORBIDDEN",
-      message: "No tienes permiso para realizar esta accion."
-    });
-  });
-
-  it("returns configuration DTOs for authorized administrators", async () => {
+  it("requires CSRF before applying a restore", async () => {
     await loginWith("admin", adminPassword);
+    const { POST: restoreApplyPost } = await import(
+      "@/app/api/platform/restores/apply/route"
+    );
 
-    const response = await configurationGet(apiRequest("/api/platform/configuration"));
-    const body = await response.json();
-
-    expect(response.status).toBe(200);
-    expect(body).toMatchObject({
-      company: {
-        legalName: "CriGestion Test SL",
-        taxId: "B12345678",
-        email: "admin@example.test"
-      },
-      installation: {
-        status: "INITIALIZED",
-        productVersion: "0.1.0"
-      }
-    });
-    expect(JSON.stringify(body)).not.toContain("passwordHash");
-  });
-
-  it("requires CSRF before updating company configuration", async () => {
-    await loginWith("admin", adminPassword);
-
-    const response = await companyPatch(
-      jsonRequest("/api/platform/configuration/company", updatePayload())
+    const response = await restoreApplyPost(
+      jsonRequest("/api/platform/restores/apply", {})
     );
     const body = await response.json();
 
@@ -139,56 +94,47 @@ describe("configuration HTTP contracts", () => {
     });
   });
 
-  it("updates company configuration and does not audit submitted values", async () => {
-    await loginWith("admin", adminPassword);
+  it("rejects users without Platform.ManageMaintenance", async () => {
+    await createLimitedUserWithoutMaintenance();
+    await loginWith("auditor", limitedPassword);
     const csrfToken = await getCsrfToken();
+    const { POST: restoreApplyPost } = await import(
+      "@/app/api/platform/restores/apply/route"
+    );
 
-    const response = await companyPatch(
-      jsonRequest("/api/platform/configuration/company", updatePayload(), { csrfToken })
+    const response = await restoreApplyPost(
+      jsonRequest("/api/platform/restores/apply", {}, { csrfToken })
     );
     const body = await response.json();
-    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "COMPANY_CONFIGURATION_UPDATED" }
-    });
-    const auditPayload = JSON.stringify(auditEvent.payload);
 
-    expect(response.status).toBe(200);
-    expect(body).toMatchObject(updatePayload());
-    expect(auditEvent.payload).toMatchObject({
-      changedFields: ["legalName", "taxId", "email"]
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      code: "FORBIDDEN",
+      message: "No tienes permiso para realizar esta accion."
     });
-    expect(auditPayload).not.toContain(updatePayload().legalName);
-    expect(auditPayload).not.toContain(updatePayload().taxId);
-    expect(auditPayload).not.toContain(updatePayload().email);
   });
 
-  it("validates malformed update payloads", async () => {
+  it("reports when there is no validated restore in maintenance", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
+    const { POST: restoreApplyPost } = await import(
+      "@/app/api/platform/restores/apply/route"
+    );
 
-    const response = await companyPatch(
-      jsonRequest(
-        "/api/platform/configuration/company",
-        { ...updatePayload(), email: "not-email" },
-        { csrfToken }
-      )
+    const response = await restoreApplyPost(
+      jsonRequest("/api/platform/restores/apply", {}, { csrfToken })
     );
     const body = await response.json();
 
-    expect(response.status).toBe(422);
-    expect(body.code).toBe("VALIDATION_ERROR");
+    expect(response.status).toBe(409);
+    expect(body).toEqual({
+      code: "NO_VALIDATED_RESTORE_IN_MAINTENANCE",
+      message: "No hay una restauracion validada con mantenimiento activo."
+    });
   });
 });
 
-function updatePayload() {
-  return {
-    legalName: "CriGestion Actualizada SL",
-    taxId: "B87654321",
-    email: "contabilidad@example.test"
-  };
-}
-
-async function createLimitedUserWithoutConfigurationPermission(): Promise<void> {
+async function createLimitedUserWithoutMaintenance(): Promise<void> {
   const role = await prisma.role.create({
     data: {
       code: "ConsultaAuditoria",
@@ -208,9 +154,9 @@ async function createLimitedUserWithoutConfigurationPermission(): Promise<void> 
 
   await prisma.user.create({
     data: {
-      displayName: "Usuario Gestion",
-      userName: "gestion",
-      normalizedUserName: "gestion",
+      displayName: "Usuario Auditor",
+      userName: "auditor",
+      normalizedUserName: "auditor",
       passwordHash: hashPassword(limitedPassword),
       status: "ACTIVE",
       roleId: role.id
@@ -220,7 +166,14 @@ async function createLimitedUserWithoutConfigurationPermission(): Promise<void> 
 
 async function loginWith(userName: string, password: string): Promise<void> {
   const response = await loginPost(
-    jsonRequest("/api/auth/login", { userName, password }, { method: "POST" })
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-For": uniqueTestIp()
+      },
+      body: JSON.stringify({ userName, password })
+    })
   );
 
   expect(response.status).toBe(200);
@@ -240,12 +193,19 @@ async function getCsrfToken(): Promise<string> {
   return body.csrfToken;
 }
 
+function uniqueTestIp(): string {
+  return `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
+}
+
+function apiRequest(path: string): Request {
+  return new Request(`http://localhost${path}`);
+}
+
 function jsonRequest(
   path: string,
   payload: unknown,
   options: {
     csrfToken?: string;
-    method?: "POST" | "PATCH";
   } = {}
 ): Request {
   const headers = new Headers({
@@ -258,18 +218,10 @@ function jsonRequest(
   }
 
   return new Request(`http://localhost${path}`, {
-    method: options.method ?? "PATCH",
+    method: "POST",
     headers,
     body: JSON.stringify(payload)
   });
-}
-
-function apiRequest(path: string): Request {
-  return new Request(`http://localhost${path}`);
-}
-
-function uniqueTestIp(): string {
-  return `203.0.113.${Math.floor(Math.random() * 200) + 1}`;
 }
 
 async function initializeForRoutes(): Promise<void> {
@@ -288,15 +240,15 @@ async function initializeForRoutes(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
-prisma.idempotencyRecord.deleteMany(),
+    prisma.restoreOperation.deleteMany(),
+    prisma.backupOperation.deleteMany(),
+    prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
-    prisma.restoreOperation.deleteMany(),
-    prisma.backupOperation.deleteMany(),
     prisma.customerAddress.deleteMany(),
 
     prisma.customerStore.deleteMany(),

@@ -43,7 +43,12 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, edicion de permisos, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado, permisos insuficientes y revocacion de sesiones al cambiar permisos de rol.
-- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de redireccion por instalacion, login, sesion activa, logout y permisos denegados.
+- `tests/platform/backups-routes.test.ts`: contrato HTTP de copias, permisos, CSRF, validacion, bloqueo por mantenimiento y DTOs sin rutas de artefactos.
+- `tests/platform/backup-executor.test.ts`: worker de copias, cifrado, verificacion, timeout y auditoria.
+- `tests/platform/restores-routes.test.ts`: contrato HTTP de restauraciones, permisos, CSRF, validacion estricta y DTOs sin `storageKey`.
+- `tests/platform/restore-executor.test.ts`: worker de validacion no destructiva de restauraciones, metadatos, descifrado, orquestacion de aplicacion con copia previa, mantenimiento activo y estados de recuperacion.
+- `tests/platform/maintenance-routes.test.ts`: contrato HTTP de mantenimiento, permiso especifico, CSRF, activacion sobre restauraciones validadas y bloqueo 423.
+- `tests/e2e/platform-install-login-logout.spec.ts`: flujo navegador de redireccion por instalacion, login, sesion activa, logout, permisos denegados, solicitud de restauracion, activacion/desactivacion de mantenimiento, bloqueo 423 y login/logout durante mantenimiento.
 
 ## 5. Verificaciones manuales iniciales
 

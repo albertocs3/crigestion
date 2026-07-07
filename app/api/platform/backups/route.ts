@@ -11,6 +11,7 @@ import {
   requestManualBackupSchema
 } from "@/modules/platform/application/backups";
 import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
+import { scheduleRequestedBackupProcessing } from "@/modules/platform/infrastructure/backupAutoProcessor";
 import {
   getCorrelationId,
   invalidJson,
@@ -118,6 +119,8 @@ export async function POST(request: Request) {
   if (!result.ok) {
     return jsonResponse(request, result.error, { status: result.status });
   }
+
+  scheduleRequestedBackupProcessing();
 
   return jsonResponse(request, result.value, { status: result.status });
 }
