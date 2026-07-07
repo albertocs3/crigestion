@@ -252,6 +252,8 @@ function drawCustomerBox(
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
   const addressLines = fiscalAddressLines(invoice.customerSnapshot.fiscalAddress);
+  const rightX = cm(19.05);
+  const maxTextWidth = cm(5.9);
 
   content.rect(cm(11.5), yFromTop(6.5, 3), cm(8), cm(3), {
     fill: lighten(accent, 0.9)
@@ -260,11 +262,22 @@ function drawCustomerBox(
     stroke: accent,
     lineWidth: 0.8
   });
-  content.text("CLIENTE", cm(17.55), yText(7.05), 10, boldFont, accent);
-  content.text(invoice.customerSnapshot.legalName, cm(17.95), yText(7.55), 11, boldFont);
-  content.text(`NIF: ${invoice.customerSnapshot.taxId}`, cm(16.7), yText(8), 10);
+  content.textRight("CLIENTE", rightX, yText(7.05), 10, boldFont, accent);
+  content.textRight(
+    fitText(invoice.customerSnapshot.legalName, 11, maxTextWidth, boldFont),
+    rightX,
+    yText(7.55),
+    11,
+    boldFont
+  );
+  content.textRight(`NIF: ${invoice.customerSnapshot.taxId}`, rightX, yText(8), 10);
   addressLines.slice(0, 2).forEach((line, index) => {
-    content.text(line, cm(16.1), yText(8.45 + index * 0.45), 10);
+    content.textRight(
+      fitText(line, 10, maxTextWidth),
+      rightX,
+      yText(8.45 + index * 0.45),
+      10
+    );
   });
 }
 
@@ -480,6 +493,27 @@ function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}.`;
 }
 
+function fitText(
+  value: string,
+  size: number,
+  maxWidth: number,
+  font = regularFont
+): string {
+  const text = normalizePdfText(value);
+
+  if (estimateTextWidth(text, size, font) <= maxWidth) {
+    return text;
+  }
+
+  let fitted = text;
+
+  while (fitted.length > 1 && estimateTextWidth(`${fitted}.`, size, font) > maxWidth) {
+    fitted = fitted.slice(0, -1);
+  }
+
+  return `${fitted}.`;
+}
+
 function wrapText(value: string, maxCharacters: number): string[] {
   const words = value.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -604,6 +638,20 @@ class PdfPageContent {
     this.operations.push(
       `BT ${colorCommand(color)} /${font} ${size} Tf 1 0 0 1 ${number(x)} ${number(y)} Tm ${pdfText(value)} Tj ET`
     );
+  }
+
+  textRight(
+    value: string,
+    rightX: number,
+    y: number,
+    size: number,
+    font = regularFont,
+    color: [number, number, number] = [0.05, 0.09, 0.16]
+  ): void {
+    const text = normalizePdfText(value);
+    const width = estimateTextWidth(text, size, font);
+
+    this.text(text, rightX - width, y, size, font, color);
   }
 
   line(
@@ -807,6 +855,12 @@ function normalizePdfText(value: string): string {
 
 function escapePdfText(value: string): string {
   return value.replace(/[\\()]/g, (character) => `\\${character}`);
+}
+
+function estimateTextWidth(value: string, size: number, font: string): number {
+  const boldFactor = font === boldFont ? 0.58 : 0.52;
+
+  return normalizePdfText(value).length * size * boldFactor;
 }
 
 function number(value: number): string {
