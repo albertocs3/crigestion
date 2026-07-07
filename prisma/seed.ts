@@ -14,7 +14,10 @@ async function main() {
     ["Customers.View", "Consultar clientes"],
     ["Customers.Manage", "Gestionar clientes"],
     ["Catalog.View", "Consultar catalogo"],
-    ["Catalog.Manage", "Gestionar catalogo"]
+    ["Catalog.Manage", "Gestionar catalogo"],
+    ["Billing.View", "Consultar facturas"],
+    ["Billing.ManageDrafts", "Gestionar borradores de facturacion"],
+    ["Billing.Issue", "Emitir facturas"]
   ] as const;
   const catalogTaxRates = [
     ["IVA_21", "IVA general 21%", "21.00", true],

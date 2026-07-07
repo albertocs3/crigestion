@@ -121,6 +121,45 @@ enum CustomerStoreStatus {
   INACTIVE
 }
 
+enum InvoiceDocumentType {
+  STANDARD
+}
+
+enum InvoiceDocumentStatus {
+  DRAFT
+  ISSUED
+  RECTIFIED
+  VOIDED
+}
+
+enum InvoicePaymentStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  UNPAID
+}
+
+enum InvoiceVerifactuStatus {
+  NOT_APPLICABLE
+  PENDING
+  SENT
+  ACCEPTED
+  ACCEPTED_WITH_ERRORS
+  REJECTED
+}
+
+enum InvoiceOrigin {
+  MANUAL
+  SUBSCRIPTION
+}
+
+enum InvoiceDueDateStatus {
+  PENDING
+  PAID
+  RETURNED
+  UNPAID
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -188,6 +227,7 @@ model Customer {
   addresses    CustomerAddress[]
   stores       CustomerStore[]
   sepaMandates CustomerSepaMandate[]
+  invoices     Invoice[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -318,6 +358,9 @@ model User {
   createdCatalogItems          CatalogItem[]              @relation("CatalogItemsCreatedBy")
   updatedCatalogItems          CatalogItem[]              @relation("CatalogItemsUpdatedBy")
   createdCatalogStockMovements CatalogStockMovement[]     @relation("CatalogStockMovementsCreatedBy")
+  createdInvoices              Invoice[]                  @relation("InvoicesCreatedBy")
+  updatedInvoices              Invoice[]                  @relation("InvoicesUpdatedBy")
+  issuedInvoices               Invoice[]                  @relation("InvoicesIssuedBy")
   initialInstallation          Installation?
 
   @@map("users")
@@ -349,6 +392,7 @@ model CatalogItem {
   createdBy         User                   @relation("CatalogItemsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy         User?                  @relation("CatalogItemsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   stockMovements    CatalogStockMovement[]
+  invoiceLines      InvoiceLine[]
 
   @@index([status, name, id])
   @@index([kind, status, name, id])
@@ -402,10 +446,151 @@ model CatalogTaxRate {
   createdAt DateTime             @default(now()) @db.Timestamptz(3)
   updatedAt DateTime             @updatedAt @db.Timestamptz(3)
 
-  items CatalogItem[]
+  items        CatalogItem[]
+  invoiceLines InvoiceLine[]
 
   @@index([status, name, id])
   @@map("catalog_tax_rates")
+}
+
+model InvoiceNumberSequence {
+  id         String   @id @default(uuid()) @db.Uuid
+  series     String   @db.VarChar(8)
+  year       Int
+  nextNumber Int      @default(1)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([series, year])
+  @@map("invoice_number_sequences")
+}
+
+model Invoice {
+  id                              String                  @id @default(uuid()) @db.Uuid
+  documentType                    InvoiceDocumentType     @default(STANDARD)
+  origin                          InvoiceOrigin           @default(MANUAL)
+  status                          InvoiceDocumentStatus   @default(DRAFT)
+  paymentStatus                   InvoicePaymentStatus    @default(PENDING)
+  verifactuStatus                 InvoiceVerifactuStatus  @default(NOT_APPLICABLE)
+  series                          String                  @default("F") @db.VarChar(8)
+  year                            Int
+  numberSequence                  Int?
+  number                          String?                 @unique @db.VarChar(20)
+  customerId                      String                  @db.Uuid
+  customerCodeSnapshot            String                  @db.VarChar(20)
+  customerLegalNameSnapshot       String                  @db.VarChar(200)
+  customerTaxIdSnapshot           String                  @db.VarChar(32)
+  customerFiscalTreatmentSnapshot CustomerFiscalTreatment
+  customerFiscalAddressSnapshot   Json
+  issueDate                       DateTime                @db.Date
+  operationDate                   DateTime                @db.Date
+  issuedAt                        DateTime?               @db.Timestamptz(3)
+  subtotal                        Decimal                 @default(0) @db.Decimal(12, 2)
+  discountTotal                   Decimal                 @default(0) @db.Decimal(12, 2)
+  taxableBase                     Decimal                 @default(0) @db.Decimal(12, 2)
+  taxAmount                       Decimal                 @default(0) @db.Decimal(12, 2)
+  total                           Decimal                 @default(0) @db.Decimal(12, 2)
+  notes                           String?                 @db.VarChar(1000)
+  createdById                     String                  @db.Uuid
+  updatedById                     String?                 @db.Uuid
+  issuedById                      String?                 @db.Uuid
+  createdAt                       DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt                       DateTime                @updatedAt @db.Timestamptz(3)
+
+  customer        Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy       User                    @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy       User?                   @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  issuedBy        User?                   @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  lines           InvoiceLine[]
+  taxSummaries    InvoiceTaxSummary[]
+  dueDates        InvoiceDueDate[]
+  verifactuRecord InvoiceVerifactuRecord?
+
+  @@unique([series, year, numberSequence])
+  @@index([status, issueDate, id])
+  @@index([customerId, issueDate, id])
+  @@index([paymentStatus, issueDate, id])
+  @@index([verifactuStatus, issueDate, id])
+  @@index([createdById, createdAt])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id                      String           @id @default(uuid()) @db.Uuid
+  invoiceId               String           @db.Uuid
+  position                Int
+  catalogItemId           String?          @db.Uuid
+  catalogItemCodeSnapshot String?          @db.VarChar(20)
+  catalogItemKindSnapshot CatalogItemKind?
+  description             String           @db.VarChar(500)
+  quantity                Decimal          @db.Decimal(12, 3)
+  unitPrice               Decimal          @db.Decimal(12, 2)
+  discountPercent         Decimal          @default(0) @db.Decimal(5, 2)
+  discountAmount          Decimal          @default(0) @db.Decimal(12, 2)
+  taxRateId               String           @db.Uuid
+  taxRateCodeSnapshot     String           @db.VarChar(40)
+  taxRateNameSnapshot     String           @db.VarChar(120)
+  taxRateSnapshot         Decimal          @db.Decimal(5, 2)
+  lineSubtotal            Decimal          @db.Decimal(12, 2)
+  lineDiscountTotal       Decimal          @db.Decimal(12, 2)
+  lineTaxableBase         Decimal          @db.Decimal(12, 2)
+  lineTaxAmount           Decimal          @db.Decimal(12, 2)
+  lineTotal               Decimal          @db.Decimal(12, 2)
+  createdAt               DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime         @updatedAt @db.Timestamptz(3)
+
+  invoice     Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  catalogItem CatalogItem?   @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  taxRate     CatalogTaxRate @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, position])
+  @@index([catalogItemId])
+  @@index([taxRateId])
+  @@map("invoice_lines")
+}
+
+model InvoiceTaxSummary {
+  id          String  @id @default(uuid()) @db.Uuid
+  invoiceId   String  @db.Uuid
+  taxRateCode String  @db.VarChar(40)
+  taxRate     Decimal @db.Decimal(5, 2)
+  taxableBase Decimal @db.Decimal(12, 2)
+  taxAmount   Decimal @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(12, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, taxRateCode, taxRate])
+  @@map("invoice_tax_summaries")
+}
+
+model InvoiceDueDate {
+  id            String                @id @default(uuid()) @db.Uuid
+  invoiceId     String                @db.Uuid
+  position      Int
+  dueDate       DateTime              @db.Date
+  amount        Decimal               @db.Decimal(12, 2)
+  paymentMethod CustomerPaymentMethod
+  status        InvoiceDueDateStatus  @default(PENDING)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, position])
+  @@index([status, dueDate, id])
+  @@map("invoice_due_dates")
+}
+
+model InvoiceVerifactuRecord {
+  id            String                 @id @default(uuid()) @db.Uuid
+  invoiceId     String                 @unique @db.Uuid
+  status        InvoiceVerifactuStatus @default(PENDING)
+  lastErrorCode String?                @db.VarChar(120)
+  createdAt     DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime               @updatedAt @db.Timestamptz(3)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([status, createdAt])
+  @@map("invoice_verifactu_records")
 }
 
 model ReservedUserName {

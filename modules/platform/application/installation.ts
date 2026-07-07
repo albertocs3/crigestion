@@ -47,7 +47,10 @@ const platformPermissions = [
   ["Customers.View", "Consultar clientes"],
   ["Customers.Manage", "Gestionar clientes"],
   ["Catalog.View", "Consultar catalogo"],
-  ["Catalog.Manage", "Gestionar catalogo"]
+  ["Catalog.Manage", "Gestionar catalogo"],
+  ["Billing.View", "Consultar facturas"],
+  ["Billing.ManageDrafts", "Gestionar borradores de facturacion"],
+  ["Billing.Issue", "Emitir facturas"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;
