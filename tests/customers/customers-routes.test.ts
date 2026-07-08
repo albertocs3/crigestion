@@ -109,6 +109,24 @@ describe("customers HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before creating customers", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await customersPost(
+      jsonRequest("/api/customers", createCustomerPayload(), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("rejects users without customer permissions", async () => {
     await createLimitedUserWithoutCustomers();
     await loginWith("auditor", limitedPassword);
@@ -280,6 +298,30 @@ describe("customers HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before updating customers", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createResponse = await customersPost(
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+    );
+    const created = await createResponse.json();
+
+    const response = await customerPatch(
+      jsonRequest(
+        `/api/customers/${created.id}`,
+        { action: "deactivate" },
+        { csrfToken, idempotencyKey: null, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ customerId: created.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("rejects duplicate fiscal identifiers with a stable conflict", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -411,6 +453,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: string;
   } = {}
 ): Request {
@@ -425,6 +468,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

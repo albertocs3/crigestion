@@ -27,6 +27,7 @@ export function CustomerStoreEditForm({ store }: { store: CustomerStoreListItem 
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify({

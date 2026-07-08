@@ -4,7 +4,7 @@
 
 - Base: `/api/customers`.
 - Autenticacion obligatoria con sesion web.
-- Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
+- Las mutaciones validan `Origin`, token CSRF, `Idempotency-Key` y modo mantenimiento.
 - Las respuestas son DTOs; no se exponen modelos Prisma.
 - Los eventos de auditoria no incluyen NIF, email, telefono, direccion, IBAN ni observaciones completas.
 
@@ -126,6 +126,7 @@ Errores:
 
 | Estado | Codigo | Uso |
 |---|---|---|
+| `400` | `IDEMPOTENCY_KEY_REQUIRED` / `IDEMPOTENCY_KEY_INVALID` | Falta la cabecera idempotente o supera la longitud permitida. |
 | `401` | `UNAUTHENTICATED` | No hay sesion valida. |
 | `403` | `FORBIDDEN` / `CSRF_TOKEN_INVALID` / `ORIGIN_NOT_ALLOWED` | Falta permiso o defensa CSRF/origen. |
 | `409` | `CUSTOMER_TAX_ID_ALREADY_USED` | El identificador fiscal normalizado ya existe. |
