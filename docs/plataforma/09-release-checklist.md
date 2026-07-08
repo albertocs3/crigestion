@@ -31,8 +31,11 @@ Revisar como minimo:
 | `BACKUP_DIRECTORY` | Obligatoria si se ejecutan copias | Directorio server-side fuera de `public/`. |
 | `BACKUP_ENCRYPTION_KEY` | Obligatoria si se ejecutan copias | Clave hex de 64 caracteres o base64 de 32 bytes. |
 | `PG_DUMP_BINARY` | Opcional | Por defecto `pg_dump`. |
+| `BACKUP_AUTO_PROCESS` | Opcional | En produccion queda deshabilitado salvo valor `true`; preferir worker gestionado si el despliegue puede cortar tareas en segundo plano. |
 | `BACKUP_RUNNING_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `RUNNING` antiguos como fallidos. |
 | `RESTORE_VALIDATION_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `VALIDATING` antiguos como fallidos. |
+| `PG_RESTORE_BINARY` | Opcional | Por defecto `pg_restore`; usado solo por `restore:apply`. |
+| `RESTORE_TARGET_DATABASE_URL` | Obligatoria en produccion si se aplica una restauracion real | Base destino explicita para `pg_restore`; en desarrollo puede omitirse para usar `DATABASE_URL`. |
 
 ## 4. Validacion previa
 
@@ -76,8 +79,9 @@ Orden recomendado:
 4. Aplicar migraciones con `npm run prisma:deploy`.
 5. Arrancar la aplicacion con variables runtime definitivas.
 6. Verificar health check.
-7. Verificar que el proceso que ejecuta `npm run backup:run` tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+7. Verificar que el proceso que ejecuta copias, automatico o `npm run backup:run`, tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
 8. Verificar que el proceso que ejecuta `npm run restore:validate` tiene acceso a `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+9. Si se habilita aplicacion real, verificar que el proceso que ejecuta `npm run restore:apply` o `POST /api/platform/restores/apply` tiene acceso a `pg_restore`, `RESTORE_TARGET_DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
 
 ## 7. Verificacion post-despliegue
 
@@ -120,3 +124,6 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - El worker de copias pasa a `pg_dump` un entorno minimo y no propaga secretos de aplicacion salvo la contrasena PostgreSQL como `PGPASSWORD`.
 - Las restauraciones se validan primero de forma no destructiva con `npm run restore:validate`; este comando no ejecuta `pg_restore` ni modifica datos de negocio.
 - Antes de una restauracion real debe activarse modo mantenimiento; las mutaciones normales quedan bloqueadas, pero login/logout/sesion/CSRF y el endpoint de mantenimiento siguen disponibles para evitar lockout.
+- La aplicacion real de una restauracion debe crear antes una copia previa verificada y conservar su identificador en `preRestoreBackupOperationId`.
+- El paso destructivo de restauracion solo debe activarse con mantenimiento en modo `RESTORE`.
+- En produccion, `npm run restore:apply` y `POST /api/platform/restores/apply` exigen `RESTORE_TARGET_DATABASE_URL` para evitar aplicar por accidente sobre `DATABASE_URL`.

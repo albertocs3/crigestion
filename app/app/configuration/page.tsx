@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { getBillingConfiguration } from "@/modules/billing/application/configuration";
+import { BillingConfigurationForm } from "@/modules/billing/presentation/BillingConfigurationForm";
 import { getPlatformConfiguration } from "@/modules/platform/application/configuration";
 import { CompanyConfigurationForm } from "@/modules/platform/presentation/CompanyConfigurationForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -28,6 +30,7 @@ export default async function ConfigurationPage() {
   }
 
   const configuration = await getPlatformConfiguration();
+  const billingConfiguration = await getBillingConfiguration();
 
   return (
     <main className="shell">
@@ -63,6 +66,7 @@ export default async function ConfigurationPage() {
                 </div>
               </div>
               <CompanyConfigurationForm company={configuration.company} />
+              <BillingConfigurationForm configuration={billingConfiguration} />
             </>
           ) : (
             <p className="message error">La configuracion de plataforma no existe.</p>

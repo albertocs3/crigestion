@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { seedDefaultCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import { productVersion } from "@/modules/platform/application/version";
 
@@ -42,7 +43,14 @@ const platformPermissions = [
   ["Platform.ManageConfiguration", "Gestionar configuracion"],
   ["Platform.ViewAudit", "Consultar auditoria"],
   ["Platform.ManageBackups", "Gestionar copias de seguridad"],
-  ["Platform.ManageMaintenance", "Gestionar modo mantenimiento"]
+  ["Platform.ManageMaintenance", "Gestionar modo mantenimiento"],
+  ["Customers.View", "Consultar clientes"],
+  ["Customers.Manage", "Gestionar clientes"],
+  ["Catalog.View", "Consultar catalogo"],
+  ["Catalog.Manage", "Gestionar catalogo"],
+  ["Billing.View", "Consultar facturas"],
+  ["Billing.ManageDrafts", "Gestionar borradores de facturacion"],
+  ["Billing.Issue", "Emitir facturas"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;
@@ -184,6 +192,8 @@ export async function initializePlatform(
           }
         });
       }
+
+      await seedDefaultCatalogTaxRates(tx);
 
       const normalizedUserName = normalizeUserName(command.administrator.userName);
       const now = new Date();

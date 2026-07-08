@@ -17,6 +17,7 @@ import {
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { hashPassword } from "@/modules/platform/application/passwords";
 
 type CookieSetOptions = {
   httpOnly?: boolean;
@@ -55,6 +56,7 @@ vi.mock("next/headers", () => ({
 }));
 
 const adminPassword = "Cambiar-esta-clave-2026";
+const limitedPassword = "Cambiar-auditor-2026";
 const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
@@ -90,6 +92,20 @@ describe("maintenance HTTP contracts", () => {
     expect(body).toEqual({
       code: "UNAUTHENTICATED",
       message: "No hay una sesion activa."
+    });
+  });
+
+  it("rejects users without Platform.ManageMaintenance", async () => {
+    await createLimitedUserWithoutMaintenance();
+    await loginWith("auditor", limitedPassword);
+
+    const response = await maintenanceGet(apiRequest("/api/platform/maintenance"));
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      code: "FORBIDDEN",
+      message: "No tienes permiso para realizar esta accion."
     });
   });
 
@@ -211,6 +227,29 @@ describe("maintenance HTTP contracts", () => {
     });
   });
 
+  it("rejects maintenance payloads with unknown fields", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const restore = await createValidatedRestore();
+
+    const response = await maintenancePatch(
+      jsonRequest(
+        "/api/platform/maintenance",
+        {
+          enabled: true,
+          restoreOperationId: restore.id,
+          reason: "Ventana de restauracion controlada",
+          enabledById: randomUUID()
+        },
+        { csrfToken }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
   it("blocks normal platform mutations while maintenance is active", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
@@ -275,6 +314,36 @@ async function createRequestedRestore() {
       backupOperationId: backup.id,
       requestedById: admin.id,
       reason: "Restauracion de prueba controlada"
+    }
+  });
+}
+
+async function createLimitedUserWithoutMaintenance(): Promise<void> {
+  const role = await prisma.role.create({
+    data: {
+      code: "ConsultaAuditoria",
+      name: "Consulta auditoria",
+      isProtected: false,
+      permissions: {
+        create: {
+          permission: {
+            connect: {
+              code: "Platform.ViewAudit"
+            }
+          }
+        }
+      }
+    }
+  });
+
+  await prisma.user.create({
+    data: {
+      displayName: "Usuario Auditor",
+      userName: "auditor",
+      normalizedUserName: "auditor",
+      passwordHash: hashPassword(limitedPassword),
+      status: "ACTIVE",
+      roleId: role.id
     }
   });
 }
@@ -389,6 +458,12 @@ async function resetPlatformTables(): Promise<void> {
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),

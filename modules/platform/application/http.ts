@@ -143,8 +143,55 @@ export function originNotAllowed() {
 export function validationError(issues: unknown) {
   return {
     code: "VALIDATION_ERROR",
+    message: validationErrorMessage(issues),
     issues
   } as const;
+}
+
+function validationErrorMessage(issues: unknown): string {
+  const firstFieldIssue = firstValidationFieldIssue(issues);
+
+  if (firstFieldIssue) {
+    return `${firstFieldIssue.field}: ${firstFieldIssue.message}`;
+  }
+
+  const firstFormIssue = firstValidationFormIssue(issues);
+
+  if (firstFormIssue) {
+    return firstFormIssue;
+  }
+
+  return "La peticion contiene campos invalidos.";
+}
+
+function firstValidationFieldIssue(
+  issues: unknown
+): { field: string; message: string } | null {
+  if (!isRecord(issues) || !isRecord(issues.fieldErrors)) {
+    return null;
+  }
+
+  for (const [field, messages] of Object.entries(issues.fieldErrors)) {
+    if (Array.isArray(messages) && typeof messages[0] === "string") {
+      return { field, message: messages[0] };
+    }
+  }
+
+  return null;
+}
+
+function firstValidationFormIssue(issues: unknown): string | null {
+  if (!isRecord(issues) || !Array.isArray(issues.formErrors)) {
+    return null;
+  }
+
+  const [message] = issues.formErrors;
+
+  return typeof message === "string" ? message : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function isValidCorrelationId(value: string | null): value is string {

@@ -1,7 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
+import { PassThrough, Readable } from "node:stream";
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
@@ -11,7 +12,11 @@ import {
   type InitializeCommand
 } from "@/modules/platform/application/installation";
 import { processNextRequestedBackup } from "@/modules/platform/infrastructure/backupExecutor";
-import { processNextRequestedRestore } from "@/modules/platform/infrastructure/restoreExecutor";
+import {
+  createPgRestoreApplyPort,
+  processNextRequestedRestore,
+  processNextValidatedRestoreApply
+} from "@/modules/platform/infrastructure/restoreExecutor";
 
 const baseCommand: InitializeCommand = {
   company: {
@@ -265,6 +270,339 @@ describe("restore executor", () => {
     expect(updatedRestore.status).toBe("VALIDATED");
   });
 
+  it("applies a validated restore only when restore maintenance is active", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const restore = await createValidatedRestore(backup.id);
+
+    const idleResult = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      createDumpStream: () => Readable.from(["pre restore dump"]),
+      applyRestore: async () => {}
+    });
+
+    await enableMaintenanceForRestore(restore.id);
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+
+    const result = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      actor: {
+        userId: admin.id,
+        correlationId: "restore-apply-0001"
+      },
+      createDumpStream: () => Readable.from(["pre restore dump"]),
+      applyRestore: async ({ restoreOperationId, backupOperationId }) => {
+        expect(restoreOperationId).toBe(restore.id);
+        expect(backupOperationId).toBe(backup.id);
+      }
+    });
+    const updatedRestore = await prisma.restoreOperation.findUniqueOrThrow({
+      where: { id: restore.id }
+    });
+    const preRestoreBackup = await prisma.backupOperation.findUniqueOrThrow({
+      where: { id: updatedRestore.preRestoreBackupOperationId ?? "" }
+    });
+    const completedEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "RESTORE_COMPLETED" }
+    });
+
+    expect(idleResult).toEqual({
+      processed: false,
+      reason: "NO_VALIDATED_RESTORE_IN_MAINTENANCE"
+    });
+    expect(result).toMatchObject({
+      processed: true,
+      operationId: restore.id,
+      status: "COMPLETED",
+      backupOperationId: backup.id,
+      preRestoreBackupOperationId: preRestoreBackup.id
+    });
+    expect(updatedRestore.status).toBe("COMPLETED");
+    expect(updatedRestore.completedAt?.toISOString()).toBe("2026-07-02T10:00:00.000Z");
+    expect(preRestoreBackup.status).toBe("VERIFIED");
+    expect(completedEvent.payload).toMatchObject({
+      actorUserId: admin.id,
+      correlationId: "restore-apply-0001",
+      restoreOperationId: restore.id,
+      backupOperationId: backup.id,
+      preRestoreBackupOperationId: preRestoreBackup.id,
+      status: "COMPLETED"
+    });
+    expect(completedEvent.actorType).toBe("USER");
+    expect(JSON.stringify(completedEvent.payload)).not.toContain("storageKey");
+  });
+
+  it("records completion when pg_restore replaces restore control rows", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const restore = await createValidatedRestore(backup.id);
+    await enableMaintenanceForRestore(restore.id);
+
+    const result = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      createDumpStream: () => Readable.from(["pre restore dump"]),
+      applyRestore: async () => {
+        const preRestoreBackup = await prisma.restoreOperation
+          .findUniqueOrThrow({
+            where: { id: restore.id },
+            select: { preRestoreBackupOperationId: true }
+          })
+          .then((operation) => operation.preRestoreBackupOperationId);
+
+        await prisma.platformMaintenanceState.deleteMany();
+        await prisma.restoreOperation.deleteMany({ where: { id: restore.id } });
+        await prisma.backupOperation.deleteMany({
+          where: { id: preRestoreBackup ?? "" }
+        });
+        await prisma.backupOperation.update({
+          where: { id: backup.id },
+          data: {
+            status: "RUNNING",
+            completedAt: null,
+            storageKey: null,
+            sizeBytes: null,
+            sha256: null
+          }
+        });
+      }
+    });
+    const updatedRestore = await prisma.restoreOperation.findUniqueOrThrow({
+      where: { id: restore.id }
+    });
+    const sourceBackup = await prisma.backupOperation.findUniqueOrThrow({
+      where: { id: backup.id }
+    });
+    const preRestoreBackup = await prisma.backupOperation.findUniqueOrThrow({
+      where: { id: updatedRestore.preRestoreBackupOperationId ?? "" }
+    });
+
+    expect(result).toMatchObject({
+      processed: true,
+      operationId: restore.id,
+      status: "COMPLETED",
+      backupOperationId: backup.id,
+      preRestoreBackupOperationId: preRestoreBackup.id
+    });
+    expect(updatedRestore.status).toBe("COMPLETED");
+    expect(sourceBackup.status).toBe("VERIFIED");
+    expect(sourceBackup.storageKey).toBe(backup.storageKey);
+    expect(preRestoreBackup.status).toBe("VERIFIED");
+  });
+
+  it("requires recovery when the destructive apply step fails after the pre-restore backup", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const restore = await createValidatedRestore(backup.id);
+    await enableMaintenanceForRestore(restore.id);
+
+    const result = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      createDumpStream: () => Readable.from(["pre restore dump"]),
+      applyRestore: async () => {
+        throw new Error("pg_restore failed");
+      }
+    });
+    const updatedRestore = await prisma.restoreOperation.findUniqueOrThrow({
+      where: { id: restore.id }
+    });
+    const recoveryEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "RESTORE_REQUIRES_RECOVERY" }
+    });
+
+    expect(result).toMatchObject({
+      processed: true,
+      operationId: restore.id,
+      status: "REQUIRES_RECOVERY",
+      errorCode: "RESTORE_APPLY_FAILED"
+    });
+    expect(updatedRestore.status).toBe("REQUIRES_RECOVERY");
+    expect(updatedRestore.preRestoreBackupOperationId).toBeTruthy();
+    expect(updatedRestore.errorCode).toBe("RESTORE_APPLY_FAILED");
+    expect(recoveryEvent.payload).toMatchObject({
+      restoreOperationId: restore.id,
+      backupOperationId: backup.id,
+      status: "REQUIRES_RECOVERY",
+      errorCode: "RESTORE_APPLY_FAILED"
+    });
+  });
+
+  it("fails without requiring recovery when restore target configuration is invalid", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const restore = await createValidatedRestore(backup.id);
+    await enableMaintenanceForRestore(restore.id);
+
+    const result = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      createDumpStream: () => Readable.from(["pre restore dump"]),
+      applyRestore: createPgRestoreApplyPort({
+        targetDatabaseUrl: "mysql://restore_user:restore_password@localhost:3306/restore_db",
+        pgRestoreBinary: "pg_restore_test"
+      })
+    });
+    const updatedRestore = await prisma.restoreOperation.findUniqueOrThrow({
+      where: { id: restore.id }
+    });
+    const preRestoreBackup = await prisma.backupOperation.findUniqueOrThrow({
+      where: { id: updatedRestore.preRestoreBackupOperationId ?? "" }
+    });
+    const failedEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "RESTORE_APPLY_FAILED" }
+    });
+
+    expect(result).toMatchObject({
+      processed: true,
+      operationId: restore.id,
+      status: "FAILED",
+      errorCode: "RESTORE_TARGET_DATABASE_URL_INVALID",
+      preRestoreBackupOperationId: preRestoreBackup.id
+    });
+    expect(updatedRestore.status).toBe("FAILED");
+    expect(updatedRestore.preRestoreBackupOperationId).toBe(preRestoreBackup.id);
+    expect(preRestoreBackup.status).toBe("VERIFIED");
+    expect(failedEvent.payload).toMatchObject({
+      restoreOperationId: restore.id,
+      status: "FAILED",
+      errorCode: "RESTORE_TARGET_DATABASE_URL_INVALID"
+    });
+  });
+
+  it("fails before creating the pre-restore backup when no apply port is configured", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const restore = await createValidatedRestore(backup.id);
+    await enableMaintenanceForRestore(restore.id);
+
+    const result = await processNextValidatedRestoreApply({
+      prisma,
+      env: backupEnv(backupDirectory),
+      now: fixedNow,
+      createDumpStream: () => Readable.from(["pre restore dump"])
+    });
+    const updatedRestore = await prisma.restoreOperation.findUniqueOrThrow({
+      where: { id: restore.id }
+    });
+
+    expect(result).toMatchObject({
+      processed: true,
+      operationId: restore.id,
+      status: "FAILED",
+      errorCode: "RESTORE_APPLY_PORT_NOT_CONFIGURED"
+    });
+    expect(updatedRestore.status).toBe("FAILED");
+    expect(updatedRestore.preRestoreBackupOperationId).toBeNull();
+    expect(updatedRestore.errorCode).toBe("RESTORE_APPLY_PORT_NOT_CONFIGURED");
+  });
+
+  it("streams the decrypted backup artifact to pg_restore without putting secrets in args", async () => {
+    const backup = await createVerifiedBackupFromDump(backupDirectory);
+    const receivedChunks: Buffer[] = [];
+    const spawnCalls: Array<{
+      command: string;
+      args: string[];
+      password: string | undefined;
+    }> = [];
+    const fakeSpawn = (
+      command: string,
+      args: readonly string[],
+      options: { env?: NodeJS.ProcessEnv }
+    ) => {
+      const child = new EventEmitter() as ReturnType<typeof import("node:child_process").spawn>;
+      const stdin = new PassThrough();
+      const stderr = new PassThrough();
+
+      spawnCalls.push({
+        command,
+        args: [...args],
+        password: options.env?.PGPASSWORD
+      });
+      stdin.on("data", (chunk: Buffer) => {
+        receivedChunks.push(chunk);
+      });
+      stdin.on("finish", () => {
+        setImmediate(() => child.emit("close", 0));
+      });
+      Object.assign(child, {
+        stdin,
+        stderr
+      });
+
+      return child;
+    };
+    const artifactPath = path.join(backupDirectory, backup.storageKey ?? "");
+    const applyRestore = createPgRestoreApplyPort({
+      targetDatabaseUrl: "postgresql://restore_user:restore_password@localhost:5432/restore_db",
+      pgRestoreBinary: "pg_restore_test",
+      spawnProcess: fakeSpawn as typeof import("node:child_process").spawn
+    });
+
+    await applyRestore({
+      restoreOperationId: randomUUID(),
+      backupOperationId: backup.id,
+      artifactPath,
+      backupEncryptionKey: backupKey(),
+      env: {
+        BACKUP_DIRECTORY: backupDirectory,
+        BACKUP_ENCRYPTION_KEY: backupKey().toString("hex"),
+        PG_RESTORE_BINARY: "pg_restore_test",
+        RESTORE_VALIDATION_TIMEOUT_MINUTES: 720
+      }
+    });
+
+    expect(Buffer.concat(receivedChunks).toString("utf8")).toBe("pg dump content");
+    expect(spawnCalls).toEqual([
+      {
+        command: "pg_restore_test",
+        args: [
+          "--clean",
+          "--if-exists",
+          "--single-transaction",
+          "--no-owner",
+          "--no-privileges",
+          "--host",
+          "localhost",
+          "--port",
+          "5432",
+          "--username",
+          "restore_user",
+          "--dbname",
+          "restore_db"
+        ],
+        password: "restore_password"
+      }
+    ]);
+    expect(spawnCalls[0]?.args.join(" ")).not.toContain("restore_password");
+  });
+
+  it("rejects non-PostgreSQL restore target URLs", async () => {
+    const applyRestore = createPgRestoreApplyPort({
+      targetDatabaseUrl: "mysql://restore_user:restore_password@localhost:3306/restore_db",
+      pgRestoreBinary: "pg_restore_test"
+    });
+
+    await expect(
+      applyRestore({
+        restoreOperationId: randomUUID(),
+        backupOperationId: randomUUID(),
+        artifactPath: path.join(backupDirectory, "missing.backup"),
+        backupEncryptionKey: backupKey(),
+        env: {
+          BACKUP_DIRECTORY: backupDirectory,
+          BACKUP_ENCRYPTION_KEY: backupKey().toString("hex"),
+          PG_RESTORE_BINARY: "pg_restore_test",
+          RESTORE_VALIDATION_TIMEOUT_MINUTES: 720
+        }
+      })
+    ).rejects.toThrow("RESTORE_TARGET_DATABASE_URL_INVALID");
+  });
+
   it("does nothing when no restore has been requested", async () => {
     const result = await processNextRequestedRestore({
       prisma,
@@ -323,6 +661,37 @@ async function createRequestedRestore(backupOperationId: string) {
   });
 }
 
+async function createValidatedRestore(backupOperationId: string) {
+  const restore = await createRequestedRestore(backupOperationId);
+
+  return prisma.restoreOperation.update({
+    where: { id: restore.id },
+    data: {
+      status: "VALIDATED",
+      startedAt: new Date("2026-07-02T09:00:00.000Z"),
+      validatedAt: new Date("2026-07-02T09:05:00.000Z")
+    }
+  });
+}
+
+async function enableMaintenanceForRestore(restoreOperationId: string): Promise<void> {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: "admin" }
+  });
+
+  await prisma.platformMaintenanceState.create({
+    data: {
+      singletonKey: 1,
+      enabled: true,
+      mode: "RESTORE",
+      reason: "Ventana de restauracion controlada",
+      restoreOperationId,
+      enabledById: admin.id,
+      enabledAt: new Date("2026-07-02T09:10:00.000Z")
+    }
+  });
+}
+
 function backupEnv(backupDirectory: string): NodeJS.ProcessEnv {
   return {
     NODE_ENV: "test",
@@ -359,7 +728,7 @@ async function initializeForRestores(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
-prisma.restoreOperation.deleteMany(),
+    prisma.restoreOperation.deleteMany(),
     prisma.backupOperation.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
@@ -368,6 +737,12 @@ prisma.restoreOperation.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),

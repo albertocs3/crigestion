@@ -217,6 +217,44 @@ describe("restore HTTP contracts", () => {
     expect(incompatibleBody.code).toBe("BACKUP_VERSION_INCOMPATIBLE");
   });
 
+  it("rejects a new restore while another restore is validated", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const admin = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    const firstBackup = await createVerifiedBackup();
+    const secondBackup = await createVerifiedBackup();
+    await prisma.restoreOperation.create({
+      data: {
+        status: "VALIDATED",
+        backupOperationId: firstBackup.id,
+        requestedById: admin.id,
+        reason: "Restauracion de prueba controlada",
+        startedAt: new Date("2026-07-02T10:02:00.000Z"),
+        validatedAt: new Date("2026-07-02T10:03:00.000Z")
+      }
+    });
+
+    const response = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: secondBackup.id,
+          reason: "Restauracion posterior que debe esperar"
+        },
+        { csrfToken }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body).toEqual({
+      code: "RESTORE_OPERATION_ALREADY_ACTIVE",
+      message: "Ya existe una operacion de copia o restauracion en curso."
+    });
+  });
+
   it("lists restore operations without exposing backup storage keys", async () => {
     await loginWith("admin", adminPassword);
     const admin = await prisma.user.findUniqueOrThrow({
@@ -269,6 +307,28 @@ describe("restore HTTP contracts", () => {
         {
           backupOperationId: "not-a-uuid",
           reason: "corto"
+        },
+        { csrfToken }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(body.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("rejects restore request payloads with unknown fields", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const backup = await createVerifiedBackup();
+
+    const response = await restoresPost(
+      jsonRequest(
+        "/api/platform/restores",
+        {
+          backupOperationId: backup.id,
+          reason: "Restauracion de prueba controlada",
+          storageKey: "backup.backup"
         },
         { csrfToken }
       )
@@ -435,6 +495,12 @@ prisma.restoreOperation.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),

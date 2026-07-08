@@ -791,7 +791,7 @@ Errores:
 | 403 | `FORBIDDEN` | Falta permiso |
 | 422 | `VALIDATION_ERROR` | Query invalida |
 
-La creacion fisica, cifrado y verificacion de la copia se procesa fuera del request HTTP con `npm run backup:run`.
+La creacion fisica, cifrado y verificacion de la copia se procesa fuera del request HTTP. En desarrollo puede dispararse automaticamente tras registrar la solicitud; en operacion controlada tambien puede ejecutarse con `npm run backup:run`.
 
 ### `POST /api/platform/backups`
 
@@ -834,6 +834,7 @@ Efectos:
 - Impide otra operacion de copia `REQUESTED` o `RUNNING`, o una restauracion activa, de forma simultanea.
 - Audita `BACKUP_REQUESTED`.
 - No ejecuta el volcado fisico dentro del request HTTP.
+- Invoca el procesado automatico si `BACKUP_AUTO_PROCESS` esta habilitado. Sin valor explicito, queda habilitado en desarrollo, deshabilitado en test y deshabilitado en produccion.
 
 El worker `npm run backup:run` procesa la siguiente operacion `REQUESTED`:
 
@@ -963,6 +964,85 @@ Eventos auditables del worker:
 - `RESTORE_VALIDATED`.
 - `RESTORE_VALIDATION_FAILED`.
 
+El comando operativo `npm run restore:apply` orquesta la aplicacion real fuera
+del request HTTP y solo puede partir de una restauracion `VALIDATED` con modo
+mantenimiento activo:
+
+1. `VALIDATED -> PREPARING`.
+2. Crea una copia previa obligatoria mediante el mismo mecanismo de backup.
+3. Si la copia previa queda `VERIFIED`, enlaza `preRestoreBackupOperationId`.
+4. `PREPARING -> RESTORING`.
+5. Ejecuta `pg_restore` contra `RESTORE_TARGET_DATABASE_URL`, leyendo el
+   artefacto descifrado por stdin, usando una unica transaccion y pasando la
+   contrasena solo como `PGPASSWORD`. En Windows puede usar shell solo cuando el
+   binario configurado sea `.cmd` o `.bat`.
+6. `RESTORING -> COMPLETED` si termina correctamente.
+7. `RESTORING -> FAILED` si la configuracion del destino no es valida.
+8. `RESTORING -> REQUIRES_RECOVERY` si falla el puerto destructivo despues de
+   la copia previa.
+
+Eventos auditables de aplicacion:
+
+- `RESTORE_PREPARING_STARTED`.
+- `PRE_RESTORE_BACKUP_VERIFIED`.
+- `RESTORE_APPLY_STARTED`.
+- `RESTORE_COMPLETED`.
+- `RESTORE_APPLY_FAILED`.
+- `RESTORE_REQUIRES_RECOVERY`.
+
+El puerto destructivo no debe exponer rutas fisicas, `storageKey`, contrasenas ni
+material criptografico en auditoria. Si la aplicacion se dispara desde HTTP, los
+eventos conservan `actorUserId` y `correlationId`. La implementacion concreta de
+`pg_restore` debe ejecutarse en un proceso operativo revisado, porque restaurar
+la propia base puede reemplazar tambien las tablas que contienen el estado de la
+operacion en curso.
+
+### `POST /api/platform/restores/apply`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageMaintenance`.
+
+Requiere cabecera `X-CSRF-Token`.
+
+Request:
+
+```json
+{}
+```
+
+Respuesta `200` si la restauracion finaliza:
+
+```json
+{
+  "processed": true,
+  "operationId": "uuid",
+  "status": "COMPLETED",
+  "backupOperationId": "uuid",
+  "preRestoreBackupOperationId": "uuid"
+}
+```
+
+Reglas:
+
+- No acepta `restoreOperationId` desde el navegador.
+- Aplica la siguiente restauracion `VALIDATED` que tenga mantenimiento activo en modo `RESTORE`.
+- Crea y verifica una copia previa antes de ejecutar `pg_restore`.
+- En desarrollo, si `RESTORE_TARGET_DATABASE_URL` no esta definida, puede usar `DATABASE_URL` como destino.
+- En produccion, `RESTORE_TARGET_DATABASE_URL` debe estar definida explicitamente.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 409 | `NO_VALIDATED_RESTORE_IN_MAINTENANCE` | No hay restauracion validada con mantenimiento activo |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+| 500 | Ver tabla de errores de restauracion | El worker registro la restauracion como fallida o requiere recuperacion |
+
 Errores de worker:
 
 | Codigo | Causa |
@@ -976,6 +1056,10 @@ Errores de worker:
 | `BACKUP_ENCRYPTION_KEY_INVALID` | La clave de cifrado no es valida |
 | `RESTORE_ENV_INVALID` | La configuracion minima del worker no es valida |
 | `RESTORE_WORKER_TIMEOUT` | Una validacion quedo atascada mas alla del timeout configurado |
+| `PRE_RESTORE_BACKUP_FAILED` | No se pudo crear o verificar la copia previa obligatoria |
+| `RESTORE_APPLY_PORT_NOT_CONFIGURED` | No hay puerto operativo configurado para el paso destructivo |
+| `RESTORE_TARGET_DATABASE_URL_INVALID` | Falta la base destino de restauracion o no es PostgreSQL |
+| `RESTORE_APPLY_FAILED` | Fallo el puerto operativo durante el paso destructivo |
 
 Errores:
 

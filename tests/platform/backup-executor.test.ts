@@ -307,6 +307,12 @@ prisma.restoreOperation.deleteMany(),
     prisma.session.deleteMany(),
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
+    prisma.customerAddress.deleteMany(),
+
+    prisma.customerStore.deleteMany(),
+    prisma.customer.deleteMany(),
+    prisma.catalogItem.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),

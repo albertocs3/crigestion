@@ -15,11 +15,11 @@ export const updateMaintenanceModeSchema = z.discriminatedUnion("enabled", [
     enabled: z.literal(true),
     restoreOperationId: z.string().uuid(),
     reason: z.string().trim().min(10).max(500)
-  }),
+  }).strict(),
   z.object({
     enabled: z.literal(false),
     reason: z.string().trim().max(500).optional()
-  })
+  }).strict()
 ]);
 
 export type UpdateMaintenanceModeCommand = z.infer<

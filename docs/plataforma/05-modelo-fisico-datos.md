@@ -157,7 +157,7 @@ El comando `npm run restore:validate` procesa la siguiente restauracion `REQUEST
 6. Marca `VALIDATED` y registra `validatedAt`, o marca `FAILED` con `errorCode`.
 7. Audita `RESTORE_VALIDATED` o `RESTORE_VALIDATION_FAILED` sin rutas absolutas ni secretos.
 
-`VALIDATED` representa solo validacion no destructiva del artefacto. No ejecuta restauracion, no invalida sesiones y no se considera una operacion activa a efectos de bloquear nuevas copias.
+`VALIDATED` representa solo validacion no destructiva del artefacto. No ejecuta restauracion ni invalida sesiones, pero se considera una operacion activa a efectos de excluir nuevas copias o restauraciones hasta completarse, fallar o requerir recuperacion. Esto evita que una copia manual se interponga antes de la copia previa obligatoria del apply.
 
 Los estados `PREPARING`, `RESTORING`, `VERIFYING`, `COMPLETED` y `REQUIRES_RECOVERY` quedan reservados para el procedimiento de restauracion controlada.
 
