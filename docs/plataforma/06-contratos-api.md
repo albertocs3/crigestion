@@ -350,6 +350,8 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageUsers`.
 
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
+
 Request:
 
 ```json
@@ -367,6 +369,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -382,6 +386,8 @@ Errores:
 Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageUsers`.
+
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -421,6 +427,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -474,6 +482,8 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageRoles`.
 
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
+
 Request:
 
 ```json
@@ -490,6 +500,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -505,6 +517,8 @@ Errores:
 Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageRoles`.
+
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -528,6 +542,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -582,6 +598,8 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageSessions`.
 
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
+
 Request:
 
 ```json
@@ -609,6 +627,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
