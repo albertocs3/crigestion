@@ -1,58 +1,45 @@
+import { randomUUID } from "node:crypto";
+import { prisma } from "@/lib/prisma";
 import {
   hashRequestBody,
   initializePlatform,
   initializeSchema
 } from "@/modules/platform/application/installation";
 import {
+  getRequestContext,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
   jsonResponse,
   originNotAllowed,
   unsupportedMediaType,
+  validateIdempotencyKey,
   validationError
 } from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const globalForRateLimit = globalThis as unknown as {
-  initializeRateLimit?: Map<string, { count: number; resetAt: number }>;
-};
-
-const initializeRateLimit =
-  globalForRateLimit.initializeRateLimit ?? new Map<string, { count: number; resetAt: number }>();
-
-if (!globalForRateLimit.initializeRateLimit) {
-  globalForRateLimit.initializeRateLimit = initializeRateLimit;
-}
-
-function isRateLimited(request: Request): boolean {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  const ipAddress = forwardedFor?.split(",")[0]?.trim() ?? "local";
-  const now = Date.now();
-  const windowMs = 60_000;
-  const maxAttempts = 10;
-  const current = initializeRateLimit.get(ipAddress);
-
-  if (!current || current.resetAt <= now) {
-    initializeRateLimit.set(ipAddress, { count: 1, resetAt: now + windowMs });
-    return false;
-  }
-
-  current.count += 1;
-  return current.count > maxAttempts;
-}
+const initializeRateLimitWindowMs = 60_000;
+const maxInitializeAttemptsByIp = 10;
 
 export async function POST(request: Request) {
-  if (isRateLimited(request)) {
+  const rateLimit = await consumeInitializeRateLimit(request);
+
+  if (rateLimit.limited) {
     return jsonResponse(
       request,
       {
         code: "RATE_LIMITED",
-        message: "Demasiados intentos de inicializacion. Espera antes de reintentar."
+        message: "Demasiados intentos de inicializacion. Espera antes de reintentar.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds
       },
-      { status: 429 }
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimit.retryAfterSeconds)
+        }
+      }
     );
   }
 
@@ -64,28 +51,10 @@ export async function POST(request: Request) {
     return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
 
-  const idempotencyKey = request.headers.get("Idempotency-Key");
+  const idempotency = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
 
-  if (!idempotencyKey) {
-    return jsonResponse(
-      request,
-      {
-        code: "IDEMPOTENCY_KEY_REQUIRED",
-        message: "La cabecera Idempotency-Key es obligatoria."
-      },
-      { status: 400 }
-    );
-  }
-
-  if (idempotencyKey.length > 160) {
-    return jsonResponse(
-      request,
-      {
-        code: "IDEMPOTENCY_KEY_INVALID",
-        message: "La cabecera Idempotency-Key no puede superar 160 caracteres."
-      },
-      { status: 400 }
-    );
+  if (!idempotency.ok) {
+    return jsonResponse(request, idempotency.error, { status: idempotency.status });
   }
 
   let rawBody: string;
@@ -112,7 +81,7 @@ export async function POST(request: Request) {
 
   const result = await initializePlatform(
     payload.data,
-    idempotencyKey,
+    idempotency.key,
     hashRequestBody(rawBody)
   );
 
@@ -125,4 +94,48 @@ export async function POST(request: Request) {
   }
 
   return jsonResponse(request, result.value, { status: result.status });
+}
+
+async function consumeInitializeRateLimit(
+  request: Request
+): Promise<{ limited: false } | { limited: true; retryAfterSeconds: number }> {
+  const context = getRequestContext(request);
+
+  if (!context.ipAddress) {
+    return { limited: false };
+  }
+
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - initializeRateLimitWindowMs);
+  const key = `initialize:${context.ipAddress}`;
+  const bucketId = randomUUID();
+  const [bucket] = await prisma.$queryRaw<Array<{ count: number; windowStart: Date }>>`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (${bucketId}::uuid, ${key}, ${now}, 1, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN 1
+        ELSE "rate_limit_buckets"."count" + 1
+      END,
+      "windowStart" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN ${now}
+        ELSE "rate_limit_buckets"."windowStart"
+      END,
+      "updatedAt" = ${now}
+    RETURNING "count", "windowStart"
+  `;
+
+  if (!bucket || bucket.count <= maxInitializeAttemptsByIp) {
+    return { limited: false };
+  }
+
+  const retryAfterMs = Math.max(
+    1_000,
+    bucket.windowStart.getTime() + initializeRateLimitWindowMs - now.getTime()
+  );
+
+  return {
+    limited: true,
+    retryAfterSeconds: Math.ceil(retryAfterMs / 1_000)
+  };
 }

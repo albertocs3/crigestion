@@ -173,10 +173,18 @@ describe("platform installation HTTP contracts", () => {
     }
 
     expect(response?.status).toBe(429);
+    expect(response?.headers.get("Retry-After")).toMatch(/^\d+$/);
     expect(await response?.json()).toEqual({
       code: "RATE_LIMITED",
-      message: "Demasiados intentos de inicializacion. Espera antes de reintentar."
+      message: "Demasiados intentos de inicializacion. Espera antes de reintentar.",
+      retryAfterSeconds: expect.any(Number)
     });
+    await expect(
+      prisma.rateLimitBucket.findUnique({
+        where: { key: `initialize:${ipAddress}` },
+        select: { count: true }
+      })
+    ).resolves.toEqual({ count: 11 });
   });
 });
 
@@ -219,7 +227,7 @@ function uniqueTestIp(): string {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
-prisma.idempotencyRecord.deleteMany(),
+    prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),

@@ -125,6 +125,8 @@ Errores:
 | 409 | `IDEMPOTENCY_KEY_REUSED` | La misma clave se uso con otro cuerpo |
 | 429 | `RATE_LIMITED` | Demasiados intentos de inicializacion |
 
+La respuesta `429` incluye la cabecera `Retry-After` y el campo `retryAfterSeconds`.
+
 ## 6. Seguridad
 
 - La contrasena se recibe solo en la peticion de inicializacion.
@@ -135,6 +137,7 @@ Errores:
 - El primer administrador queda asociado al rol `Administrador`.
 - La contrasena no se guarda en auditoria ni logs.
 - El navegador nunca accede a `DATABASE_URL`.
+- Aplica rate limit atomico por IP confiable/ventana sobre intentos de inicializacion. En produccion solo se confia en cabeceras de proxy si `TRUST_PROXY_HEADERS=true`.
 
 ## 7. Autenticacion y sesiones
 
