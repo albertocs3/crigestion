@@ -263,6 +263,7 @@ describe("authentication HTTP contracts", () => {
       new Request("http://localhost/api/auth/logout", {
         method: "POST",
         headers: {
+          "Idempotency-Key": randomUUID(),
           "X-CSRF-Token": csrfToken
         }
       })
@@ -280,6 +281,27 @@ describe("authentication HTTP contracts", () => {
     expect(cookieMock.deleteCalls).toContain(sessionCookieName);
   });
 
+  it("rejects logout without an idempotency key", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await logoutPost(
+      new Request("http://localhost/api/auth/logout", {
+        method: "POST",
+        headers: {
+          "X-CSRF-Token": csrfToken
+        }
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(cookieMock.deleteCalls).toHaveLength(0);
+  });
+
   it("rejects password change without a CSRF token", async () => {
     await loginAsAdmin();
 
@@ -295,6 +317,31 @@ describe("authentication HTTP contracts", () => {
     expect(body).toEqual({
       code: "CSRF_TOKEN_INVALID",
       message: "Token CSRF invalido."
+    });
+  });
+
+  it("rejects password change without an idempotency key", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await changePasswordPost(
+      jsonRequest(
+        "/api/auth/change-password",
+        {
+          currentPassword: initialPassword,
+          newPassword: "Nueva-clave-segura-2026"
+        },
+        {
+          csrfToken,
+          idempotencyKey: null
+        }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
     });
   });
 
@@ -371,6 +418,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     ipAddress?: string;
   } = {}
 ): Request {
@@ -385,6 +433,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {
