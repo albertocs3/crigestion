@@ -140,6 +140,46 @@ export function originNotAllowed() {
   } as const;
 }
 
+export function validateIdempotencyKey(value: string | null):
+  | { ok: true; key: string }
+  | {
+      ok: false;
+      status: 400;
+      error:
+        | {
+            code: "IDEMPOTENCY_KEY_REQUIRED";
+            message: "La cabecera Idempotency-Key es obligatoria.";
+          }
+        | {
+            code: "IDEMPOTENCY_KEY_INVALID";
+            message: "La cabecera Idempotency-Key no puede superar 160 caracteres.";
+          };
+    } {
+  if (!value) {
+    return {
+      ok: false,
+      status: 400,
+      error: {
+        code: "IDEMPOTENCY_KEY_REQUIRED",
+        message: "La cabecera Idempotency-Key es obligatoria."
+      }
+    };
+  }
+
+  if (value.length > 160) {
+    return {
+      ok: false,
+      status: 400,
+      error: {
+        code: "IDEMPOTENCY_KEY_INVALID",
+        message: "La cabecera Idempotency-Key no puede superar 160 caracteres."
+      }
+    };
+  }
+
+  return { ok: true, key: value };
+}
+
 export function validationError(issues: unknown) {
   return {
     code: "VALIDATION_ERROR",
