@@ -7,7 +7,8 @@ import {
 import {
   isAllowedOrigin,
   jsonResponse,
-  originNotAllowed
+  originNotAllowed,
+  validateIdempotencyKey
 } from "@/modules/platform/application/http";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +25,12 @@ export async function POST(request: Request) {
 
   if (!csrf.ok) {
     return jsonResponse(request, csrf.error, { status: csrf.status });
+  }
+
+  const idempotency = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+
+  if (!idempotency.ok) {
+    return jsonResponse(request, idempotency.error, { status: idempotency.status });
   }
 
   const result = await logout(token);

@@ -14,6 +14,7 @@ export function LogoutButton() {
     await fetch("/api/auth/logout", {
       method: "POST",
       headers: {
+        "Idempotency-Key": crypto.randomUUID(),
         "X-CSRF-Token": csrfToken
       }
     });

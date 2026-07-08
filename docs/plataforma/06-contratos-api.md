@@ -245,7 +245,7 @@ Errores:
 
 ### `POST /api/auth/logout`
 
-Requiere cookie de sesion.
+Requiere cookie de sesion y cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Respuesta `200`:
 
@@ -266,13 +266,15 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 401 | `UNAUTHENTICATED` | No hay sesion activa |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
 | 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
 
 ### `POST /api/auth/change-password`
 
-Requiere cookie de sesion y cabecera `X-CSRF-Token`.
+Requiere cookie de sesion y cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -304,6 +306,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 401 | `INVALID_CURRENT_PASSWORD` | La contrasena actual no coincide |
