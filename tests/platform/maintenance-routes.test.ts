@@ -129,6 +129,30 @@ describe("maintenance HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before changing maintenance mode", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const restore = await createValidatedRestore();
+
+    const response = await maintenancePatch(
+      jsonRequest(
+        "/api/platform/maintenance",
+        {
+          enabled: true,
+          restoreOperationId: restore.id,
+          reason: "Ventana de restauracion controlada"
+        },
+        { csrfToken, idempotencyKey: null }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("enables and disables restore maintenance for a validated restore", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
@@ -410,6 +434,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: "PATCH" | "POST";
   } = {}
 ): Request {
@@ -424,6 +449,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

@@ -23,6 +23,7 @@ export function BackupRequestButton() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify({})
