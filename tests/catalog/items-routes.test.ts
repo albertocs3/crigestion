@@ -125,12 +125,25 @@ describe("catalog items HTTP contracts", () => {
   it("creates, lists, updates and deactivates catalog items", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
+    const category = await prisma.catalogCategory.create({
+      data: {
+        code: "1",
+        name: "Servicios recurrentes",
+        status: "ACTIVE"
+      }
+    });
 
     const createResponse = await catalogPost(
-      jsonRequest("/api/catalog/items", catalogPayload(), { csrfToken })
+      jsonRequest(
+        "/api/catalog/items",
+        catalogPayload({ categoryId: category.id }),
+        { csrfToken }
+      )
     );
     const created = await createResponse.json();
-    const listResponse = await catalogGet(apiRequest("/api/catalog/items?kind=SERVICE"));
+    const listResponse = await catalogGet(
+      apiRequest(`/api/catalog/items?kind=SERVICE&categoryId=${category.id}`)
+    );
     const listBody = await listResponse.json();
     const updateResponse = await catalogPatch(
       jsonRequest(

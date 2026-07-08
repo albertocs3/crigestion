@@ -45,6 +45,7 @@ export async function GET(request: Request) {
     cursor: searchParams.get("cursor") ?? undefined,
     status: searchParams.get("status") ?? undefined,
     kind: searchParams.get("kind") ?? undefined,
+    categoryId: searchParams.get("categoryId") ?? undefined,
     search: searchParams.get("search") ?? undefined
   });
 
