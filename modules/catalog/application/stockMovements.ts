@@ -119,9 +119,6 @@ export async function createCatalogStockAdjustment(
           itemId: item.id,
           itemCode: item.code,
           movementId: movement.id,
-          quantity: decimalString(quantity),
-          previousStock: decimalString(item.stockCurrent),
-          newStock: decimalString(newStock),
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }

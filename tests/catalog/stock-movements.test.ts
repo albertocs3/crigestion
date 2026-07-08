@@ -74,11 +74,12 @@ describe("catalog stock movements application service", () => {
       actorUserId: actor.id,
       itemId: item.id,
       itemCode: "1",
-      quantity: "-2.500",
-      previousStock: "10.000",
-      newStock: "7.500",
       correlationId: "stock-adjust-0001"
     });
+    expect(auditEvent.payload).toHaveProperty("movementId");
+    expect(auditEvent.payload).not.toHaveProperty("quantity");
+    expect(auditEvent.payload).not.toHaveProperty("previousStock");
+    expect(auditEvent.payload).not.toHaveProperty("newStock");
   });
 
   it("serializes concurrent adjustments for the same stock item", async () => {
@@ -236,6 +237,12 @@ async function resetPlatformTables(): Promise<void> {
     prisma.loginAttempt.deleteMany(),
     prisma.restoreOperation.deleteMany(),
     prisma.backupOperation.deleteMany(),
+    prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.invoiceDueDate.deleteMany(),
+    prisma.invoiceTaxSummary.deleteMany(),
+    prisma.invoiceLine.deleteMany(),
+    prisma.invoice.deleteMany(),
+    prisma.invoiceNumberSequence.deleteMany(),
     prisma.customerAddress.deleteMany(),
     prisma.customerSepaMandate.deleteMany(),
     prisma.customerStore.deleteMany(),
