@@ -6,7 +6,7 @@
 - Categorias: `/api/catalog/categories`.
 - Tipos de IVA: `/api/catalog/tax-rates`.
 - Autenticacion obligatoria con sesion web.
-- Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
+- Las mutaciones validan `Origin`, token CSRF, `Idempotency-Key` y modo mantenimiento.
 - Las respuestas son DTOs; no se exponen modelos Prisma.
 - Los eventos de auditoria no incluyen nombre, descripcion, precios ni costes completos.
 
@@ -17,7 +17,14 @@
 | `Catalog.View` | Consultar catalogo. |
 | `Catalog.Manage` | Crear, modificar, activar e inactivar elementos, categorias y tipos de IVA. |
 
-## 3. `GET /api/catalog/items`
+## 3. Errores comunes de mutacion
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `400` | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera `Idempotency-Key`. |
+| `400` | `IDEMPOTENCY_KEY_INVALID` | La cabecera `Idempotency-Key` supera la longitud permitida. |
+
+## 4. `GET /api/catalog/items`
 
 Permiso requerido: `Catalog.View`.
 
@@ -76,7 +83,7 @@ Respuesta `200`:
 
 Audita `CATALOG_ITEMS_VIEWED`.
 
-## 4. `POST /api/catalog/items`
+## 5. `POST /api/catalog/items`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -120,7 +127,7 @@ Errores propios:
 
 Audita `CATALOG_ITEM_CREATED`.
 
-## 5. `PATCH /api/catalog/items/{itemId}`
+## 6. `PATCH /api/catalog/items/{itemId}`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -173,7 +180,7 @@ Errores propios:
 
 Audita `CATALOG_ITEM_UPDATED`, `CATALOG_ITEM_DEACTIVATED` o `CATALOG_ITEM_REACTIVATED`.
 
-## 6. `POST /api/catalog/items/{itemId}/stock-movements`
+## 7. `POST /api/catalog/items/{itemId}/stock-movements`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -219,7 +226,7 @@ Errores propios:
 
 Audita `CATALOG_STOCK_ADJUSTED`.
 
-## 7. `GET /api/catalog/categories`
+## 8. `GET /api/catalog/categories`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -247,7 +254,7 @@ Respuesta `200`:
 }
 ```
 
-## 8. `POST /api/catalog/categories`
+## 9. `POST /api/catalog/categories`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -274,7 +281,7 @@ Errores propios:
 
 Audita `CATALOG_CATEGORY_CREATED`.
 
-## 9. `PATCH /api/catalog/categories/{categoryId}`
+## 10. `PATCH /api/catalog/categories/{categoryId}`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -299,7 +306,7 @@ Errores propios:
 
 Audita `CATALOG_CATEGORY_DEACTIVATED` o `CATALOG_CATEGORY_REACTIVATED`.
 
-## 10. `GET /api/catalog/tax-rates`
+## 11. `GET /api/catalog/tax-rates`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -328,7 +335,7 @@ Respuesta `200`:
 }
 ```
 
-## 11. `POST /api/catalog/tax-rates`
+## 12. `POST /api/catalog/tax-rates`
 
 Permiso requerido: `Catalog.Manage`.
 
@@ -357,7 +364,7 @@ Errores propios:
 
 Audita `CATALOG_TAX_RATE_CREATED`.
 
-## 12. `PATCH /api/catalog/tax-rates/{taxRateId}`
+## 13. `PATCH /api/catalog/tax-rates/{taxRateId}`
 
 Permiso requerido: `Catalog.Manage`.
 

@@ -3,10 +3,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import {
-  GET as taxRatesGet,
-  POST as taxRatesPost
-} from "@/app/api/catalog/tax-rates/route";
-import { PATCH as taxRatesPatch } from "@/app/api/catalog/tax-rates/[taxRateId]/route";
+  GET as categoriesGet,
+  POST as categoriesPost
+} from "@/app/api/catalog/categories/route";
+import { PATCH as categoriesPatch } from "@/app/api/catalog/categories/[categoryId]/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import {
@@ -66,12 +66,13 @@ const baseCommand: InitializeCommand = {
   }
 };
 
-describe("catalog tax rates HTTP contracts", () => {
+describe("catalog categories HTTP contracts", () => {
   beforeEach(async () => {
     process.env.APP_BASE_URL = appBaseUrl;
     process.env.AUTH_COOKIE_SECURE = "false";
     cookieMock.reset();
     await resetPlatformTables();
+    await resetCatalogCategoryCodeSequence();
     await initializeForRoutes();
   });
 
@@ -80,85 +81,71 @@ describe("catalog tax rates HTTP contracts", () => {
     await prisma.$disconnect();
   });
 
-  it("creates, lists, sets default and deactivates tax rates", async () => {
+  it("creates, lists, deactivates and reactivates catalog categories", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
 
-    const createResponse = await taxRatesPost(
+    const createResponse = await categoriesPost(
       jsonRequest(
-        "/api/catalog/tax-rates",
+        "/api/catalog/categories",
         {
-          code: "IVA_23",
-          name: "IVA general 23%",
-          rate: "23.00",
-          isDefault: true
+          name: "Servicios recurrentes",
+          description: "Cuotas y mantenimientos"
         },
         { csrfToken }
       )
     );
     const created = await createResponse.json();
-    const listResponse = await taxRatesGet(
-      apiRequest("/api/catalog/tax-rates?includeInactive=true")
+    const listResponse = await categoriesGet(
+      apiRequest("/api/catalog/categories?includeInactive=true")
     );
-    const listBody = await listResponse.json();
-    const iva10 = listBody.items.find(
-      (taxRate: { code: string }) => taxRate.code === "IVA_10"
-    );
-    const defaultResponse = await taxRatesPatch(
+    const deactivateResponse = await categoriesPatch(
       jsonRequest(
-        `/api/catalog/tax-rates/${iva10.id}`,
-        { action: "setDefault" },
-        { csrfToken, method: "PATCH" }
-      ),
-      { params: Promise.resolve({ taxRateId: iva10.id }) }
-    );
-    const deactivateResponse = await taxRatesPatch(
-      jsonRequest(
-        `/api/catalog/tax-rates/${created.id}`,
+        `/api/catalog/categories/${created.id}`,
         { action: "deactivate" },
         { csrfToken, method: "PATCH" }
       ),
-      { params: Promise.resolve({ taxRateId: created.id }) }
+      { params: Promise.resolve({ categoryId: created.id }) }
+    );
+    const reactivateResponse = await categoriesPatch(
+      jsonRequest(
+        `/api/catalog/categories/${created.id}`,
+        { action: "reactivate" },
+        { csrfToken, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ categoryId: created.id }) }
     );
 
     expect(createResponse.status).toBe(201);
     expect(created).toMatchObject({
-      code: "IVA_23",
-      rate: "23.00",
-      status: "ACTIVE",
-      isDefault: true
+      code: "1",
+      name: "Servicios recurrentes",
+      status: "ACTIVE"
     });
     expect(listResponse.status).toBe(200);
-    expect(listBody.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ code: "IVA_23" }),
-        expect.objectContaining({ code: "IVA_10" })
-      ])
-    );
-    expect(defaultResponse.status).toBe(200);
-    expect(await defaultResponse.json()).toMatchObject({
-      code: "IVA_10",
-      isDefault: true
+    expect(await listResponse.json()).toMatchObject({
+      items: [expect.objectContaining({ code: "1" })]
     });
     expect(deactivateResponse.status).toBe(200);
     expect(await deactivateResponse.json()).toMatchObject({
-      code: "IVA_23",
       status: "INACTIVE"
+    });
+    expect(reactivateResponse.status).toBe(200);
+    expect(await reactivateResponse.json()).toMatchObject({
+      status: "ACTIVE"
     });
   });
 
-  it("requires an idempotency key before creating tax rates", async () => {
+  it("requires an idempotency key before creating categories", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
 
-    const response = await taxRatesPost(
+    const response = await categoriesPost(
       jsonRequest(
-        "/api/catalog/tax-rates",
+        "/api/catalog/categories",
         {
-          code: "IVA_23",
-          name: "IVA general 23%",
-          rate: "23.00",
-          isDefault: false
+          name: "Servicios recurrentes",
+          description: "Cuotas y mantenimientos"
         },
         { csrfToken, idempotencyKey: null }
       )
@@ -169,46 +156,33 @@ describe("catalog tax rates HTTP contracts", () => {
     expect(body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
   });
 
-  it("requires an idempotency key before updating tax rates", async () => {
+  it("requires an idempotency key before updating categories", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
-    const listResponse = await taxRatesGet(
-      apiRequest("/api/catalog/tax-rates?includeInactive=true")
-    );
-    const listBody = await listResponse.json();
-    const iva10 = listBody.items.find(
-      (taxRate: { code: string }) => taxRate.code === "IVA_10"
-    );
-
-    const response = await taxRatesPatch(
+    const createResponse = await categoriesPost(
       jsonRequest(
-        `/api/catalog/tax-rates/${iva10.id}`,
-        { action: "setDefault" },
+        "/api/catalog/categories",
+        {
+          name: "Servicios recurrentes",
+          description: "Cuotas y mantenimientos"
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+
+    const response = await categoriesPatch(
+      jsonRequest(
+        `/api/catalog/categories/${created.id}`,
+        { action: "deactivate" },
         { csrfToken, idempotencyKey: null, method: "PATCH" }
       ),
-      { params: Promise.resolve({ taxRateId: iva10.id }) }
+      { params: Promise.resolve({ categoryId: created.id }) }
     );
     const body = await response.json();
 
     expect(response.status).toBe(400);
     expect(body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
-  });
-
-  it("requires CSRF before creating tax rates", async () => {
-    await loginAsAdmin();
-
-    const response = await taxRatesPost(
-      jsonRequest("/api/catalog/tax-rates", {
-        code: "IVA_23",
-        name: "IVA general 23%",
-        rate: "23.00",
-        isDefault: false
-      })
-    );
-    const body = await response.json();
-
-    expect(response.status).toBe(403);
-    expect(body.code).toBe("CSRF_TOKEN_INVALID");
   });
 });
 
@@ -316,6 +290,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.customer.deleteMany(),
     prisma.catalogStockMovement.deleteMany(),
     prisma.catalogItem.deleteMany(),
+    prisma.catalogCategory.deleteMany(),
     prisma.catalogTaxRate.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
@@ -323,4 +298,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.role.deleteMany(),
     prisma.company.deleteMany()
   ]);
+}
+
+async function resetCatalogCategoryCodeSequence(): Promise<void> {
+  await prisma.$executeRaw`ALTER SEQUENCE catalog_category_code_seq RESTART WITH 1`;
 }

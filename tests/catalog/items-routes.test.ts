@@ -106,6 +106,22 @@ describe("catalog items HTTP contracts", () => {
     expect(body.code).toBe("CSRF_TOKEN_INVALID");
   });
 
+  it("requires an idempotency key before creating catalog items", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await catalogPost(
+      jsonRequest("/api/catalog/items", catalogPayload(), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+  });
+
   it("rejects users without catalog permissions", async () => {
     await createLimitedUserWithoutCatalog();
     await loginWith("auditor", limitedPassword);
@@ -201,6 +217,28 @@ describe("catalog items HTTP contracts", () => {
     expect(deactivated.status).toBe("INACTIVE");
   });
 
+  it("requires an idempotency key before updating catalog items", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createResponse = await catalogPost(
+      jsonRequest("/api/catalog/items", catalogPayload(), { csrfToken })
+    );
+    const created = await createResponse.json();
+
+    const response = await catalogPatch(
+      jsonRequest(
+        `/api/catalog/items/${created.id}`,
+        { action: "deactivate" },
+        { csrfToken, idempotencyKey: null, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ itemId: created.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+  });
+
   it("registers stock adjustments through the item endpoint", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -240,6 +278,41 @@ describe("catalog items HTTP contracts", () => {
       previousStock: "10.000",
       newStock: "7.500"
     });
+  });
+
+  it("requires an idempotency key before registering stock adjustments", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createResponse = await catalogPost(
+      jsonRequest(
+        "/api/catalog/items",
+        catalogPayload({
+          kind: "PRODUCT",
+          name: "Producto inventariable",
+          stockTracked: true,
+          stockCurrent: "10.000",
+          stockMinimum: "2.000"
+        }),
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+
+    const response = await stockMovementsPost(
+      jsonRequest(
+        `/api/catalog/items/${created.id}/stock-movements`,
+        {
+          quantity: "-2.500",
+          reason: "Regularizacion de inventario"
+        },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ itemId: created.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
   });
 });
 
@@ -308,6 +381,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: string;
   } = {}
 ): Request {
@@ -322,6 +396,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {
