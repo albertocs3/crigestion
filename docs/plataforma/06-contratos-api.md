@@ -673,7 +673,7 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageConfiguration`.
 
-Requiere cabecera `X-CSRF-Token`.
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -696,6 +696,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -703,6 +705,44 @@ Errores:
 | 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
 | 404 | `CONFIGURATION_NOT_FOUND` | La configuracion no existe |
 | 409 | `COMPANY_TAX_ID_ALREADY_USED` | El NIF ya pertenece a otra empresa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
+### `PATCH /api/platform/configuration/billing`
+
+Endpoint autenticado.
+
+Permiso requerido: `Platform.ManageConfiguration`.
+
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
+
+Request:
+
+```json
+{
+  "invoiceLegalFooter": "Texto legal de factura",
+  "invoiceAccentColor": "#0f766e"
+}
+```
+
+Respuesta `200`: configuracion de facturacion actualizada.
+
+Efectos:
+
+- Actualiza el pie legal y el color de acento usados en facturas.
+- Audita `BILLING_CONFIGURATION_UPDATED` solo con nombres de campos cambiados.
+
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 

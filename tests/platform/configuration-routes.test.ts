@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
+import { PATCH as billingPatch } from "@/app/api/platform/configuration/billing/route";
 import { PATCH as companyPatch } from "@/app/api/platform/configuration/company/route";
 import { GET as configurationGet } from "@/app/api/platform/configuration/route";
 import { prisma } from "@/lib/prisma";
@@ -139,6 +140,24 @@ describe("configuration HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before updating company configuration", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+
+    const response = await companyPatch(
+      jsonRequest("/api/platform/configuration/company", updatePayload(), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("updates company configuration and does not audit submitted values", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
@@ -178,6 +197,46 @@ describe("configuration HTTP contracts", () => {
     expect(response.status).toBe(422);
     expect(body.code).toBe("VALIDATION_ERROR");
   });
+
+  it("requires an idempotency key before updating billing configuration", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+
+    const response = await billingPatch(
+      jsonRequest("/api/platform/configuration/billing", billingPayload(), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
+  it("updates billing configuration and audits only changed field names", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+
+    const response = await billingPatch(
+      jsonRequest("/api/platform/configuration/billing", billingPayload(), { csrfToken })
+    );
+    const body = await response.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "BILLING_CONFIGURATION_UPDATED" }
+    });
+    const auditPayload = JSON.stringify(auditEvent.payload);
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject(billingPayload());
+    expect(auditEvent.payload).toMatchObject({
+      changedFields: ["invoiceLegalFooter", "invoiceAccentColor"]
+    });
+    expect(auditPayload).not.toContain(billingPayload().invoiceLegalFooter);
+    expect(auditPayload).not.toContain(billingPayload().invoiceAccentColor);
+  });
 });
 
 function updatePayload() {
@@ -185,6 +244,13 @@ function updatePayload() {
     legalName: "CriGestion Actualizada SL",
     taxId: "B87654321",
     email: "contabilidad@example.test"
+  };
+}
+
+function billingPayload() {
+  return {
+    invoiceLegalFooter: "Texto legal visible solo en factura.",
+    invoiceAccentColor: "#123abc"
   };
 }
 
@@ -245,6 +311,7 @@ function jsonRequest(
   payload: unknown,
   options: {
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: "POST" | "PATCH";
   } = {}
 ): Request {
@@ -255,6 +322,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {
