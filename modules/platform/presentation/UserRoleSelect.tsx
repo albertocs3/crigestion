@@ -39,6 +39,7 @@ export function UserRoleSelect({
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify({

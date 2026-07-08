@@ -129,6 +129,28 @@ describe("sessions HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before revoking a session", async () => {
+    const adminToken = await loginAsAdmin();
+    const targetSessionId = await createManagedUserAndSession(adminToken);
+    cookieMock.values.set(sessionCookieName, adminToken);
+    const csrfToken = await getCsrfToken();
+
+    const response = await sessionPatch(
+      jsonRequest(
+        `/api/platform/sessions/${targetSessionId}`,
+        { action: "revoke" },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ sessionId: targetSessionId }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("revokes a remote session and rejects self revocation", async () => {
     const adminToken = await loginAsAdmin();
     const targetSessionId = await createManagedUserAndSession(adminToken);
@@ -294,6 +316,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
   } = {}
 ): Request {
   const headers = new Headers({
@@ -307,6 +330,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

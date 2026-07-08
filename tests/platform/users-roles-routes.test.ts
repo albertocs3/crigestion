@@ -127,6 +127,24 @@ describe("users and roles HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before creating users", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await usersPost(
+      jsonRequest("/api/platform/users", createUserPayload(), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("creates a user without exposing password material", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -194,6 +212,27 @@ describe("users and roles HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before changing users", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const user = await createUserThroughHttp(csrfToken);
+
+    const response = await userPatch(
+      jsonRequest(
+        `/api/platform/users/${user.id}`,
+        { action: "deactivate" },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ userId: user.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("rejects user PATCH with invalid route params", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -228,6 +267,29 @@ describe("users and roles HTTP contracts", () => {
       ])
     );
     expect(JSON.stringify(body)).not.toContain("passwordHash");
+  });
+
+  it("requires an idempotency key before creating roles", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+
+    const response = await rolesPost(
+      jsonRequest(
+        "/api/platform/roles",
+        {
+          code: "ConsultaAuditoria",
+          name: "Consulta auditoria",
+          permissionCodes: ["Platform.ViewAudit"]
+        },
+        { csrfToken, idempotencyKey: null }
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
   });
 
   it("creates a role and rejects duplicate codes", async () => {
@@ -330,6 +392,38 @@ describe("users and roles HTTP contracts", () => {
     ]);
     expect(revokedSession.revokedAt).toBeInstanceOf(Date);
     expect(revokedSession.revokeReason).toBe("ROLE_PERMISSIONS_CHANGED");
+  });
+
+  it("requires an idempotency key before updating role permissions", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createRoleResponse = await rolesPost(
+      jsonRequest(
+        "/api/platform/roles",
+        {
+          code: "ConsultaAuditoria",
+          name: "Consulta auditoria",
+          permissionCodes: ["Platform.ViewAudit"]
+        },
+        { csrfToken }
+      )
+    );
+    const role = (await createRoleResponse.json()) as { id: string };
+
+    const response = await rolePatch(
+      jsonRequest(
+        `/api/platform/roles/${role.id}`,
+        { permissionCodes: ["Platform.ManageUsers"] },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ roleId: role.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
   });
 
   it("rejects role permission PATCH for protected roles", async () => {
@@ -529,6 +623,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
   } = {}
 ): Request {
   const headers = new Headers({
@@ -542,6 +637,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {
