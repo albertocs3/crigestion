@@ -450,6 +450,7 @@ async function createAuthenticatedResource(
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfBody.csrfToken
         },
         body: JSON.stringify(payload)
