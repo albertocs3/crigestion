@@ -43,6 +43,7 @@ export function MaintenanceModePanel({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify({})
@@ -86,6 +87,7 @@ export function MaintenanceModePanel({
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
           "X-CSRF-Token": csrfToken
         },
         body: JSON.stringify(payload)

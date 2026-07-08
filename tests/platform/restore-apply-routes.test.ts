@@ -114,6 +114,27 @@ describe("restore apply HTTP contract", () => {
     });
   });
 
+  it("requires an idempotency key before applying a restore", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const { POST: restoreApplyPost } = await import(
+      "@/app/api/platform/restores/apply/route"
+    );
+
+    const response = await restoreApplyPost(
+      jsonRequest("/api/platform/restores/apply", {}, {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("reports when there is no validated restore in maintenance", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
@@ -206,6 +227,7 @@ function jsonRequest(
   payload: unknown,
   options: {
     csrfToken?: string;
+    idempotencyKey?: string | null;
   } = {}
 ): Request {
   const headers = new Headers({
@@ -215,6 +237,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

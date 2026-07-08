@@ -175,6 +175,21 @@ describe("backup HTTP contracts", () => {
     });
   });
 
+  it("requires an idempotency key before requesting a manual backup", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+
+    const response = await backupsPost(
+      jsonRequest("/api/platform/backups", {}, { csrfToken, idempotencyKey: null })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("requests a manual backup and audits the request", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();
@@ -354,6 +369,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
   } = {}
 ): Request {
   const headers = new Headers({
@@ -367,6 +383,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

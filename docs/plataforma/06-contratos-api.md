@@ -799,7 +799,7 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageBackups`.
 
-Requiere cabecera `X-CSRF-Token`.
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -855,6 +855,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -931,7 +933,7 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageBackups`.
 
-Requiere cabecera `X-CSRF-Token`.
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -997,13 +999,30 @@ eventos conservan `actorUserId` y `correlationId`. La implementacion concreta de
 la propia base puede reemplazar tambien las tablas que contienen el estado de la
 operacion en curso.
 
+Errores:
+
+| Estado | Codigo | Causa |
+|---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
+| 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
+| 401 | `UNAUTHENTICATED` | No hay sesion valida |
+| 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
+| 403 | `FORBIDDEN` | Falta permiso |
+| 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
+| 409 | `BACKUP_NOT_RESTORABLE` | La copia no esta verificada, es incompatible o no tiene metadatos completos |
+| 409 | `BACKUP_VERSION_INCOMPATIBLE` | La copia pertenece a otra version de producto |
+| 409 | `RESTORE_OPERATION_ALREADY_ACTIVE` | Ya existe una copia o restauracion activa |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
+| 422 | `VALIDATION_ERROR` | Payload invalido |
+
 ### `POST /api/platform/restores/apply`
 
 Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageMaintenance`.
 
-Requiere cabecera `X-CSRF-Token`.
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Request:
 
@@ -1035,6 +1054,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
@@ -1114,7 +1135,7 @@ Endpoint autenticado.
 
 Permiso requerido: `Platform.ManageMaintenance`.
 
-Requiere cabecera `X-CSRF-Token`.
+Requiere cabeceras `X-CSRF-Token` e `Idempotency-Key`.
 
 Activar:
 
@@ -1145,6 +1166,8 @@ Errores:
 
 | Estado | Codigo | Causa |
 |---|---|---|
+| 400 | `IDEMPOTENCY_KEY_REQUIRED` | Falta la cabecera |
+| 400 | `IDEMPOTENCY_KEY_INVALID` | La cabecera supera la longitud permitida |
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
 | 401 | `UNAUTHENTICATED` | No hay sesion valida |
 | 403 | `CSRF_TOKEN_INVALID` | Token CSRF ausente o invalido |
