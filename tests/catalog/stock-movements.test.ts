@@ -74,11 +74,12 @@ describe("catalog stock movements application service", () => {
       actorUserId: actor.id,
       itemId: item.id,
       itemCode: "1",
-      quantity: "-2.500",
-      previousStock: "10.000",
-      newStock: "7.500",
       correlationId: "stock-adjust-0001"
     });
+    expect(auditEvent.payload).toHaveProperty("movementId");
+    expect(auditEvent.payload).not.toHaveProperty("quantity");
+    expect(auditEvent.payload).not.toHaveProperty("previousStock");
+    expect(auditEvent.payload).not.toHaveProperty("newStock");
   });
 
   it("serializes concurrent adjustments for the same stock item", async () => {
