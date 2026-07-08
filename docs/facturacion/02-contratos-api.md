@@ -203,6 +203,8 @@ Audita `INVOICE_DRAFT_UPDATED` con `changedFields`.
 
 Permiso requerido: `Billing.ManageDrafts`.
 
+Requiere `Idempotency-Key`.
+
 Body para linea de catalogo:
 
 ```json

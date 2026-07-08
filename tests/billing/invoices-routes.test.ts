@@ -105,6 +105,25 @@ describe("billing invoice HTTP contracts", () => {
     expect(body.code).toBe("CSRF_TOKEN_INVALID");
   });
 
+  it("requires an idempotency key before creating invoice drafts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomer();
+
+    const response = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), {
+        csrfToken,
+        idempotencyKey: null
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("rejects users without billing permissions", async () => {
     await createLimitedUserWithoutBilling();
     await loginWith("auditor", limitedPassword);
@@ -189,6 +208,81 @@ describe("billing invoice HTTP contracts", () => {
       id: created.id,
       number: "F2600001",
       total: "121.00"
+    });
+  });
+
+  it("requires an idempotency key before issuing invoices", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomer();
+    const taxRate = await defaultTaxRate();
+
+    const createResponse = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+    );
+    const created = await createResponse.json();
+    await invoiceLinePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/lines`,
+        {
+          description: "Servicio mensual",
+          quantity: "1.000",
+          unitPrice: "100.00",
+          discountPercent: "0.00",
+          discountAmount: "0.00",
+          taxRateId: taxRate.id
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+
+    const response = await invoiceIssuePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/issue`,
+        { issueDate: "2026-07-07" },
+        { csrfToken, idempotencyKey: null }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
+  it("requires an idempotency key before adding invoice lines", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomer();
+    const taxRate = await defaultTaxRate();
+
+    const createResponse = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+    );
+    const created = await createResponse.json();
+    const response = await invoiceLinePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/lines`,
+        {
+          description: "Servicio mensual",
+          quantity: "1.000",
+          unitPrice: "100.00",
+          discountPercent: "0.00",
+          discountAmount: "0.00",
+          taxRateId: taxRate.id
+        },
+        { csrfToken, idempotencyKey: null }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
     });
   });
 
@@ -337,6 +431,7 @@ function jsonRequest(
   payload: unknown,
   options: {
     csrfToken?: string;
+    idempotencyKey?: string | null;
   } = {}
 ): Request {
   const headers = new Headers({
@@ -346,6 +441,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`${appBaseUrl}${path}`, {
