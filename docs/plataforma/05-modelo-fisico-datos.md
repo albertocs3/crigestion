@@ -187,6 +187,7 @@ Reglas:
 - El cambio de contrasena, rol, permisos, bloqueo o desactivacion revoca sesiones.
 - Los intentos de login se registran sin guardar la contrasena.
 - El bloqueo por intentos fallidos se apoya en `failedLoginCount`, `lockedUntil` y `login_attempts`.
+- El rate limit de inicializacion usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
 - El rate limit de login usa `rate_limit_buckets` con actualizacion atomica por ventana cuando existe IP cliente confiable.
 - Las cabeceras de proxy para IP cliente solo se usan si `TRUST_PROXY_HEADERS=true` o fuera de produccion; en produccion sin proxy confiable no se aplica el bucket por IP para evitar un limite global compartido.
 
