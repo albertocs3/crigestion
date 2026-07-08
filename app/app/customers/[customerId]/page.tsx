@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { z } from "zod";
 import {
   listCustomerAddresses,
   type CustomerAddressListItem
@@ -21,9 +22,13 @@ type CustomerDetailPageProps = {
   }>;
 };
 
+const paramsSchema = z.object({
+  customerId: z.string().uuid()
+});
+
 export default async function CustomerDetailPage({ params }: CustomerDetailPageProps) {
   const authorization = await authorizePagePermission("Customers.View");
-  const routeParams = await params;
+  const parsedParams = paramsSchema.safeParse(await params);
 
   if (!authorization.ok) {
     return (
@@ -44,7 +49,26 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     );
   }
 
-  const customer = await getCustomerDetail(routeParams.customerId, authorization.user);
+  if (!parsedParams.success) {
+    return (
+      <main className="shell">
+        <header className="topbar">
+          <div className="brand">CriGestión</div>
+          <Link className="button button-secondary" href="/app/customers">
+            Volver
+          </Link>
+        </header>
+        <section className="content">
+          <div className="panel stack">
+            <h1>Ficha de cliente</h1>
+            <p className="message error">Identificador de cliente invalido.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  const customer = await getCustomerDetail(parsedParams.data.customerId, authorization.user);
   const addresses = customer
     ? await listCustomerAddresses(customer.id, { status: "ACTIVE" }, authorization.user)
     : null;

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { z } from "zod";
 import {
   listCustomerAddresses,
   listCustomerAddressesSchema,
@@ -21,12 +22,16 @@ type CustomerAddressesPageProps = {
   }>;
 };
 
+const paramsSchema = z.object({
+  customerId: z.string().uuid()
+});
+
 export default async function CustomerAddressesPage({
   params,
   searchParams
 }: CustomerAddressesPageProps) {
   const authorization = await authorizePagePermission("Customers.View");
-  const routeParams = await params;
+  const parsedParams = paramsSchema.safeParse(await params);
   const query = await searchParams;
 
   if (!authorization.ok) {
@@ -48,12 +53,31 @@ export default async function CustomerAddressesPage({
     );
   }
 
+  if (!parsedParams.success) {
+    return (
+      <main className="shell">
+        <header className="topbar">
+          <div className="brand">CriGestión</div>
+          <Link className="button button-secondary" href="/app/customers">
+            Volver
+          </Link>
+        </header>
+        <section className="content">
+          <div className="panel stack">
+            <h1>Direcciones</h1>
+            <p className="message error">Identificador de cliente invalido.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   const payload = listCustomerAddressesSchema.safeParse({
     status: query.status,
     type: query.type
   });
   const result = payload.success
-    ? await listCustomerAddresses(routeParams.customerId, payload.data, authorization.user)
+    ? await listCustomerAddresses(parsedParams.data.customerId, payload.data, authorization.user)
     : null;
   const canManage = authorization.user.permissions.includes("Customers.Manage");
 
@@ -82,7 +106,7 @@ export default async function CustomerAddressesPage({
 
           <form
             className="filter-row"
-            action={`/app/customers/${routeParams.customerId}/addresses`}
+            action={`/app/customers/${parsedParams.data.customerId}/addresses`}
           >
             <label>
               Tipo
@@ -107,7 +131,7 @@ export default async function CustomerAddressesPage({
               </button>
               <Link
                 className="button button-secondary"
-                href={`/app/customers/${routeParams.customerId}/addresses`}
+                href={`/app/customers/${parsedParams.data.customerId}/addresses`}
               >
                 Limpiar
               </Link>

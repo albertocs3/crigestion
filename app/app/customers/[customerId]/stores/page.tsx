@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { z } from "zod";
 import {
   listCustomerStores,
   listCustomerStoresSchema,
@@ -20,12 +21,16 @@ type CustomerStoresPageProps = {
   }>;
 };
 
+const paramsSchema = z.object({
+  customerId: z.string().uuid()
+});
+
 export default async function CustomerStoresPage({
   params,
   searchParams
 }: CustomerStoresPageProps) {
   const authorization = await authorizePagePermission("Customers.View");
-  const routeParams = await params;
+  const parsedParams = paramsSchema.safeParse(await params);
   const query = await searchParams;
 
   if (!authorization.ok) {
@@ -47,11 +52,30 @@ export default async function CustomerStoresPage({
     );
   }
 
+  if (!parsedParams.success) {
+    return (
+      <main className="shell">
+        <header className="topbar">
+          <div className="brand">CriGestión</div>
+          <Link className="button button-secondary" href="/app/customers">
+            Volver
+          </Link>
+        </header>
+        <section className="content">
+          <div className="panel stack">
+            <h1>Tiendas</h1>
+            <p className="message error">Identificador de cliente invalido.</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   const payload = listCustomerStoresSchema.safeParse({
     status: query.status
   });
   const result = payload.success
-    ? await listCustomerStores(routeParams.customerId, payload.data, authorization.user)
+    ? await listCustomerStores(parsedParams.data.customerId, payload.data, authorization.user)
     : null;
   const canManage = authorization.user.permissions.includes("Customers.Manage");
 
@@ -78,7 +102,10 @@ export default async function CustomerStoresPage({
             )}
           </div>
 
-          <form className="filter-row" action={`/app/customers/${routeParams.customerId}/stores`}>
+          <form
+            className="filter-row"
+            action={`/app/customers/${parsedParams.data.customerId}/stores`}
+          >
             <label>
               Estado
               <select name="status" defaultValue={query.status ?? ""}>
@@ -93,7 +120,7 @@ export default async function CustomerStoresPage({
               </button>
               <Link
                 className="button button-secondary"
-                href={`/app/customers/${routeParams.customerId}/stores`}
+                href={`/app/customers/${parsedParams.data.customerId}/stores`}
               >
                 Limpiar
               </Link>
