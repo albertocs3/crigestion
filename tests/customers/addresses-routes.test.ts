@@ -106,6 +106,26 @@ describe("customer addresses HTTP contracts", () => {
     expect(body.code).toBe("CSRF_TOKEN_INVALID");
   });
 
+  it("requires an idempotency key before creating addresses", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomerThroughHttp(csrfToken);
+
+    const response = await addressesPost(
+      jsonRequest(`/api/customers/${customer.id}/addresses`, addressPayload(), {
+        csrfToken,
+        idempotencyKey: null
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("creates, lists, updates and deactivates customer addresses", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -175,6 +195,34 @@ describe("customer addresses HTTP contracts", () => {
     expect(deactivated).toMatchObject({
       status: "INACTIVE",
       isPrimary: false
+    });
+  });
+
+  it("requires an idempotency key before updating addresses", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomerThroughHttp(csrfToken);
+    const createResponse = await addressesPost(
+      jsonRequest(`/api/customers/${customer.id}/addresses`, addressPayload(), {
+        csrfToken
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) }
+    );
+    const created = await createResponse.json();
+
+    const response = await addressPatch(
+      jsonRequest(
+        `/api/customers/${customer.id}/addresses/${created.id}`,
+        { action: "deactivate" },
+        { csrfToken, idempotencyKey: null, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ customerId: customer.id, addressId: created.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
     });
   });
 });
@@ -267,6 +315,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: string;
   } = {}
 ): Request {
@@ -281,6 +330,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {

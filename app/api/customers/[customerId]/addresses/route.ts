@@ -13,6 +13,7 @@ import {
   jsonResponse,
   originNotAllowed,
   unsupportedMediaType,
+  validateIdempotencyKey,
   validationError
 } from "@/modules/platform/application/http";
 import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
@@ -122,6 +123,12 @@ export async function POST(
 
   if (!isJsonRequest(request)) {
     return jsonResponse(request, unsupportedMediaType(), { status: 415 });
+  }
+
+  const idempotency = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+
+  if (!idempotency.ok) {
+    return jsonResponse(request, idempotency.error, { status: idempotency.status });
   }
 
   let body: unknown;

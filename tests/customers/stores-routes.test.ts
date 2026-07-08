@@ -157,6 +157,52 @@ describe("customer stores HTTP contracts", () => {
     expect(deactivated.status).toBe("INACTIVE");
   });
 
+  it("requires an idempotency key before creating stores", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomerThroughHttp(csrfToken);
+
+    const response = await storesPost(
+      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
+        csrfToken,
+        idempotencyKey: null
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
+  it("requires an idempotency key before updating stores", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomerThroughHttp(csrfToken);
+    const createResponse = await storesPost(
+      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), { csrfToken }),
+      { params: Promise.resolve({ customerId: customer.id }) }
+    );
+    const created = await createResponse.json();
+
+    const response = await storePatch(
+      jsonRequest(
+        `/api/customers/${customer.id}/stores/${created.id}`,
+        { action: "deactivate" },
+        { csrfToken, idempotencyKey: null, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ customerId: customer.id, storeId: created.id }) }
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
   it("requires CSRF before creating stores", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -334,6 +380,7 @@ function jsonRequest(
   options: {
     origin?: string;
     csrfToken?: string;
+    idempotencyKey?: string | null;
     method?: string;
   } = {}
 ): Request {
@@ -348,6 +395,10 @@ function jsonRequest(
 
   if (options.csrfToken) {
     headers.set("X-CSRF-Token", options.csrfToken);
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers.set("Idempotency-Key", options.idempotencyKey ?? randomUUID());
   }
 
   return new Request(`http://localhost${path}`, {
