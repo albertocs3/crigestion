@@ -254,6 +254,46 @@ describe("billing invoice HTTP contracts", () => {
     });
   });
 
+  it("rejects invoice issuing for users without Billing.Issue", async () => {
+    await loginAsAdmin();
+    const adminCsrfToken = await getCsrfToken();
+    const draft = await createDraftWithLine(adminCsrfToken);
+    await createBillingUserWithoutIssue();
+    cookieMock.reset();
+    await loginWith("facturacion", limitedPassword);
+    const limitedCsrfToken = await getCsrfToken();
+
+    const response = await invoiceIssuePost(
+      jsonRequest(
+        `/api/invoices/${draft.id}/issue`,
+        { issueDate: "2026-07-07" },
+        { csrfToken: limitedCsrfToken }
+      ),
+      routeContext({ invoiceId: draft.id })
+    );
+    const body = await response.json();
+    const invoice = await prisma.invoice.findUniqueOrThrow({
+      where: { id: draft.id },
+      select: { status: true, number: true }
+    });
+    const deniedAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ACCESS_DENIED" }
+    });
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({
+      code: "FORBIDDEN",
+      message: "No tienes permiso para realizar esta accion."
+    });
+    expect(invoice).toEqual({
+      status: "DRAFT",
+      number: null
+    });
+    expect(deniedAudit.payload).toMatchObject({
+      permission: "Billing.Issue"
+    });
+  });
+
   it("requires an idempotency key before adding invoice lines", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -547,6 +587,45 @@ async function createLimitedUserWithoutBilling(): Promise<void> {
   });
 }
 
+async function createBillingUserWithoutIssue(): Promise<void> {
+  const role = await prisma.role.create({
+    data: {
+      code: "GestionFacturacion",
+      name: "Gestion facturacion",
+      isProtected: false,
+      permissions: {
+        create: [
+          {
+            permission: {
+              connect: {
+                code: "Billing.View"
+              }
+            }
+          },
+          {
+            permission: {
+              connect: {
+                code: "Billing.ManageDrafts"
+              }
+            }
+          }
+        ]
+      }
+    }
+  });
+
+  await prisma.user.create({
+    data: {
+      displayName: "Usuario Facturacion",
+      userName: "facturacion",
+      normalizedUserName: "facturacion",
+      passwordHash: hashPassword(limitedPassword),
+      status: "ACTIVE",
+      roleId: role.id
+    }
+  });
+}
+
 async function createCustomer() {
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: "admin" },
@@ -580,7 +659,7 @@ async function defaultTaxRate() {
   });
 }
 
-async function createIssuedInvoice(csrfToken: string): Promise<{ id: string }> {
+async function createDraftWithLine(csrfToken: string): Promise<{ id: string }> {
   const customer = await createCustomer();
   const taxRate = await defaultTaxRate();
   const createResponse = await invoicesPost(
@@ -603,6 +682,12 @@ async function createIssuedInvoice(csrfToken: string): Promise<{ id: string }> {
     ),
     routeContext({ invoiceId: created.id })
   );
+
+  return created;
+}
+
+async function createIssuedInvoice(csrfToken: string): Promise<{ id: string }> {
+  const created = await createDraftWithLine(csrfToken);
   await invoiceIssuePost(
     jsonRequest(
       `/api/invoices/${created.id}/issue`,
