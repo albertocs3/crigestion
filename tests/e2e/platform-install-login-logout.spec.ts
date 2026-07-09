@@ -382,13 +382,24 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(page.getByText("Emitida").first()).toBeVisible();
   await expect(page.getByText("Pendiente").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Descargar PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Registrar cobro" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
+
+  await page.getByLabel("Fecha de cobro").fill("2026-07-10");
+  await page.getByLabel("Importe cobrado").fill("121.00");
+  await page.getByLabel("Referencia").fill("Transferencia E2E");
+  await page.getByRole("button", { name: "Registrar cobro" }).click();
+
+  await expect(page.getByText("Cobro registrado.")).toBeVisible();
+  await expect(page.getByText("Cobrada").first()).toBeVisible();
+  await expect(page.getByText("0.00 EUR").first()).toBeVisible();
 
   await page.getByRole("link", { name: "Facturas" }).click();
   await expect(page).toHaveURL(/\/app\/invoices$/);
   await expect(page.getByText("F2600001").first()).toBeVisible();
   await expect(page.getByText("VeriFactu: Pendiente").first()).toBeVisible();
+  await expect(page.getByText("Cobro: Pagada").first()).toBeVisible();
 
   const issuedInvoice = await prisma.invoice.findUniqueOrThrow({
     where: { number: "F2600001" },
@@ -396,21 +407,29 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
       verifactuRecord: true,
       lines: true,
       taxSummaries: true,
-      dueDates: true
+      dueDates: true,
+      payments: true
     }
   });
   const issuedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "INVOICE_ISSUED" }
   });
+  const paymentAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_PAYMENT_REGISTERED" }
+  });
 
   expect(issuedInvoice.status).toBe("ISSUED");
+  expect(issuedInvoice.paymentStatus).toBe("PAID");
   expect(issuedInvoice.verifactuStatus).toBe("PENDING");
   expect(issuedInvoice.total.toFixed(2)).toBe("121.00");
   expect(issuedInvoice.lines).toHaveLength(1);
   expect(issuedInvoice.taxSummaries).toHaveLength(1);
   expect(issuedInvoice.dueDates[0]?.amount.toFixed(2)).toBe("121.00");
+  expect(issuedInvoice.dueDates[0]?.status).toBe("PAID");
+  expect(issuedInvoice.payments[0]?.amount.toFixed(2)).toBe("121.00");
   expect(issuedInvoice.verifactuRecord?.status).toBe("PENDING");
   expect(issuedAuditCount).toBe(1);
+  expect(paymentAuditCount).toBe(1);
 });
 
 test("shows issued invoices read-only for a billing viewer", async ({ page }) => {
@@ -440,6 +459,7 @@ test("shows issued invoices read-only for a billing viewer", async ({ page }) =>
   await expect(page.getByText("Servicio mensual E2E")).toBeVisible();
   await expect(page.getByText("121.00 EUR").first()).toBeVisible();
   await expect(page.getByRole("link", { name: "Descargar PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Registrar cobro" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
 });

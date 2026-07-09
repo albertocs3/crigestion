@@ -9,6 +9,7 @@ import { InvoiceLineCreateForm } from "@/modules/billing/presentation/InvoiceLin
 import { listCatalogItems } from "@/modules/catalog/application/items";
 import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
+import { CustomerPaymentRegisterForm } from "@/modules/treasury/presentation/CustomerPaymentRegisterForm";
 
 export const dynamic = "force-dynamic";
 
@@ -87,6 +88,9 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
 
   const canManageDrafts = authorization.user.permissions.includes("Billing.ManageDrafts");
   const canIssue = authorization.user.permissions.includes("Billing.Issue");
+  const canManagePayments = authorization.user.permissions.includes(
+    "Treasury.ManagePayments"
+  );
   const items = canManageDrafts
     ? await listCatalogItems({ limit: 100, status: "ACTIVE" }, authorization.user)
     : { items: [], nextCursor: null };
@@ -209,6 +213,10 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               <span className="data-label">VeriFactu</span>
               <strong>{verifactuStatusLabel(invoice.verifactuStatus)}</strong>
             </div>
+            <div>
+              <span className="data-label">Cobro</span>
+              <strong>{paymentStatusLabel(invoice.paymentStatus)}</strong>
+            </div>
           </div>
           <div className="table-wrap">
             <table>
@@ -247,6 +255,8 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                 <tr>
                   <th>Vencimiento</th>
                   <th>Importe</th>
+                  <th>Cobrado</th>
+                  <th>Pendiente</th>
                   <th>Metodo</th>
                   <th>Estado</th>
                 </tr>
@@ -256,6 +266,8 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                   <tr key={dueDate.id}>
                     <td>{formatDate(dueDate.dueDate)}</td>
                     <td>{formatMoney(dueDate.amount)}</td>
+                    <td>{formatMoney(dueDate.paidAmount)}</td>
+                    <td>{formatMoney(dueDate.pendingAmount)}</td>
                     <td>{paymentMethodLabel(dueDate.paymentMethod)}</td>
                     <td>{dueDateStatusLabel(dueDate.status)}</td>
                   </tr>
@@ -281,6 +293,15 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               invoiceId={invoice.id}
               defaultIssueDate={invoice.issueDate}
               disabled={issueDisabled}
+            />
+          </div>
+        ) : null}
+
+        {canManagePayments && invoice.status === "ISSUED" ? (
+          <div className="panel stack">
+            <CustomerPaymentRegisterForm
+              invoiceId={invoice.id}
+              dueDates={invoice.dueDates}
             />
           </div>
         ) : null}
@@ -334,6 +355,19 @@ function dueDateStatusLabel(status: InvoiceDetail["dueDates"][number]["status"])
       return "Devuelto";
     case "UNPAID":
       return "Impagado";
+  }
+}
+
+function paymentStatusLabel(status: InvoiceDetail["paymentStatus"]): string {
+  switch (status) {
+    case "PENDING":
+      return "Pendiente";
+    case "PARTIALLY_PAID":
+      return "Parcialmente cobrada";
+    case "PAID":
+      return "Cobrada";
+    case "UNPAID":
+      return "Impagada";
   }
 }
 

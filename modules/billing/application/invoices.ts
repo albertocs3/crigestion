@@ -161,6 +161,8 @@ export type InvoiceDetail = {
     position: number;
     dueDate: string;
     amount: string;
+    paidAmount: string;
+    pendingAmount: string;
     paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
     status: "PENDING" | "PAID" | "RETURNED" | "UNPAID";
   }>;
@@ -754,7 +756,12 @@ const invoiceDetailSelect = {
       dueDate: true,
       amount: true,
       paymentMethod: true,
-      status: true
+      status: true,
+      payments: {
+        select: {
+          amount: true
+        }
+      }
     }
   },
   createdAt: true,
@@ -978,14 +985,24 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
       taxAmount: summary.taxAmount.toFixed(2),
       total: summary.total.toFixed(2)
     })),
-    dueDates: invoice.dueDates.map((dueDate) => ({
-      id: dueDate.id,
-      position: dueDate.position,
-      dueDate: formatDateOnly(dueDate.dueDate),
-      amount: dueDate.amount.toFixed(2),
-      paymentMethod: dueDate.paymentMethod,
-      status: dueDate.status
-    })),
+    dueDates: invoice.dueDates.map((dueDate) => {
+      const paidAmount = dueDate.payments.reduce(
+        (total, payment) => total.plus(payment.amount),
+        new Prisma.Decimal(0)
+      );
+      const pendingAmount = dueDate.amount.minus(paidAmount);
+
+      return {
+        id: dueDate.id,
+        position: dueDate.position,
+        dueDate: formatDateOnly(dueDate.dueDate),
+        amount: dueDate.amount.toFixed(2),
+        paidAmount: paidAmount.toFixed(2),
+        pendingAmount: pendingAmount.toFixed(2),
+        paymentMethod: dueDate.paymentMethod,
+        status: dueDate.status
+      };
+    }),
     totals: {
       subtotal: invoice.subtotal.toFixed(2),
       discountTotal: invoice.discountTotal.toFixed(2),
