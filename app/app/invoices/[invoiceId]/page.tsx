@@ -157,6 +157,12 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               <span className="data-label">Total</span>
               <strong>{formatMoney(invoice.totals.total)}</strong>
             </div>
+            {invoice.rectificationReason ? (
+              <div>
+                <span className="data-label">Motivo rectificacion</span>
+                <strong>{rectificationReasonLabel(invoice.rectificationReason)}</strong>
+              </div>
+            ) : null}
             {invoice.rectifiesInvoice ? (
               <div>
                 <span className="data-label">Rectifica a</span>
@@ -451,6 +457,27 @@ function documentTypeLabel(documentType: InvoiceDetail["documentType"]): string 
       return "Factura";
     case "RECTIFICATION":
       return "Factura rectificativa";
+  }
+}
+
+function rectificationReasonLabel(reason: NonNullable<InvoiceDetail["rectificationReason"]>): string {
+  switch (reason) {
+    case "DATA_ERROR":
+      return "Error en datos";
+    case "AMOUNT_ERROR":
+      return "Error en importes";
+    case "RETURN":
+      return "Devolucion";
+    case "LATE_DISCOUNT":
+      return "Descuento posterior";
+    case "OPERATION_CANCELLED":
+      return "Anulacion de operacion";
+    case "UNPAID":
+      return "Impago";
+    case "OTHER":
+      return "Otro";
+    default:
+      return reason;
   }
 }
 

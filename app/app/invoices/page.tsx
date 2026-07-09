@@ -155,7 +155,8 @@ export default async function InvoicesPage({ searchParams }: InvoicesPageProps) 
                       <td>
                         <strong>{invoice.number ?? "Borrador sin numero"}</strong>
                         <span className="cell-detail">
-                          Serie {invoice.series} - {invoice.year}
+                          {documentTypeLabel(invoice.documentType)} - Serie{" "}
+                          {invoice.series} - {invoice.year}
                         </span>
                       </td>
                       <td>
@@ -238,6 +239,15 @@ function invoiceStatusLabel(status: InvoiceListItem["status"]): string {
       return "Rectificada";
     case "VOIDED":
       return "Anulada";
+  }
+}
+
+function documentTypeLabel(documentType: InvoiceListItem["documentType"]): string {
+  switch (documentType) {
+    case "STANDARD":
+      return "Factura";
+    case "RECTIFICATION":
+      return "Factura rectificativa";
   }
 }
 

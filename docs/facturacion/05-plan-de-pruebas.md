@@ -2,9 +2,10 @@
 
 ## 1. Alcance MVP
 
-Este plan cubre facturas ordinarias manuales. Presupuestos, rectificativas,
-cobros, correo, remesas SEPA y VeriFactu real quedan fuera del primer corte.
-La descarga PDF regenerada de facturas emitidas forma parte del MVP.
+Este plan cubre facturas ordinarias manuales, cobros manuales, devoluciones y
+rectificativas integras. Presupuestos, correo, remesas SEPA y VeriFactu real
+quedan fuera del primer corte. La descarga PDF regenerada de facturas emitidas
+forma parte del MVP.
 
 ## 2. Unitarias de Dominio
 

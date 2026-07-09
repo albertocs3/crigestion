@@ -398,9 +398,26 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(page.getByText("Transferencia E2E")).toBeVisible();
   await expect(page.getByText("Manual").first()).toBeVisible();
 
+  await page.getByLabel("Fecha de emision").fill("2026-07-08");
+  await page.locator('select[name="reason"]').selectOption("AMOUNT_ERROR");
+  await page.getByRole("button", { name: "Crear rectificativa" }).click();
+
+  await expect(page.getByRole("heading", { name: "R2600001" })).toBeVisible();
+  await expect(page.getByText("Factura rectificativa").first()).toBeVisible();
+  await expect(page.getByText("Error en importes")).toBeVisible();
+  await expect(page.getByText("-121.00 EUR").first()).toBeVisible();
+  await expect(page.getByText("Rectifica a")).toBeVisible();
+  await expect(page.getByRole("link", { name: "F2600001" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Crear rectificativa" })).not.toBeVisible();
+
   await page.getByRole("link", { name: "Facturas" }).click();
   await expect(page).toHaveURL(/\/app\/invoices$/);
   await expect(page.getByText("F2600001").first()).toBeVisible();
+  await expect(page.getByText("R2600001").first()).toBeVisible();
+  await expect(page.getByText("Factura rectificativa").first()).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "F2600001" })
+  ).toContainText("Rectificada");
   await expect(page.getByText("VeriFactu: Pendiente").first()).toBeVisible();
   await expect(page.getByText("Cobro: Pagada").first()).toBeVisible();
 
@@ -411,7 +428,17 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
       lines: true,
       taxSummaries: true,
       dueDates: true,
-      payments: true
+      payments: true,
+      rectificationInvoices: true
+    }
+  });
+  const rectificationInvoice = await prisma.invoice.findUniqueOrThrow({
+    where: { number: "R2600001" },
+    include: {
+      lines: true,
+      taxSummaries: true,
+      dueDates: true,
+      rectifiesInvoice: true
     }
   });
   const issuedAuditCount = await prisma.auditEvent.count({
@@ -420,8 +447,12 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   const paymentAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_PAYMENT_REGISTERED" }
   });
+  const rectificationAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "INVOICE_RECTIFICATION_CREATED" }
+  });
 
-  expect(issuedInvoice.status).toBe("ISSUED");
+  expect(issuedInvoice.status).toBe("RECTIFIED");
+  expect(issuedInvoice.rectificationInvoices).toHaveLength(1);
   expect(issuedInvoice.paymentStatus).toBe("PAID");
   expect(issuedInvoice.verifactuStatus).toBe("PENDING");
   expect(issuedInvoice.total.toFixed(2)).toBe("121.00");
@@ -431,8 +462,18 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   expect(issuedInvoice.dueDates[0]?.status).toBe("PAID");
   expect(issuedInvoice.payments[0]?.amount.toFixed(2)).toBe("121.00");
   expect(issuedInvoice.verifactuRecord?.status).toBe("PENDING");
+  expect(rectificationInvoice.documentType).toBe("RECTIFICATION");
+  expect(rectificationInvoice.status).toBe("ISSUED");
+  expect(rectificationInvoice.paymentStatus).toBe("PAID");
+  expect(rectificationInvoice.rectificationReason).toBe("AMOUNT_ERROR");
+  expect(rectificationInvoice.rectifiesInvoice?.id).toBe(issuedInvoice.id);
+  expect(rectificationInvoice.total.toFixed(2)).toBe("-121.00");
+  expect(rectificationInvoice.lines[0]?.quantity.toFixed(3)).toBe("-1.000");
+  expect(rectificationInvoice.taxSummaries[0]?.total.toFixed(2)).toBe("-121.00");
+  expect(rectificationInvoice.dueDates[0]?.status).toBe("PAID");
   expect(issuedAuditCount).toBe(1);
   expect(paymentAuditCount).toBe(1);
+  expect(rectificationAuditCount).toBe(1);
 });
 
 test("shows issued invoices read-only for a billing viewer", async ({ page }) => {
