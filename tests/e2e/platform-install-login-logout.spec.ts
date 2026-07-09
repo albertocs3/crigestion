@@ -508,6 +508,60 @@ test("shows issued invoices read-only for a billing viewer", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
 });
 
+test("marks an issued invoice due date unpaid from the UI", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-unpaid-due-date-setup");
+  const invoice = await createIssuedInvoiceForAdmin();
+
+  await page.goto(`/app/invoices/${invoice.id}`);
+  await expect(page.getByRole("heading", { name: "F2600001" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Marcar impagado" })).toBeVisible();
+
+  await page.getByLabel("Fecha de cobro").fill("2026-07-10");
+  await page.getByLabel("Importe cobrado").fill("40.00");
+  await page.getByLabel("Referencia").fill("Cobro parcial E2E");
+  await page.getByRole("button", { name: "Registrar cobro" }).click();
+
+  await expect(page.getByText("Cobro registrado.")).toBeVisible();
+  await expect(page.getByText("Parcialmente cobrada").first()).toBeVisible();
+  await expect(page.getByText("81.00 EUR").first()).toBeVisible();
+
+  const unpaidForm = page.getByRole("group", { name: "Registrar impago" });
+  await unpaidForm.getByLabel("Fecha de impago").fill("2026-07-20");
+  await unpaidForm.getByLabel("Motivo").fill("BANK_DEFAULT");
+  await page.getByRole("button", { name: "Marcar impagado" }).click();
+
+  await expect(page.getByText("Impago registrado.")).toBeVisible();
+  await expect(page.getByText("Impagada").first()).toBeVisible();
+  await expect(page.getByText("Impagado").first()).toBeVisible();
+  await expect(page.getByText("No hay vencimientos pendientes de cobro.")).toBeVisible();
+
+  await page.goto("/app/treasury?scope=UNPAID");
+  await expect(page.getByRole("heading", { name: "Tesoreria" })).toBeVisible();
+  const dueDateRow = page.getByRole("row").filter({ hasText: "F2600001" });
+  await expect(dueDateRow).toContainText("Impagado");
+  await expect(dueDateRow).toContainText("81.00 EUR");
+
+  const storedInvoice = await prisma.invoice.findUniqueOrThrow({
+    where: { id: invoice.id },
+    include: {
+      dueDates: true,
+      payments: true
+    }
+  });
+  const unpaidAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_DUE_DATE_MARKED_UNPAID" }
+  });
+  const paymentAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_PAYMENT_REGISTERED" }
+  });
+
+  expect(storedInvoice.paymentStatus).toBe("UNPAID");
+  expect(storedInvoice.dueDates[0]?.status).toBe("UNPAID");
+  expect(storedInvoice.payments[0]?.amount.toFixed(2)).toBe("40.00");
+  expect(paymentAuditCount).toBe(1);
+  expect(unpaidAuditCount).toBe(1);
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
   await initializeAndLoginAdmin(page, "e2e-permissions-setup");
 

@@ -25,6 +25,7 @@ export function CustomerPaymentRegisterForm({
     (dueDate) =>
       dueDate.status !== "PAID" &&
       dueDate.status !== "RETURNED" &&
+      dueDate.status !== "UNPAID" &&
       Number(dueDate.pendingAmount) > 0
   );
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
