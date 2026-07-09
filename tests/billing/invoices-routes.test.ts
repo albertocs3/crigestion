@@ -321,6 +321,101 @@ describe("billing invoice HTTP contracts", () => {
     expect(lineCount).toBe(1);
   });
 
+  it("blocks invoice mutations while maintenance is active", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomer();
+    const taxRate = await defaultTaxRate();
+    const createResponse = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+    );
+    const created = (await createResponse.json()) as { id: string };
+    await invoiceLinePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/lines`,
+        {
+          description: "Servicio mensual",
+          quantity: "1.000",
+          unitPrice: "100.00",
+          discountPercent: "0.00",
+          discountAmount: "0.00",
+          taxRateId: taxRate.id
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+    const restore = await enableMaintenance();
+
+    const blockedCreateResponse = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+    );
+    const blockedLineResponse = await invoiceLinePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/lines`,
+        {
+          description: "Linea en mantenimiento",
+          quantity: "1.000",
+          unitPrice: "10.00",
+          discountPercent: "0.00",
+          discountAmount: "0.00",
+          taxRateId: taxRate.id
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+    const blockedIssueResponse = await invoiceIssuePost(
+      jsonRequest(
+        `/api/invoices/${created.id}/issue`,
+        { issueDate: "2026-07-07" },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: created.id })
+    );
+    const blockedCreateBody = await blockedCreateResponse.json();
+    const blockedLineBody = await blockedLineResponse.json();
+    const blockedIssueBody = await blockedIssueResponse.json();
+    const invoice = await prisma.invoice.findUniqueOrThrow({
+      where: { id: created.id },
+      select: { status: true, lines: { select: { id: true } } }
+    });
+    const blockedEvents = await prisma.auditEvent.findMany({
+      where: { eventType: "MAINTENANCE_MUTATION_BLOCKED" },
+      orderBy: { createdAt: "asc" }
+    });
+
+    expect(blockedCreateResponse.status).toBe(423);
+    expect(blockedLineResponse.status).toBe(423);
+    expect(blockedIssueResponse.status).toBe(423);
+    expect(blockedCreateBody).toEqual(maintenanceModeActiveBody());
+    expect(blockedLineBody).toEqual(maintenanceModeActiveBody());
+    expect(blockedIssueBody).toEqual(maintenanceModeActiveBody());
+    expect(invoice.status).toBe("DRAFT");
+    expect(invoice.lines).toHaveLength(1);
+    expect(blockedEvents).toHaveLength(3);
+    expect(blockedEvents.map((event) => event.payload)).toEqual([
+      expect.objectContaining({
+        method: "POST",
+        path: "/api/invoices",
+        mode: "RESTORE",
+        restoreOperationId: restore.id
+      }),
+      expect.objectContaining({
+        method: "POST",
+        path: `/api/invoices/${created.id}/lines`,
+        mode: "RESTORE",
+        restoreOperationId: restore.id
+      }),
+      expect.objectContaining({
+        method: "POST",
+        path: `/api/invoices/${created.id}/issue`,
+        mode: "RESTORE",
+        restoreOperationId: restore.id
+      })
+    ]);
+  });
+
   it("returns functional errors for invalid invoice operations", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -518,6 +613,54 @@ async function createIssuedInvoice(csrfToken: string): Promise<{ id: string }> {
   );
 
   return created;
+}
+
+async function enableMaintenance(): Promise<{ id: string }> {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: "admin" },
+    select: { id: true }
+  });
+  const backup = await prisma.backupOperation.create({
+    data: {
+      status: "VERIFIED",
+      requestedById: admin.id,
+      productVersion: "0.1.0",
+      storageKey: "billing-maintenance.backup",
+      sizeBytes: 2048n,
+      sha256: "d".repeat(64),
+      completedAt: new Date("2026-07-07T09:00:00.000Z")
+    }
+  });
+  const restore = await prisma.restoreOperation.create({
+    data: {
+      status: "VALIDATED",
+      backupOperationId: backup.id,
+      requestedById: admin.id,
+      reason: "Restauracion de prueba para facturacion",
+      validatedAt: new Date("2026-07-07T10:00:00.000Z")
+    }
+  });
+
+  await prisma.platformMaintenanceState.create({
+    data: {
+      singletonKey: 1,
+      enabled: true,
+      mode: "RESTORE",
+      reason: "Ventana de mantenimiento para facturacion",
+      restoreOperationId: restore.id,
+      enabledById: admin.id,
+      enabledAt: new Date("2026-07-07T10:30:00.000Z")
+    }
+  });
+
+  return restore;
+}
+
+function maintenanceModeActiveBody() {
+  return {
+    code: "MAINTENANCE_MODE_ACTIVE",
+    message: "La plataforma esta en modo mantenimiento."
+  };
 }
 
 function draftPayload(customerId: string) {
