@@ -634,6 +634,44 @@ test("creates accounting accounts and a manual journal entry from the UI", async
   expect(entryAuditCount).toBe(1);
 });
 
+test("creates a customer remittance draft from the UI", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-remittance-ui-setup");
+  await createIssuedDirectDebitInvoiceForAdmin();
+
+  await page.getByRole("link", { name: "Tesoreria" }).click();
+  await expect(page).toHaveURL(/\/app\/treasury$/);
+  await page.getByRole("link", { name: "Remesas" }).click();
+
+  await expect(page).toHaveURL(/\/app\/treasury\/remittances$/);
+  await expect(
+    page.getByRole("heading", { name: "Remesas", exact: true })
+  ).toBeVisible();
+  await expect(page.getByText("F2600003").first()).toBeVisible();
+  await expect(page.getByText("Cliente Remesa E2E SL").first()).toBeVisible();
+
+  const remittanceForm = page.getByRole("group", { name: "Nueva remesa" });
+  await remittanceForm.getByLabel("Fecha de cargo").fill("2026-07-15");
+  await remittanceForm.getByLabel("Concepto").fill("Remesa julio E2E");
+  await page.getByRole("button", { name: "Crear remesa" }).click();
+
+  await expect(page.getByText("Remesa creada.")).toBeVisible();
+  await expect(page.getByText("RC2026/000001")).toBeVisible();
+  await expect(page.getByText("121,00").first()).toBeVisible();
+
+  const remittance = await prisma.customerRemittance.findFirstOrThrow({
+    where: { number: "RC2026/000001" },
+    include: { lines: true }
+  });
+  const auditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CREATED" }
+  });
+
+  expect(remittance.status).toBe("DRAFT");
+  expect(remittance.totalAmount.toFixed(2)).toBe("121.00");
+  expect(remittance.lines).toHaveLength(1);
+  expect(auditCount).toBe(1);
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
   await initializeAndLoginAdmin(page, "e2e-permissions-setup");
 
@@ -891,6 +929,88 @@ async function createIssuedInvoiceForAdmin() {
   });
 }
 
+async function createIssuedDirectDebitInvoiceForAdmin() {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: userName }
+  });
+  const customer = await prisma.customer.create({
+    data: {
+      code: "C-E2E-REMIT",
+      type: "COMPANY",
+      legalName: "Cliente Remesa E2E SL",
+      tradeName: "Cliente Remesa E2E",
+      taxId: "B11223344",
+      normalizedTaxId: "B11223344",
+      fiscalTreatment: "DOMESTIC",
+      email: "cliente-remesa-e2e@example.test",
+      phone: "+34910000005",
+      fiscalAddressLine: "Calle Remesa E2E 1",
+      fiscalPostalCode: "28005",
+      fiscalCity: "Madrid",
+      fiscalProvince: "Madrid",
+      fiscalCountry: "ES",
+      defaultPaymentMethod: "DIRECT_DEBIT",
+      paymentTermsType: "IMMEDIATE",
+      bankIban: "ES9121000418450200051332",
+      createdById: admin.id,
+      sepaMandates: {
+        create: {
+          reference: "MANDATO-E2E-001",
+          referenceNormalized: "MANDATO-E2E-001",
+          signedAt: new Date("2026-01-01T00:00:00.000Z"),
+          createdById: admin.id
+        }
+      }
+    }
+  });
+
+  return prisma.invoice.create({
+    data: {
+      status: "ISSUED",
+      paymentStatus: "PENDING",
+      verifactuStatus: "PENDING",
+      series: "F",
+      year: 2026,
+      numberSequence: 3,
+      number: "F2600003",
+      customerId: customer.id,
+      customerCodeSnapshot: customer.code,
+      customerLegalNameSnapshot: customer.legalName,
+      customerTaxIdSnapshot: customer.taxId,
+      customerFiscalTreatmentSnapshot: customer.fiscalTreatment,
+      customerFiscalAddressSnapshot: {
+        line: customer.fiscalAddressLine,
+        postalCode: customer.fiscalPostalCode,
+        city: customer.fiscalCity,
+        province: customer.fiscalProvince,
+        country: customer.fiscalCountry
+      },
+      issueDate: new Date("2026-07-10T00:00:00.000Z"),
+      operationDate: new Date("2026-07-10T00:00:00.000Z"),
+      issuedAt: new Date("2026-07-10T09:00:00.000Z"),
+      subtotal: "100.00",
+      taxableBase: "100.00",
+      taxAmount: "21.00",
+      total: "121.00",
+      createdById: admin.id,
+      issuedById: admin.id,
+      dueDates: {
+        create: {
+          position: 1,
+          dueDate: new Date("2026-07-15T00:00:00.000Z"),
+          amount: "121.00",
+          paymentMethod: "DIRECT_DEBIT"
+        }
+      },
+      verifactuRecord: {
+        create: {
+          status: "PENDING"
+        }
+      }
+    }
+  });
+}
+
 async function createVerifiedBackupForAdmin() {
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: userName }
@@ -932,6 +1052,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.customerAddress.deleteMany(),
+    prisma.customerSepaMandate.deleteMany(),
 
     prisma.customerStore.deleteMany(),
     prisma.customer.deleteMany(),

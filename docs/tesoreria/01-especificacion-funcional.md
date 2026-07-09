@@ -242,7 +242,8 @@ El primer corte de remesas permite crear borradores de remesa de cobro desde
 vencimientos domiciliados pendientes, con cliente activo, IBAN y mandato SEPA
 activo. Este corte conserva la composicion y bloquea duplicidades de
 vencimiento en lineas activas, pero no genera XML, no marca envio al banco y no
-registra cobros automaticamente.
+registra cobros automaticamente. La pantalla operativa inicial queda disponible
+en `/app/treasury/remittances`.
 
 También se podrá procesar cada vencimiento como:
 

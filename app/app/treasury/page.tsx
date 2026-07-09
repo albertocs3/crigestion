@@ -75,6 +75,9 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
       <header className="topbar">
         <div className="brand">CriGestión</div>
         <div className="button-row">
+          <Link className="button button-secondary" href="/app/treasury/remittances">
+            Remesas
+          </Link>
           <Link className="button button-secondary" href="/app/treasury/forecast">
             Prevision
           </Link>
