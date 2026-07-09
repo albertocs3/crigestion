@@ -51,7 +51,9 @@ const platformPermissions = [
   ["Billing.View", "Consultar facturas"],
   ["Billing.ManageDrafts", "Gestionar borradores de facturacion"],
   ["Billing.Issue", "Emitir facturas"],
-  ["Treasury.ManagePayments", "Registrar cobros de clientes"]
+  ["Treasury.ManagePayments", "Registrar cobros de clientes"],
+  ["Accounting.View", "Consultar contabilidad"],
+  ["Accounting.ManageEntries", "Gestionar asientos contables"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;

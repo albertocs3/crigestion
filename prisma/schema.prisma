@@ -166,6 +166,20 @@ enum CustomerPaymentSource {
   SEPA_REMITTANCE
 }
 
+enum AccountingAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AccountingEntryOrigin {
+  MANUAL
+}
+
+enum AccountingEntryStatus {
+  POSTED
+  VOIDED
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -369,6 +383,9 @@ model User {
   issuedInvoices                Invoice[]                  @relation("InvoicesIssuedBy")
   createdCustomerPayments       CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
   createdCustomerPaymentReturns CustomerPaymentReturn[]    @relation("CustomerPaymentReturnsCreatedBy")
+  createdAccountingAccounts     AccountingAccount[]        @relation("AccountingAccountsCreatedBy")
+  createdAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesCreatedBy")
+  updatedAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesUpdatedBy")
   initialInstallation           Installation?
 
   @@map("users")
@@ -652,6 +669,70 @@ model CustomerPaymentReturn {
   @@index([dueDateId, returnDate, id])
   @@index([createdById, createdAt])
   @@map("customer_payment_returns")
+}
+
+model AccountingAccount {
+  id          String                  @id @default(uuid()) @db.Uuid
+  code        String                  @unique @db.VarChar(9)
+  name        String                  @db.VarChar(180)
+  status      AccountingAccountStatus @default(ACTIVE)
+  type        String                  @db.VarChar(80)
+  level       Int
+  isPostable  Boolean                 @default(true)
+  createdById String                  @db.Uuid
+  createdAt   DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime                @updatedAt @db.Timestamptz(3)
+
+  createdBy User                    @relation("AccountingAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  lines     AccountingJournalLine[]
+
+  @@index([status, code])
+  @@map("accounting_accounts")
+}
+
+model AccountingJournalEntry {
+  id             String                @id @default(uuid()) @db.Uuid
+  year           Int
+  sequence       Int
+  number         String                @unique @db.VarChar(20)
+  accountingDate DateTime              @db.Date
+  concept        String                @db.VarChar(240)
+  origin         AccountingEntryOrigin @default(MANUAL)
+  status         AccountingEntryStatus @default(POSTED)
+  totalDebit     Decimal               @db.Decimal(14, 2)
+  totalCredit    Decimal               @db.Decimal(14, 2)
+  createdById    String                @db.Uuid
+  updatedById    String?               @db.Uuid
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+
+  createdBy User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  lines     AccountingJournalLine[]
+
+  @@unique([year, sequence])
+  @@index([status, accountingDate, id])
+  @@index([origin, accountingDate, id])
+  @@map("accounting_journal_entries")
+}
+
+model AccountingJournalLine {
+  id        String   @id @default(uuid()) @db.Uuid
+  entryId   String   @db.Uuid
+  accountId String   @db.Uuid
+  position  Int
+  concept   String   @db.VarChar(240)
+  debit     Decimal  @default(0) @db.Decimal(14, 2)
+  credit    Decimal  @default(0) @db.Decimal(14, 2)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  entry   AccountingJournalEntry @relation(fields: [entryId], references: [id], onDelete: Restrict)
+  account AccountingAccount      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@unique([entryId, position])
+  @@index([accountId, entryId])
+  @@map("accounting_journal_lines")
 }
 
 model InvoiceVerifactuRecord {

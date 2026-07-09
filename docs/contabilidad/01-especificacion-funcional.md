@@ -188,6 +188,11 @@ Ejemplo:
 - Pueden crearse desde una plantilla.
 - Admiten un PDF justificativo de hasta 5 MB.
 
+El primer corte tecnico implementa la base persistente de cuentas y asientos
+manuales ya contabilizados: cuentas activas imputables, validacion de debe y
+haber, numeracion por ejercicio y consulta inicial de diario. No incluye todavia
+plantillas, adjuntos PDF, modificacion ni anulacion de asientos.
+
 ### Plantillas
 
 Incluyen:
