@@ -287,6 +287,40 @@ describe("billing invoice HTTP contracts", () => {
     });
   });
 
+  it("rejects adding lines to issued invoices", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const taxRate = await defaultTaxRate();
+
+    const response = await invoiceLinePost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/lines`,
+        {
+          description: "Linea tardia",
+          quantity: "1.000",
+          unitPrice: "10.00",
+          discountPercent: "0.00",
+          discountAmount: "0.00",
+          taxRateId: taxRate.id
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const body = await response.json();
+    const lineCount = await prisma.invoiceLine.count({
+      where: { invoiceId: issued.id }
+    });
+
+    expect(response.status).toBe(409);
+    expect(body).toEqual({
+      code: "INVOICE_NOT_EDITABLE",
+      message: "La factura no esta en borrador."
+    });
+    expect(lineCount).toBe(1);
+  });
+
   it("returns functional errors for invalid invoice operations", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();

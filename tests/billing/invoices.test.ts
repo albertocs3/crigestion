@@ -222,6 +222,78 @@ describe("billing invoices application service", () => {
     });
   });
 
+  it("does not allow adding lines to issued invoices", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(actor.id);
+    const taxRate = await defaultTaxRate();
+    const draft = await createInvoiceDraft(
+      {
+        customerId: customer.id,
+        issueDate: "2026-07-07",
+        operationDate: "2026-07-07",
+        notes: null
+      },
+      actor
+    );
+
+    if (!draft.ok) {
+      throw new Error(draft.error.code);
+    }
+
+    const line = await addInvoiceLine(
+      draft.value.id,
+      {
+        description: "Linea manual",
+        quantity: "1.000",
+        unitPrice: "50.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      actor
+    );
+
+    if (!line.ok) {
+      throw new Error(line.error.code);
+    }
+
+    const issued = await issueInvoice(
+      draft.value.id,
+      { issueDate: "2026-07-07" },
+      actor
+    );
+
+    if (!issued.ok) {
+      throw new Error(issued.error.code);
+    }
+
+    const result = await addInvoiceLine(
+      draft.value.id,
+      {
+        description: "Linea tardia",
+        quantity: "1.000",
+        unitPrice: "10.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      actor
+    );
+    const lineCount = await prisma.invoiceLine.count({
+      where: { invoiceId: draft.value.id }
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_EDITABLE",
+        message: "La factura no esta en borrador."
+      }
+    });
+    expect(lineCount).toBe(1);
+  });
+
   it("rejects empty invoices and chronology violations", async () => {
     const actor = await loginAsAdmin();
     const firstCustomer = await createCustomer(actor.id);
