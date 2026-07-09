@@ -166,6 +166,21 @@ enum CustomerPaymentSource {
   SEPA_REMITTANCE
 }
 
+enum CustomerRemittanceStatus {
+  DRAFT
+  GENERATED
+  SENT
+  PROCESSED
+  PARTIALLY_RETURNED
+  CLOSED
+  CANCELLED
+}
+
+enum CustomerRemittanceLineStatus {
+  ACTIVE
+  CANCELLED
+}
+
 enum AccountingAccountStatus {
   ACTIVE
   INACTIVE
@@ -242,12 +257,13 @@ model Customer {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  createdBy    User                  @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy    User?                 @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  addresses    CustomerAddress[]
-  stores       CustomerStore[]
-  sepaMandates CustomerSepaMandate[]
-  invoices     Invoice[]
+  createdBy       User                     @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy       User?                    @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  addresses       CustomerAddress[]
+  stores          CustomerStore[]
+  sepaMandates    CustomerSepaMandate[]
+  remittanceLines CustomerRemittanceLine[]
+  invoices        Invoice[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -268,9 +284,10 @@ model CustomerSepaMandate {
   createdAt           DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt           DateTime                  @updatedAt @db.Timestamptz(3)
 
-  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy User     @relation("CustomerSepaMandatesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  revokedBy User?    @relation("CustomerSepaMandatesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  customer        Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy       User                     @relation("CustomerSepaMandatesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  revokedBy       User?                    @relation("CustomerSepaMandatesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  remittanceLines CustomerRemittanceLine[]
 
   @@index([customerId, status])
   @@index([createdById, createdAt])
@@ -383,6 +400,8 @@ model User {
   issuedInvoices                Invoice[]                  @relation("InvoicesIssuedBy")
   createdCustomerPayments       CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
   createdCustomerPaymentReturns CustomerPaymentReturn[]    @relation("CustomerPaymentReturnsCreatedBy")
+  createdCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesCreatedBy")
+  updatedCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesUpdatedBy")
   createdAccountingAccounts     AccountingAccount[]        @relation("AccountingAccountsCreatedBy")
   createdAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesCreatedBy")
   updatedAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesUpdatedBy")
@@ -535,17 +554,18 @@ model Invoice {
   createdAt                       DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt                       DateTime                @updatedAt @db.Timestamptz(3)
 
-  customer              Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  rectifiesInvoice      Invoice?                @relation("InvoiceRectifications", fields: [rectifiesInvoiceId], references: [id], onDelete: Restrict)
-  rectificationInvoices Invoice[]               @relation("InvoiceRectifications")
-  createdBy             User                    @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy             User?                   @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  issuedBy              User?                   @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  customer              Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  rectifiesInvoice      Invoice?                 @relation("InvoiceRectifications", fields: [rectifiesInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices Invoice[]                @relation("InvoiceRectifications")
+  createdBy             User                     @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy             User?                    @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  issuedBy              User?                    @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
   lines                 InvoiceLine[]
   taxSummaries          InvoiceTaxSummary[]
   dueDates              InvoiceDueDate[]
   payments              CustomerPayment[]
   paymentReturns        CustomerPaymentReturn[]
+  remittanceLines       CustomerRemittanceLine[]
   verifactuRecord       InvoiceVerifactuRecord?
 
   @@unique([series, year, numberSequence])
@@ -615,13 +635,71 @@ model InvoiceDueDate {
   paymentMethod CustomerPaymentMethod
   status        InvoiceDueDateStatus  @default(PENDING)
 
-  invoice        Invoice                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  payments       CustomerPayment[]
-  paymentReturns CustomerPaymentReturn[]
+  invoice         Invoice                  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payments        CustomerPayment[]
+  paymentReturns  CustomerPaymentReturn[]
+  remittanceLines CustomerRemittanceLine[]
 
   @@unique([invoiceId, position])
   @@index([status, dueDate, id])
   @@map("invoice_due_dates")
+}
+
+model CustomerRemittance {
+  id          String                   @id @default(uuid()) @db.Uuid
+  year        Int
+  sequence    Int
+  number      String                   @unique @db.VarChar(24)
+  status      CustomerRemittanceStatus @default(DRAFT)
+  chargeDate  DateTime                 @db.Date
+  concept     String                   @db.VarChar(140)
+  totalAmount Decimal                  @db.Decimal(14, 2)
+  lineCount   Int
+  createdById String                   @db.Uuid
+  updatedById String?                  @db.Uuid
+  createdAt   DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime                 @updatedAt @db.Timestamptz(3)
+
+  createdBy User                     @relation("CustomerRemittancesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?                    @relation("CustomerRemittancesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  lines     CustomerRemittanceLine[]
+
+  @@unique([year, sequence])
+  @@index([status, chargeDate, id])
+  @@index([createdById, createdAt])
+  @@map("customer_remittances")
+}
+
+model CustomerRemittanceLine {
+  id                    String                       @id @default(uuid()) @db.Uuid
+  remittanceId          String                       @db.Uuid
+  invoiceId             String                       @db.Uuid
+  dueDateId             String                       @db.Uuid
+  customerId            String                       @db.Uuid
+  position              Int
+  status                CustomerRemittanceLineStatus @default(ACTIVE)
+  mandateId             String                       @db.Uuid
+  mandateReference      String                       @db.VarChar(80)
+  customerCodeSnapshot  String                       @db.VarChar(20)
+  customerNameSnapshot  String                       @db.VarChar(200)
+  invoiceNumberSnapshot String?                      @db.VarChar(20)
+  dueDateSnapshot       DateTime                     @db.Date
+  amount                Decimal                      @db.Decimal(12, 2)
+  concept               String                       @db.VarChar(140)
+  createdAt             DateTime                     @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                     @updatedAt @db.Timestamptz(3)
+
+  remittance CustomerRemittance  @relation(fields: [remittanceId], references: [id], onDelete: Restrict)
+  invoice    Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate    InvoiceDueDate      @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  customer   Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  mandate    CustomerSepaMandate @relation(fields: [mandateId], references: [id], onDelete: Restrict)
+
+  @@unique([remittanceId, position])
+  @@index([dueDateId, status])
+  @@index([customerId, dueDateSnapshot])
+  @@index([invoiceId])
+  @@map("customer_remittance_lines")
 }
 
 model CustomerPayment {

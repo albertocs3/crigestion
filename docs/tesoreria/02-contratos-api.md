@@ -15,7 +15,7 @@ Incluye:
 
 Fuera del primer corte:
 
-- Remesas SEPA.
+- Generacion XML SEPA y procesamiento completo de remesas.
 - Conciliacion bancaria.
 - Asientos contables automaticos.
 - Previsiones de tesoreria.
@@ -28,6 +28,7 @@ Fuera del primer corte:
 - Exportacion de vencimientos: `/api/treasury/customer-due-dates/export`.
 - Prevision mensual de cobros: `/api/treasury/customer-collection-forecast`.
 - Exportacion de prevision: `/api/treasury/customer-collection-forecast/export`.
+- Base inicial de remesas: `/api/treasury/customer-remittances`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -264,7 +265,60 @@ Errores:
 Audita `CUSTOMER_COLLECTION_FORECAST_EXPORTED` con ejercicio, fecha de
 referencia, filtros, limite, `resultCount` y `actorUserId`.
 
-## 8. `POST /api/invoices/{invoiceId}/payments`
+## 8. `GET /api/treasury/customer-remittances`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Maximo `100`. Por defecto `25`. |
+| `cursor` | UUID de la ultima remesa recibida. |
+| `status` | Estado opcional de remesa. |
+| `year` | Ejercicio opcional. |
+
+Respuesta `200`: listado paginado de remesas de cobro con sus lineas, sin IBAN
+ni datos bancarios completos.
+
+Audita `CUSTOMER_REMITTANCES_VIEWED`.
+
+## 9. `POST /api/treasury/customer-remittances`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Body:
+
+```json
+{
+  "chargeDate": "2026-07-15",
+  "concept": "Remesa julio",
+  "dueDateIds": ["uuid"]
+}
+```
+
+Reglas:
+
+- Crea una remesa en estado `DRAFT`.
+- Solo admite vencimientos de facturas emitidas.
+- Solo admite vencimientos `PENDING`, con saldo pendiente y forma de pago
+  `DIRECT_DEBIT`.
+- El cliente debe estar activo, tener IBAN y mandato SEPA activo.
+- Un vencimiento no puede pertenecer a otra linea activa de remesa.
+- No genera XML, no marca enviada y no registra cobros en este corte.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `409` | `REMITTANCE_DUE_DATE_NOT_ELIGIBLE` | Vencimiento no remesable. |
+| `409` | `REMITTANCE_DUE_DATE_ALREADY_INCLUDED` | Vencimiento ya incluido en remesa activa. |
+
+Audita `CUSTOMER_REMITTANCE_DRAFT_CREATED`.
+
+## 10. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -310,7 +364,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 9. `POST /api/invoices/{invoiceId}/payment-returns`
+## 11. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -355,7 +409,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 10. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 12. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

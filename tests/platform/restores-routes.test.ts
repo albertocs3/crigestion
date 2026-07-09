@@ -532,6 +532,10 @@ prisma.restoreOperation.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.customerRemittanceLine.deleteMany(),
+
+    prisma.customerRemittance.deleteMany(),
+
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
