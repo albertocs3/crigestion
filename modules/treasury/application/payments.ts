@@ -47,11 +47,21 @@ export const registerCustomerPaymentReturnSchema = z.object({
   notes: z.string().trim().min(1).max(500).nullable().default(null)
 }).strict();
 
+export const markCustomerDueDateUnpaidSchema = z.object({
+  dueDateId: z.string().uuid(),
+  unpaidDate: dateOnlySchema,
+  reasonCode: z.string().trim().min(1).max(80).nullable().default(null),
+  notes: z.string().trim().min(1).max(500).nullable().default(null)
+}).strict();
+
 export type RegisterCustomerPaymentCommand = z.infer<
   typeof registerCustomerPaymentSchema
 >;
 export type RegisterCustomerPaymentReturnCommand = z.infer<
   typeof registerCustomerPaymentReturnSchema
+>;
+export type MarkCustomerDueDateUnpaidCommand = z.infer<
+  typeof markCustomerDueDateUnpaidSchema
 >;
 
 type PaymentNotFoundResult = {
@@ -103,6 +113,29 @@ export type RegisterCustomerPaymentReturnResult =
   | PaymentReturnNotFoundResult
   | PaymentReturnConflictResult;
 
+type DueDateUnpaidNotFoundResult = {
+  ok: false;
+  status: 404;
+  error: {
+    code: "INVOICE_NOT_FOUND" | "INVOICE_DUE_DATE_NOT_FOUND";
+    message: string;
+  };
+};
+
+type DueDateUnpaidConflictResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "INVOICE_NOT_PAYABLE" | "INVOICE_DUE_DATE_NOT_UNPAIDABLE";
+    message: string;
+  };
+};
+
+export type MarkCustomerDueDateUnpaidResult =
+  | { ok: true; status: 201; value: InvoiceDetail }
+  | DueDateUnpaidNotFoundResult
+  | DueDateUnpaidConflictResult;
+
 export async function registerCustomerPayment(
   invoiceId: string,
   command: RegisterCustomerPaymentCommand,
@@ -146,7 +179,11 @@ export async function registerCustomerPayment(
       return { kind: "due-date-not-found" as const };
     }
 
-    if (dueDate.status === "PAID" || dueDate.status === "RETURNED") {
+    if (
+      dueDate.status === "PAID" ||
+      dueDate.status === "RETURNED" ||
+      dueDate.status === "UNPAID"
+    ) {
       return { kind: "due-date-not-payable" as const };
     }
 
@@ -432,6 +469,146 @@ export async function registerCustomerPaymentReturn(
       error: {
         code: "PAYMENT_RETURN_AMOUNT_EXCEEDS_PAYMENT",
         message: "La devolucion supera el importe no devuelto del cobro."
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    status: 201,
+    value: mapInvoiceDetailForTreasury(result.invoice)
+  };
+}
+
+export async function markCustomerDueDateUnpaid(
+  invoiceId: string,
+  command: MarkCustomerDueDateUnpaidCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<MarkCustomerDueDateUnpaidResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const invoice = await tx.invoice.findUnique({
+      where: { id: invoiceId },
+      select: {
+        id: true,
+        status: true,
+        customerId: true,
+        number: true
+      }
+    });
+
+    if (!invoice) {
+      return { kind: "invoice-not-found" as const };
+    }
+
+    if (invoice.status !== "ISSUED") {
+      return { kind: "invoice-not-payable" as const };
+    }
+
+    const dueDate = await tx.invoiceDueDate.findFirst({
+      where: {
+        id: command.dueDateId,
+        invoiceId
+      },
+      select: {
+        id: true,
+        amount: true,
+        status: true
+      }
+    });
+
+    if (!dueDate) {
+      return { kind: "due-date-not-found" as const };
+    }
+
+    if (dueDate.status !== "PENDING") {
+      return { kind: "due-date-not-unpaidable" as const };
+    }
+
+    const paidAmount = await sumNetPaymentsForDueDate(tx, dueDate.id);
+
+    if (paidAmount.gte(dueDate.amount)) {
+      return { kind: "due-date-not-unpaidable" as const };
+    }
+
+    await tx.invoiceDueDate.update({
+      where: { id: dueDate.id },
+      data: { status: "UNPAID" }
+    });
+
+    await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        paymentStatus: "UNPAID",
+        updatedById: actor.id
+      }
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_DUE_DATE_MARKED_UNPAID",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          invoiceId,
+          dueDateId: dueDate.id,
+          customerId: invoice.customerId,
+          number: invoice.number,
+          unpaidDate: command.unpaidDate,
+          reasonCode: command.reasonCode,
+          pendingAmount: dueDate.amount.minus(paidAmount).toFixed(2),
+          resultingPaymentStatus: "UNPAID",
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return {
+      kind: "marked-unpaid" as const,
+      invoice: await findInvoiceDetailForTreasury(tx, invoiceId)
+    };
+  });
+
+  if (result.kind === "invoice-not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "INVOICE_NOT_FOUND",
+        message: "La factura no existe."
+      }
+    };
+  }
+
+  if (result.kind === "due-date-not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "INVOICE_DUE_DATE_NOT_FOUND",
+        message: "El vencimiento no existe para la factura."
+      }
+    };
+  }
+
+  if (result.kind === "invoice-not-payable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_PAYABLE",
+        message: "Solo se pueden registrar impagos en facturas emitidas."
+      }
+    };
+  }
+
+  if (result.kind === "due-date-not-unpaidable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_DUE_DATE_NOT_UNPAIDABLE",
+        message: "El vencimiento no admite registro de impago."
       }
     };
   }

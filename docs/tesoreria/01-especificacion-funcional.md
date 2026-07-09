@@ -242,6 +242,7 @@ También se podrá procesar cada vencimiento como:
 
 - Cobrado.
 - Devuelto.
+- Impagado manualmente.
 
 Una remesa podrá quedar parcialmente devuelta.
 
@@ -276,6 +277,28 @@ La devolución se registra seleccionando:
 - Solo se admite una devolución por vencimiento.
 - Los gastos no generan una factura automáticamente.
 - Si se repercuten al cliente, se hará mediante factura manual.
+
+## 11.1 Impagos manuales
+
+Un vencimiento pendiente puede marcarse como impagado desde la factura emitida.
+Este registro no se dispara automaticamente por fecha vencida.
+
+### Datos
+
+- Vencimiento.
+- Fecha de impago.
+- Motivo.
+- Observaciones.
+- Usuario.
+
+### Reglas
+
+- Solo se admiten vencimientos pendientes con saldo pendiente.
+- El vencimiento pasa a estado `Impagado`.
+- La factura pasa a estado de cobro `Impagada`.
+- No se eliminan cobros ni devoluciones previas.
+- Un vencimiento impagado no admite cobros ordinarios en este primer corte.
+- Las observaciones internas no se copian al evento de auditoria.
 
 ## 12. Extractos Norma 43
 

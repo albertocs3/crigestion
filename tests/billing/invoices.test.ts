@@ -12,6 +12,7 @@ import {
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
 import {
+  markCustomerDueDateUnpaid,
   registerCustomerPayment,
   registerCustomerPaymentReturn
 } from "@/modules/treasury/application/payments";
@@ -828,6 +829,105 @@ describe("billing invoices application service", () => {
       correlationId: "customer-payment-return-0001"
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain("Texto interno");
+  });
+
+  it("marks customer due dates as unpaid and blocks ordinary collection", async () => {
+    const actor = await loginAsAdmin();
+    const { customer, issued } = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Impago SL"
+    });
+    const dueDateId = issued.value.dueDates[0]?.id;
+
+    if (!dueDateId) {
+      throw new Error("Missing due date.");
+    }
+
+    const partialPayment = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId,
+        paymentDate: "2026-07-10",
+        amount: "40.00",
+        reference: "Transferencia parcial",
+        notes: null
+      },
+      actor
+    );
+
+    if (!partialPayment.ok) {
+      throw new Error(partialPayment.error.code);
+    }
+
+    const unpaid = await markCustomerDueDateUnpaid(
+      issued.value.id,
+      {
+        dueDateId,
+        unpaidDate: "2026-07-20",
+        reasonCode: "BANK_DEFAULT",
+        notes: "No debe auditar detalle interno"
+      },
+      actor,
+      { correlationId: "customer-due-date-unpaid-0001" }
+    );
+    const blockedPayment = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId,
+        paymentDate: "2026-07-21",
+        amount: "1.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+    const storedInvoice = await prisma.invoice.findUniqueOrThrow({
+      where: { id: issued.value.id }
+    });
+    const storedDueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
+      where: { id: dueDateId }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_DUE_DATE_MARKED_UNPAID" }
+    });
+
+    expect(unpaid).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        paymentStatus: "UNPAID",
+        dueDates: [
+          {
+            id: dueDateId,
+            paidAmount: "40.00",
+            pendingAmount: "81.00",
+            status: "UNPAID"
+          }
+        ]
+      }
+    });
+    expect(blockedPayment).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_DUE_DATE_NOT_PAYABLE",
+        message: "El vencimiento no admite nuevos cobros."
+      }
+    });
+    expect(storedInvoice.paymentStatus).toBe("UNPAID");
+    expect(storedDueDate.status).toBe("UNPAID");
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      invoiceId: issued.value.id,
+      dueDateId,
+      customerId: customer.id,
+      unpaidDate: "2026-07-20",
+      reasonCode: "BANK_DEFAULT",
+      pendingAmount: "81.00",
+      resultingPaymentStatus: "UNPAID",
+      correlationId: "customer-due-date-unpaid-0001"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("detalle interno");
   });
 
   it("lists issued customer due dates with net treasury balances", async () => {

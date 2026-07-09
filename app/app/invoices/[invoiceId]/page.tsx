@@ -12,6 +12,7 @@ import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 import { CustomerPaymentRegisterForm } from "@/modules/treasury/presentation/CustomerPaymentRegisterForm";
 import { CustomerPaymentReturnRegisterForm } from "@/modules/treasury/presentation/CustomerPaymentReturnRegisterForm";
+import { CustomerDueDateUnpaidForm } from "@/modules/treasury/presentation/CustomerDueDateUnpaidForm";
 
 export const dynamic = "force-dynamic";
 
@@ -421,6 +422,10 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
             <CustomerPaymentReturnRegisterForm
               invoiceId={invoice.id}
               payments={invoice.payments}
+            />
+            <CustomerDueDateUnpaidForm
+              invoiceId={invoice.id}
+              dueDates={invoice.dueDates}
             />
           </div>
         ) : null}

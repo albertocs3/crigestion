@@ -188,7 +188,7 @@ Reglas:
 
 - La factura debe existir y estar `ISSUED`.
 - El vencimiento debe pertenecer a la factura.
-- El vencimiento no puede estar `PAID` ni `RETURNED`.
+- El vencimiento no puede estar `PAID`, `RETURNED` ni `UNPAID`.
 - El importe debe ser mayor que cero.
 - El importe no puede superar el saldo pendiente del vencimiento.
 - Un cobro parcial deja el vencimiento `PENDING` y la factura
@@ -256,3 +256,46 @@ Errores:
 Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
+
+## 8. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere `Idempotency-Key`.
+
+Body:
+
+```json
+{
+  "dueDateId": "uuid",
+  "unpaidDate": "2026-07-20",
+  "reasonCode": "BANK_DEFAULT",
+  "notes": "Observaciones internas opcionales"
+}
+```
+
+Reglas:
+
+- La factura debe existir y estar `ISSUED`.
+- El vencimiento debe pertenecer a la factura.
+- El vencimiento debe estar `PENDING` y tener saldo pendiente.
+- El vencimiento queda `UNPAID`.
+- La factura queda con estado de cobro `UNPAID`.
+- No se eliminan cobros ni devoluciones previas.
+- Un vencimiento `UNPAID` no admite nuevos cobros ordinarios en este corte.
+
+Respuesta `201`: DTO de detalle de factura actualizado.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `INVOICE_NOT_FOUND` | La factura no existe. |
+| `404` | `INVOICE_DUE_DATE_NOT_FOUND` | El vencimiento no existe para la factura. |
+| `409` | `INVOICE_NOT_PAYABLE` | La factura no esta emitida. |
+| `409` | `INVOICE_DUE_DATE_NOT_UNPAIDABLE` | El vencimiento no admite registro de impago. |
+
+Audita `CUSTOMER_DUE_DATE_MARKED_UNPAID` con `invoiceId`, `dueDateId`,
+`customerId`, `unpaidDate`, `reasonCode`, `pendingAmount`,
+`resultingPaymentStatus`, `actorUserId` y `correlationId`. Las observaciones
+internas no se auditan.

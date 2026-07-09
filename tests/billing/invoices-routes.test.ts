@@ -12,6 +12,7 @@ import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/r
 import { POST as invoiceRectificationPost } from "@/app/api/invoices/[invoiceId]/rectifications/route";
 import { POST as invoicePaymentReturnPost } from "@/app/api/invoices/[invoiceId]/payment-returns/route";
 import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
+import { POST as invoiceUnpaidDueDatePost } from "@/app/api/invoices/[invoiceId]/unpaid-due-dates/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { GET as customerDueDatesGet } from "@/app/api/treasury/customer-due-dates/route";
 import { GET as customerDueDatesExportGet } from "@/app/api/treasury/customer-due-dates/export/route";
@@ -835,6 +836,70 @@ describe("billing invoice HTTP contracts", () => {
     expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
   });
 
+  it("marks customer due dates unpaid through the invoice contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({
+      where: { invoiceId: issued.id },
+      select: { id: true }
+    });
+    await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "40.00",
+          reference: null,
+          notes: null
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    const unpaidResponse = await invoiceUnpaidDueDatePost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/unpaid-due-dates`,
+        {
+          dueDateId: dueDate.id,
+          unpaidDate: "2026-07-20",
+          reasonCode: "BANK_DEFAULT",
+          notes: "No auditar impago completo"
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const body = await unpaidResponse.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_DUE_DATE_MARKED_UNPAID" }
+    });
+
+    expect(unpaidResponse.status).toBe(201);
+    expect(body).toMatchObject({
+      paymentStatus: "UNPAID",
+      dueDates: [
+        {
+          id: dueDate.id,
+          paidAmount: "40.00",
+          pendingAmount: "81.00",
+          status: "UNPAID"
+        }
+      ]
+    });
+    expect(auditEvent.payload).toMatchObject({
+      invoiceId: issued.id,
+      dueDateId: dueDate.id,
+      unpaidDate: "2026-07-20",
+      reasonCode: "BANK_DEFAULT",
+      pendingAmount: "81.00",
+      resultingPaymentStatus: "UNPAID"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
+  });
+
   it("lists customer due dates through the treasury contract", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -1038,6 +1103,19 @@ describe("billing invoice HTTP contracts", () => {
       ),
       routeContext({ invoiceId: issued.id })
     );
+    const missingUnpaidIdempotencyResponse = await invoiceUnpaidDueDatePost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/unpaid-due-dates`,
+        {
+          dueDateId: dueDate.id,
+          unpaidDate: "2026-07-20",
+          reasonCode: null,
+          notes: null
+        },
+        { csrfToken: adminCsrfToken, idempotencyKey: null }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
 
     cookieMock.reset();
     await createBillingUserWithoutIssue();
@@ -1051,6 +1129,19 @@ describe("billing invoice HTTP contracts", () => {
           paymentDate: "2026-07-10",
           amount: "10.00",
           reference: null,
+          notes: null
+        },
+        { csrfToken: limitedCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const forbiddenUnpaidResponse = await invoiceUnpaidDueDatePost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/unpaid-due-dates`,
+        {
+          dueDateId: dueDate.id,
+          unpaidDate: "2026-07-20",
+          reasonCode: null,
           notes: null
         },
         { csrfToken: limitedCsrfToken }
@@ -1072,17 +1163,42 @@ describe("billing invoice HTTP contracts", () => {
       ),
       routeContext({ invoiceId: issued.id })
     );
+    const unauthenticatedUnpaidResponse = await invoiceUnpaidDueDatePost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/unpaid-due-dates`,
+        {
+          dueDateId: dueDate.id,
+          unpaidDate: "2026-07-20",
+          reasonCode: null,
+          notes: null
+        },
+        { csrfToken: adminCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
 
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(missingUnpaidIdempotencyResponse.status).toBe(400);
+    expect(await missingUnpaidIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"
     });
     expect(forbiddenResponse.status).toBe(403);
     expect(await forbiddenResponse.json()).toMatchObject({
       code: "FORBIDDEN"
     });
+    expect(forbiddenUnpaidResponse.status).toBe(403);
+    expect(await forbiddenUnpaidResponse.json()).toMatchObject({
+      code: "FORBIDDEN"
+    });
     expect(unauthenticatedResponse.status).toBe(401);
     expect(await unauthenticatedResponse.json()).toMatchObject({
+      code: "UNAUTHENTICATED"
+    });
+    expect(unauthenticatedUnpaidResponse.status).toBe(401);
+    expect(await unauthenticatedUnpaidResponse.json()).toMatchObject({
       code: "UNAUTHENTICATED"
     });
   });
