@@ -541,6 +541,14 @@ test("marks an issued invoice due date unpaid from the UI", async ({ page }) => 
   await expect(dueDateRow).toContainText("Impagado");
   await expect(dueDateRow).toContainText("81.00 EUR");
 
+  await page.getByRole("link", { name: "Prevision" }).click();
+  await expect(page).toHaveURL(/\/app\/treasury\/forecast$/);
+  await expect(page.getByRole("heading", { name: "Prevision de cobros" })).toBeVisible();
+  await expect(page.getByText("81.00 EUR").first()).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "F2600001" })
+  ).toContainText("Atrasado");
+
   const storedInvoice = await prisma.invoice.findUniqueOrThrow({
     where: { id: invoice.id },
     include: {

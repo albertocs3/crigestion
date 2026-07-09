@@ -509,6 +509,8 @@ Mostrará:
 
 - Vencimientos de cliente abiertos, pagados, devueltos o impagados.
 - Saldo pendiente por vencimiento.
+- Vista de prevision mensual de cobros de cliente basada en vencimientos
+  reales pendientes.
 - Saldo bancario real.
 - Fecha del saldo.
 - Movimientos pendientes de conciliar.

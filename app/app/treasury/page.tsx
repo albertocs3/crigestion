@@ -74,9 +74,14 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
     <main className="shell">
       <header className="topbar">
         <div className="brand">CriGestión</div>
-        <Link className="button button-secondary" href="/app">
-          Volver
-        </Link>
+        <div className="button-row">
+          <Link className="button button-secondary" href="/app/treasury/forecast">
+            Prevision
+          </Link>
+          <Link className="button button-secondary" href="/app">
+            Volver
+          </Link>
+        </div>
       </header>
       <section className="content stack">
         <div className="panel stack">
