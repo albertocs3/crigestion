@@ -3,9 +3,9 @@
 ## 1. Primer Corte MVP
 
 El primer corte implementa facturas ordinarias manuales con lineas, resumen de
-impuestos, vencimiento inicial y numeracion definitiva al emitir. No incluye
-presupuestos, rectificativas, cobros, PDFs, envios por correo, remesas SEPA ni
-envio VeriFactu real.
+impuestos, vencimiento inicial, numeracion definitiva al emitir y descarga PDF
+regenerada para facturas emitidas. No incluye presupuestos, rectificativas,
+cobros, envios por correo, remesas SEPA ni envio VeriFactu real.
 
 ## 2. Enumerados
 
@@ -173,17 +173,27 @@ Eventos actuales del MVP:
 - `INVOICE_LINE_UPDATED`.
 - `INVOICE_LINE_DELETED`.
 - `INVOICE_ISSUED`.
+- `INVOICE_PDF_DOWNLOADED`.
 
 Los payloads incluyen ids, numero, estado, total y campos modificados. No deben
 incluir NIF, direccion fiscal completa, email, IBAN, notas completas ni textos
 largos de lineas.
 
-## 11. Decisiones Pendientes
+## 11. PDF
+
+El PDF del MVP se genera bajo demanda para facturas emitidas desde los datos
+congelados de la factura, lineas, resumen de impuestos y vencimientos. No anade
+tablas de persistencia propias ni conserva obligatoriamente el binario generado.
+
+Quedan fuera del MVP la firma digital, el envio por correo, la plantilla
+definitiva versionada y el hash del PDF enviado.
+
+## 12. Decisiones Pendientes
 
 - Modelo definitivo de presupuestos.
 - Rectificativas integras.
 - Varios vencimientos manuales.
 - Cobros y anticipos.
-- PDF y hash de plantilla.
+- Plantilla PDF definitiva, firma digital y hash de plantilla.
 - Encadenamiento y envio VeriFactu real.
 - Conexion con contabilidad.

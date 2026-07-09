@@ -12,13 +12,14 @@ Incluye:
 - Vencimiento inicial calculado desde condiciones del cliente.
 - Emision con numero definitivo correlativo.
 - Consulta de facturas emitidas en solo lectura.
+- Descarga PDF regenerada para facturas emitidas.
 
 Fuera del primer corte:
 
 - Presupuestos.
 - Facturas rectificativas.
 - Cobros, devoluciones, anticipos y remesas SEPA.
-- PDF definitivo.
+- Plantilla PDF definitiva, firma digital y conservacion obligatoria del binario.
 - Envio por correo.
 - Envio VeriFactu real.
 - Facturas generadas por suscripciones.
@@ -335,7 +336,32 @@ Errores:
 Audita `INVOICE_ISSUED` con `invoiceId`, `number`, `customerId`, `total`,
 `actorUserId` y `correlationId`.
 
-## 12. Bloqueo por Mantenimiento
+## 12. `GET /api/invoices/{invoiceId}/pdf`
+
+Permiso requerido: `Billing.View`.
+
+Reglas:
+
+- Solo se generan PDFs de facturas `ISSUED`.
+- El PDF se regenera desde los datos fiscales y economicos congelados.
+- No se conserva obligatoriamente el binario generado en el MVP.
+- La respuesta no expone NIF, direccion fiscal completa, email ni notas en
+  auditoria.
+
+Respuesta `200`: `application/pdf` con `Content-Disposition` inline y nombre
+`{number}.pdf`.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `INVOICE_NOT_FOUND` | La factura no existe. |
+| `409` | `INVOICE_PDF_NOT_AVAILABLE` | La factura no esta emitida. |
+
+Audita `INVOICE_PDF_DOWNLOADED` con `invoiceId`, `number`, `customerId` y
+`actorUserId`.
+
+## 13. Bloqueo por Mantenimiento
 
 Todas las mutaciones anteriores devuelven `423 MAINTENANCE_MODE_ACTIVE` si la
 plataforma esta en mantenimiento. Las consultas siguen permitidas para soporte

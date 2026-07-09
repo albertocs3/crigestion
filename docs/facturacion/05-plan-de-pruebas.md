@@ -3,8 +3,8 @@
 ## 1. Alcance MVP
 
 Este plan cubre facturas ordinarias manuales. Presupuestos, rectificativas,
-cobros, PDF, correo, remesas SEPA y VeriFactu real quedan fuera del primer
-corte.
+cobros, correo, remesas SEPA y VeriFactu real quedan fuera del primer corte.
+La descarga PDF regenerada de facturas emitidas forma parte del MVP.
 
 ## 2. Unitarias de Dominio
 
@@ -52,6 +52,8 @@ Cubrir:
 - `DELETE /api/invoices/{invoiceId}/lines/{lineId}` recalcula totales.
 - `POST /api/invoices/{invoiceId}/issue` requiere `Billing.Issue`, CSRF e
   `Idempotency-Key`.
+- `GET /api/invoices/{invoiceId}/pdf` requiere `Billing.View`, rechaza
+  borradores y devuelve `application/pdf` para emitidas.
 - Mutaciones devuelven `423 MAINTENANCE_MODE_ACTIVE` en mantenimiento.
 
 Errores estables:
@@ -64,6 +66,7 @@ Errores estables:
 - `INVOICE_NOT_ISSUABLE`.
 - `INVOICE_EMPTY`.
 - `INVOICE_CHRONOLOGY_VIOLATION`.
+- `INVOICE_PDF_NOT_AVAILABLE`.
 - `CUSTOMER_FISCAL_DATA_INCOMPLETE`.
 
 ## 5. Seguridad
@@ -73,6 +76,7 @@ Cubrir:
 - Usuarios sin permiso no pueden crear ni emitir aunque llamen a la API.
 - Auditoria de denegaciones.
 - Auditoria de emision sin NIF, direccion fiscal completa, IBAN ni notas.
+- Auditoria de descarga PDF sin NIF, direccion fiscal completa, IBAN ni notas.
 - Idempotencia: mismo body y misma key devuelve replay seguro.
 - Idempotencia: misma key con body distinto devuelve conflicto.
 - No se exponen modelos Prisma ni campos sensibles del cliente en listados.

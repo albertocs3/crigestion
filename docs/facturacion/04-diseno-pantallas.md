@@ -3,8 +3,8 @@
 ## 1. Primer Corte MVP
 
 El MVP prioriza operar facturas ordinarias manuales con rapidez y trazabilidad.
-No incluye panel avanzado, presupuestos, rectificativas, cobros, PDF ni envio
-VeriFactu real.
+Incluye descarga PDF de facturas emitidas. No incluye panel avanzado,
+presupuestos, rectificativas, cobros, envio por correo ni envio VeriFactu real.
 
 ## 2. Rutas
 
@@ -88,10 +88,10 @@ Una factura `ISSUED` se muestra en solo lectura:
 - Total.
 - Vencimiento.
 - Estado VeriFactu `PENDING` en el MVP.
+- Accion de descarga PDF para usuarios con `Billing.View`.
 
 Acciones futuras, fuera del MVP:
 
-- Descargar PDF.
 - Enviar correo.
 - Crear rectificativa.
 - Registrar cobro.
