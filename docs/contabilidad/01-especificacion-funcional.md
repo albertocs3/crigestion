@@ -193,6 +193,10 @@ manuales ya contabilizados: cuentas activas imputables, validacion de debe y
 haber, numeracion por ejercicio y consulta inicial de diario. No incluye todavia
 plantillas, adjuntos PDF, modificacion ni anulacion de asientos.
 
+El segundo corte expone una pantalla operativa en `/app/accounting` para crear
+subcuentas imputables activas, registrar un asiento manual simple de dos lineas
+y consultar el plan contable y el diario inicial desde la interfaz.
+
 ### Plantillas
 
 Incluyen:

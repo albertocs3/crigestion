@@ -94,6 +94,11 @@ export default async function AppHomePage() {
                   Tesoreria
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Accounting.View") ? (
+                <Link className="button button-secondary" href="/app/accounting">
+                  Contabilidad
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>

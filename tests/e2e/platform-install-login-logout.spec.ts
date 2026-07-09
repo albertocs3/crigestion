@@ -570,6 +570,70 @@ test("marks an issued invoice due date unpaid from the UI", async ({ page }) => 
   expect(unpaidAuditCount).toBe(1);
 });
 
+test("creates accounting accounts and a manual journal entry from the UI", async ({
+  page
+}) => {
+  await initializeAndLoginAdmin(page, "e2e-accounting-ui-setup");
+
+  await expect(page.getByRole("link", { name: "Contabilidad" })).toBeVisible();
+  await page.getByRole("link", { name: "Contabilidad" }).click();
+
+  await expect(page).toHaveURL(/\/app\/accounting$/);
+  await expect(page.getByRole("heading", { name: "Contabilidad" })).toBeVisible();
+  await expect(page.getByText("No hay cuentas para mostrar.")).toBeVisible();
+  await expect(page.getByText("No hay asientos para mostrar.")).toBeVisible();
+
+  const accountForm = page.getByRole("group", { name: "Nueva cuenta" });
+  await accountForm.getByLabel("Codigo").fill("572000001");
+  await accountForm.getByLabel("Nombre").fill("Banco E2E");
+  await accountForm.getByLabel("Tipo").fill("Activo corriente");
+  await accountForm.getByLabel("Nivel").fill("9");
+  await page.getByRole("button", { name: "Crear cuenta" }).click();
+  await expect(page.getByText("Cuenta creada.")).toBeVisible();
+  await expect(page.getByText("572000001", { exact: true })).toBeVisible();
+
+  await accountForm.getByLabel("Codigo").fill("700000001");
+  await accountForm.getByLabel("Nombre").fill("Ventas E2E");
+  await accountForm.getByLabel("Tipo").fill("Ingresos");
+  await accountForm.getByLabel("Nivel").fill("9");
+  await page.getByRole("button", { name: "Crear cuenta" }).click();
+  await expect(page.getByText("700000001", { exact: true })).toBeVisible();
+
+  const entryForm = page.getByRole("group", { name: "Nuevo asiento manual" });
+  await entryForm.getByLabel("Fecha contable").fill("2026-07-10");
+  await entryForm.getByLabel("Concepto").fill("Cobro factura E2E");
+  await entryForm.getByLabel("Importe").fill("121.00");
+  await entryForm.getByLabel("Cuenta debe").selectOption({ label: "572000001 - Banco E2E" });
+  await entryForm.getByLabel("Cuenta haber").selectOption({ label: "700000001 - Ventas E2E" });
+  await page.getByRole("button", { name: "Crear asiento" }).click();
+
+  await expect(page.getByText("Asiento creado.")).toBeVisible();
+  await expect(page.getByText("2026/000001")).toBeVisible();
+  await expect(page.getByText("Cobro factura E2E").first()).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "2026/000001" })
+  ).toContainText("121,00");
+
+  const accountCount = await prisma.accountingAccount.count();
+  const entry = await prisma.accountingJournalEntry.findFirstOrThrow({
+    where: { number: "2026/000001" },
+    include: { lines: true }
+  });
+  const accountAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "ACCOUNTING_ACCOUNT_CREATED" }
+  });
+  const entryAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "ACCOUNTING_JOURNAL_ENTRY_CREATED" }
+  });
+
+  expect(accountCount).toBe(2);
+  expect(entry.totalDebit.toFixed(2)).toBe("121.00");
+  expect(entry.totalCredit.toFixed(2)).toBe("121.00");
+  expect(entry.lines).toHaveLength(2);
+  expect(accountAuditCount).toBe(2);
+  expect(entryAuditCount).toBe(1);
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
   await initializeAndLoginAdmin(page, "e2e-permissions-setup");
 
