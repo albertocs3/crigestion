@@ -89,6 +89,11 @@ export default async function AppHomePage() {
                   Facturas
                 </Link>
               ) : null}
+              {session.user.permissions.includes("Treasury.ManagePayments") ? (
+                <Link className="button button-secondary" href="/app/treasury">
+                  Tesoreria
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>

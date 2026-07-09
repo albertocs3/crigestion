@@ -232,6 +232,11 @@ registrar cobros manuales de vencimientos de facturas emitidas. Este registro
 actualiza el estado del vencimiento y el estado de cobro de la factura, pero no
 genera asientos contables ni conciliaciones bancarias automaticas.
 
+El primer corte tecnico tambien incorpora una consulta operativa de
+vencimientos de cliente en `/app/treasury`, con filtros por estado, cliente,
+rango de vencimiento y busqueda por factura o cliente. Los importes se muestran
+en neto, descontando devoluciones registradas.
+
 También se podrá procesar cada vencimiento como:
 
 - Cobrado.
@@ -472,6 +477,8 @@ Las exportaciones respetarán filtros y ajustes de simulación.
 
 Mostrará:
 
+- Vencimientos de cliente abiertos, pagados, devueltos o impagados.
+- Saldo pendiente por vencimiento.
 - Saldo bancario real.
 - Fecha del saldo.
 - Movimientos pendientes de conciliar.

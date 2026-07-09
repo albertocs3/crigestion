@@ -14,6 +14,7 @@ import {
   registerCustomerPayment,
   registerCustomerPaymentReturn
 } from "@/modules/treasury/application/payments";
+import { listCustomerDueDates } from "@/modules/treasury/application/dueDates";
 import {
   hashRequestBody,
   initializePlatform,
@@ -724,6 +725,128 @@ describe("billing invoices application service", () => {
     expect(JSON.stringify(auditEvent.payload)).not.toContain("Texto interno");
   });
 
+  it("lists issued customer due dates with net treasury balances", async () => {
+    const actor = await loginAsAdmin();
+    const first = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Tesoreria Pendiente SL"
+    });
+    const second = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-08",
+      legalName: "Cliente Tesoreria Pagada SL"
+    });
+    const firstDueDateId = first.issued.value.dueDates[0]?.id;
+    const secondDueDateId = second.issued.value.dueDates[0]?.id;
+
+    if (!firstDueDateId || !secondDueDateId) {
+      throw new Error("Missing due date.");
+    }
+
+    const firstPayment = await registerCustomerPayment(
+      first.issued.value.id,
+      {
+        dueDateId: firstDueDateId,
+        paymentDate: "2026-07-10",
+        amount: "121.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+    const secondPayment = await registerCustomerPayment(
+      second.issued.value.id,
+      {
+        dueDateId: secondDueDateId,
+        paymentDate: "2026-07-10",
+        amount: "121.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+
+    if (!firstPayment.ok || !secondPayment.ok) {
+      throw new Error("Could not register payments.");
+    }
+
+    const firstPaymentId = firstPayment.value.payments[0]?.id;
+
+    if (!firstPaymentId) {
+      throw new Error("Missing payment.");
+    }
+
+    const returned = await registerCustomerPaymentReturn(
+      first.issued.value.id,
+      {
+        paymentId: firstPaymentId,
+        returnDate: "2026-07-12",
+        amount: "21.00",
+        reasonCode: "BANK_RETURN",
+        notes: null
+      },
+      actor
+    );
+
+    if (!returned.ok) {
+      throw new Error(returned.error.code);
+    }
+
+    const openDueDates = await listCustomerDueDates(
+      { limit: 25, scope: "OPEN" },
+      actor
+    );
+    const paidDueDates = await listCustomerDueDates(
+      { limit: 25, scope: "PAID" },
+      actor
+    );
+    const searchedDueDates = await listCustomerDueDates(
+      { limit: 25, scope: "ALL", search: "Pendiente" },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_DUE_DATES_VIEWED" },
+      orderBy: { createdAt: "asc" }
+    });
+
+    expect(openDueDates.dueDates).toEqual([
+      expect.objectContaining({
+        id: firstDueDateId,
+        invoiceId: first.issued.value.id,
+        customer: expect.objectContaining({
+          legalName: "Cliente Tesoreria Pendiente SL"
+        }),
+        amount: "121.00",
+        paidAmount: "100.00",
+        returnedAmount: "21.00",
+        pendingAmount: "21.00",
+        status: "PENDING",
+        paymentStatus: "PARTIALLY_PAID"
+      })
+    ]);
+    expect(openDueDates.summary).toMatchObject({
+      count: 1,
+      totalAmount: "121.00",
+      paidAmount: "100.00",
+      returnedAmount: "21.00",
+      pendingAmount: "21.00"
+    });
+    expect(paidDueDates.dueDates).toEqual([
+      expect.objectContaining({
+        id: secondDueDateId,
+        pendingAmount: "0.00",
+        status: "PAID",
+        paymentStatus: "PAID"
+      })
+    ]);
+    expect(searchedDueDates.dueDates).toHaveLength(1);
+    expect(searchedDueDates.dueDates[0]?.id).toBe(firstDueDateId);
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      scope: "OPEN",
+      resultCount: 1
+    });
+  });
+
   it("rejects customer payments for drafts and overpayments", async () => {
     const actor = await loginAsAdmin();
     const customer = await createCustomer(actor.id);
@@ -829,6 +952,61 @@ async function defaultTaxRate() {
     where: { code: "IVA_21" },
     select: { id: true }
   });
+}
+
+async function createIssuedInvoiceWithOneLine(
+  actor: Awaited<ReturnType<typeof loginAsAdmin>>,
+  options: {
+    issueDate: string;
+    legalName: string;
+  }
+) {
+  const customer = await createCustomer(actor.id, {
+    legalName: options.legalName
+  });
+  const taxRate = await defaultTaxRate();
+  const draft = await createInvoiceDraft(
+    {
+      customerId: customer.id,
+      issueDate: options.issueDate,
+      operationDate: options.issueDate,
+      notes: null
+    },
+    actor
+  );
+
+  if (!draft.ok) {
+    throw new Error(draft.error.code);
+  }
+
+  const line = await addInvoiceLine(
+    draft.value.id,
+    {
+      description: "Linea manual",
+      quantity: "1.000",
+      unitPrice: "100.00",
+      discountPercent: "0.00",
+      discountAmount: "0.00",
+      taxRateId: taxRate.id
+    },
+    actor
+  );
+
+  if (!line.ok) {
+    throw new Error(line.error.code);
+  }
+
+  const issued = await issueInvoice(
+    draft.value.id,
+    { issueDate: options.issueDate },
+    actor
+  );
+
+  if (!issued.ok) {
+    throw new Error(issued.error.code);
+  }
+
+  return { customer, issued };
 }
 
 async function createCustomer(
