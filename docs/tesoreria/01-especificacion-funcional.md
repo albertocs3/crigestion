@@ -235,7 +235,8 @@ genera asientos contables ni conciliaciones bancarias automaticas.
 El primer corte tecnico tambien incorpora una consulta operativa de
 vencimientos de cliente en `/app/treasury`, con filtros por estado, cliente,
 rango de vencimiento y busqueda por factura o cliente. Los importes se muestran
-en neto, descontando devoluciones registradas.
+en neto, descontando devoluciones registradas. La consulta puede exportarse a
+CSV respetando los mismos filtros y dejando auditoria de la descarga.
 
 También se podrá procesar cada vencimiento como:
 

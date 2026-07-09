@@ -8,6 +8,7 @@ import { normalizeDateOnlyInput } from "@/modules/billing/application/invoices";
 
 const defaultLimit = 25;
 const maxLimit = 100;
+const maxExportLimit = 1000;
 
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
@@ -30,7 +31,16 @@ export const listCustomerDueDatesSchema = z.object({
   search: z.string().trim().min(1).max(120).optional()
 });
 
+export const exportCustomerDueDatesSchema = listCustomerDueDatesSchema
+  .omit({ cursor: true, limit: true })
+  .extend({
+    limit: z.coerce.number().int().min(1).max(maxExportLimit).default(maxExportLimit)
+  });
+
 export type ListCustomerDueDatesCommand = z.infer<typeof listCustomerDueDatesSchema>;
+export type ExportCustomerDueDatesCommand = z.infer<
+  typeof exportCustomerDueDatesSchema
+>;
 
 export type CustomerDueDateListItem = {
   id: string;
@@ -110,6 +120,61 @@ export async function listCustomerDueDates(
   command: ListCustomerDueDatesCommand,
   actor: SessionUser
 ): Promise<CustomerDueDateList> {
+  const result = await findCustomerDueDates(command);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_DUE_DATES_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        scope: command.scope,
+        customerId: command.customerId ?? null,
+        dueFrom: command.dueFrom ?? null,
+        dueTo: command.dueTo ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        cursor: command.cursor ?? null,
+        resultCount: result.dueDates.length
+      }
+    }
+  });
+
+  return result;
+}
+
+export async function exportCustomerDueDatesCsv(
+  command: ExportCustomerDueDatesCommand,
+  actor: SessionUser
+): Promise<{ filename: string; content: string }> {
+  const result = await findCustomerDueDates(command);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_DUE_DATES_EXPORTED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        scope: command.scope,
+        customerId: command.customerId ?? null,
+        dueFrom: command.dueFrom ?? null,
+        dueTo: command.dueTo ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        resultCount: result.dueDates.length
+      }
+    }
+  });
+
+  return {
+    filename: `vencimientos-clientes-${formatDateOnly(new Date())}.csv`,
+    content: customerDueDatesCsv(result.dueDates)
+  };
+}
+
+async function findCustomerDueDates(
+  command: ListCustomerDueDatesCommand | ExportCustomerDueDatesCommand
+): Promise<CustomerDueDateList> {
   const where: Prisma.InvoiceDueDateWhereInput = {
     invoice: {
       status: "ISSUED",
@@ -151,8 +216,8 @@ export async function listCustomerDueDates(
   const records = await prisma.invoiceDueDate.findMany({
     where,
     orderBy: [{ dueDate: "asc" }, { id: "asc" }],
-    cursor: command.cursor ? { id: command.cursor } : undefined,
-    skip: command.cursor ? 1 : 0,
+    cursor: "cursor" in command && command.cursor ? { id: command.cursor } : undefined,
+    skip: "cursor" in command && command.cursor ? 1 : 0,
     take: command.limit + 1,
     select: customerDueDateSelect
   });
@@ -160,29 +225,58 @@ export async function listCustomerDueDates(
   const dueDates = page.map(mapCustomerDueDate);
   const summary = summarizeDueDates(dueDates);
 
-  await prisma.auditEvent.create({
-    data: {
-      eventType: "CUSTOMER_DUE_DATES_VIEWED",
-      actorType: "USER",
-      payload: {
-        actorUserId: actor.id,
-        scope: command.scope,
-        customerId: command.customerId ?? null,
-        dueFrom: command.dueFrom ?? null,
-        dueTo: command.dueTo ?? null,
-        hasSearch: Boolean(command.search),
-        limit: command.limit,
-        cursor: command.cursor ?? null,
-        resultCount: page.length
-      }
-    }
-  });
-
   return {
     dueDates,
     summary,
     nextCursor: records.length > command.limit ? page.at(-1)?.id ?? null : null
   };
+}
+
+function customerDueDatesCsv(dueDates: CustomerDueDateListItem[]): string {
+  const header = [
+    "vencimiento",
+    "fecha_emision",
+    "factura",
+    "serie",
+    "ejercicio",
+    "cliente_codigo",
+    "cliente_nombre",
+    "metodo",
+    "estado_vencimiento",
+    "estado_factura",
+    "importe",
+    "cobrado_neto",
+    "devuelto",
+    "pendiente"
+  ];
+  const rows = dueDates.map((dueDate) => [
+    dueDate.dueDate,
+    dueDate.issueDate,
+    dueDate.invoiceNumber ?? "",
+    dueDate.invoiceSeries,
+    dueDate.invoiceYear.toString(),
+    dueDate.customer.code,
+    dueDate.customer.legalName,
+    dueDate.paymentMethod,
+    dueDate.status,
+    dueDate.paymentStatus,
+    dueDate.amount,
+    dueDate.paidAmount,
+    dueDate.returnedAmount,
+    dueDate.pendingAmount
+  ]);
+
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function csvCell(value: string): string {
+  const safeValue = spreadsheetSafeText(value);
+
+  return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+function spreadsheetSafeText(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }
 
 function mapCustomerDueDate(record: CustomerDueDateRecord): CustomerDueDateListItem {

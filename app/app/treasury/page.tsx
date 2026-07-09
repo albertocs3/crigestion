@@ -153,6 +153,12 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
               <Link className="button button-secondary" href="/app/treasury">
                 Limpiar
               </Link>
+              <Link
+                className="button button-secondary"
+                href={exportHref(params)}
+              >
+                Exportar CSV
+              </Link>
             </div>
           </form>
 
@@ -340,4 +346,40 @@ function nextPageHref(
   }
 
   return `/app/treasury?${searchParams.toString()}`;
+}
+
+function exportHref(params: {
+  scope?: string;
+  customerId?: string;
+  dueFrom?: string;
+  dueTo?: string;
+  search?: string;
+}): string {
+  const searchParams = new URLSearchParams();
+
+  if (params.scope) {
+    searchParams.set("scope", params.scope);
+  }
+
+  if (params.customerId) {
+    searchParams.set("customerId", params.customerId);
+  }
+
+  if (params.dueFrom) {
+    searchParams.set("dueFrom", params.dueFrom);
+  }
+
+  if (params.dueTo) {
+    searchParams.set("dueTo", params.dueTo);
+  }
+
+  if (params.search) {
+    searchParams.set("search", params.search);
+  }
+
+  const query = searchParams.toString();
+
+  return query
+    ? `/api/treasury/customer-due-dates/export?${query}`
+    : "/api/treasury/customer-due-dates/export";
 }

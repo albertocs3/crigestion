@@ -13,6 +13,7 @@ import { POST as invoicePaymentReturnPost } from "@/app/api/invoices/[invoiceId]
 import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { GET as customerDueDatesGet } from "@/app/api/treasury/customer-due-dates/route";
+import { GET as customerDueDatesExportGet } from "@/app/api/treasury/customer-due-dates/export/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -797,6 +798,75 @@ describe("billing invoice HTTP contracts", () => {
     });
     expect(auditEvent.payload).toMatchObject({
       scope: "OPEN",
+      resultCount: 1
+    });
+  });
+
+  it("exports customer due dates as CSV through the treasury contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({
+      where: { invoiceId: issued.id },
+      select: { id: true }
+    });
+    const paymentResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "121.00",
+          reference: null,
+          notes: null
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const paymentBody = await paymentResponse.json();
+    const paymentId = paymentBody.payments[0]?.id;
+
+    if (!paymentId) {
+      throw new Error("Missing payment.");
+    }
+
+    await invoicePaymentReturnPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payment-returns`,
+        {
+          paymentId,
+          returnDate: "2026-07-12",
+          amount: "21.00",
+          reasonCode: "BANK_RETURN",
+          notes: null
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    const response = await customerDueDatesExportGet(
+      apiRequest("/api/treasury/customer-due-dates/export?scope=OPEN&limit=25")
+    );
+    const csv = await response.text();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_DUE_DATES_EXPORTED" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/csv; charset=utf-8");
+    expect(response.headers.get("Content-Disposition")).toMatch(
+      /^attachment; filename="vencimientos-clientes-\d{4}-\d{2}-\d{2}\.csv"$/
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(csv).toContain(
+      '"vencimiento","fecha_emision","factura","serie","ejercicio","cliente_codigo","cliente_nombre"'
+    );
+    expect(csv).toContain('"121.00","100.00","21.00","21.00"');
+    expect(auditEvent.payload).toMatchObject({
+      scope: "OPEN",
+      limit: 25,
       resultCount: 1
     });
   });

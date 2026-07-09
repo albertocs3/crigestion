@@ -25,6 +25,7 @@ Fuera del primer corte:
 - Base inicial de cobros: `/api/invoices/{invoiceId}/payments`.
 - Base inicial de devoluciones: `/api/invoices/{invoiceId}/payment-returns`.
 - Base inicial de vencimientos: `/api/treasury/customer-due-dates`.
+- Exportacion de vencimientos: `/api/treasury/customer-due-dates/export`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -112,7 +113,60 @@ Errores:
 Audita `CUSTOMER_DUE_DATES_VIEWED` con filtros, paginacion,
 `resultCount` y `actorUserId`.
 
-## 5. `POST /api/invoices/{invoiceId}/payments`
+## 5. `GET /api/treasury/customer-due-dates/export`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Maximo 1000. Por defecto 1000. |
+| `scope` | `OPEN`, `ALL`, `PENDING`, `PAID`, `RETURNED` o `UNPAID`. Por defecto `OPEN`. |
+| `customerId` | Filtro por cliente. |
+| `dueFrom`, `dueTo` | Rango de fecha de vencimiento, formato `AAAA-MM-DD`. |
+| `search` | Busqueda por numero de factura, codigo o nombre de cliente. |
+
+Respuesta `200`: `text/csv; charset=utf-8` con `Content-Disposition`
+`attachment`.
+
+Columnas:
+
+- `vencimiento`.
+- `fecha_emision`.
+- `factura`.
+- `serie`.
+- `ejercicio`.
+- `cliente_codigo`.
+- `cliente_nombre`.
+- `metodo`.
+- `estado_vencimiento`.
+- `estado_factura`.
+- `importe`.
+- `cobrado_neto`.
+- `devuelto`.
+- `pendiente`.
+
+Reglas:
+
+- Respeta los mismos filtros que la consulta de vencimientos.
+- No exporta notas internas, NIF, IBAN ni datos bancarios completos.
+- Protege celdas de texto que podrian interpretarse como formulas al abrir el
+  CSV en una hoja de calculo.
+- Devuelve `Cache-Control: private, no-store`.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
+| `403` | `FORBIDDEN` | La sesion no tiene permiso. |
+| `422` | `VALIDATION_ERROR` | Filtros invalidos. |
+
+Audita `CUSTOMER_DUE_DATES_EXPORTED` con filtros, limite, `resultCount` y
+`actorUserId`.
+
+## 6. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -158,7 +212,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 6. `POST /api/invoices/{invoiceId}/payment-returns`
+## 7. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
