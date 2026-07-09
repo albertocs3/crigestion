@@ -24,6 +24,7 @@ Fuera del primer corte:
 
 - Base inicial de cobros: `/api/invoices/{invoiceId}/payments`.
 - Base inicial de devoluciones: `/api/invoices/{invoiceId}/payment-returns`.
+- Base inicial de vencimientos: `/api/treasury/customer-due-dates`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -35,11 +36,83 @@ Fuera del primer corte:
 
 | Permiso | Uso |
 |---|---|
-| `Treasury.ManagePayments` | Registrar cobros manuales de clientes. |
+| `Treasury.ManagePayments` | Consultar vencimientos y registrar cobros/devoluciones manuales de clientes. |
 
 El administrador protegido recibe este permiso en el seed inicial.
 
-## 4. `POST /api/invoices/{invoiceId}/payments`
+## 4. `GET /api/treasury/customer-due-dates`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Tamano de pagina. Maximo 100. Por defecto 25. |
+| `cursor` | UUID del ultimo vencimiento recibido. |
+| `scope` | `OPEN`, `ALL`, `PENDING`, `PAID`, `RETURNED` o `UNPAID`. Por defecto `OPEN`. |
+| `customerId` | Filtro por cliente. |
+| `dueFrom`, `dueTo` | Rango de fecha de vencimiento, formato `AAAA-MM-DD`. |
+| `search` | Busqueda por numero de factura, codigo o nombre de cliente. |
+
+Reglas:
+
+- Solo muestra vencimientos de facturas emitidas.
+- `OPEN` excluye vencimientos `PAID`.
+- Los importes se devuelven como cadenas decimales con dos posiciones.
+- `paidAmount` es neto: cobros menos devoluciones.
+- `pendingAmount` es el importe del vencimiento menos el cobro neto.
+
+Respuesta `200`:
+
+```json
+{
+  "dueDates": [
+    {
+      "id": "uuid",
+      "invoiceId": "uuid",
+      "invoiceNumber": "F2600001",
+      "invoiceSeries": "F",
+      "invoiceYear": 2026,
+      "customer": {
+        "id": "uuid",
+        "code": "C-0001",
+        "legalName": "Cliente SL"
+      },
+      "issueDate": "2026-07-07",
+      "dueDate": "2026-08-06",
+      "amount": "121.00",
+      "paidAmount": "100.00",
+      "returnedAmount": "21.00",
+      "pendingAmount": "21.00",
+      "paymentMethod": "BANK_TRANSFER",
+      "status": "PENDING",
+      "paymentStatus": "PARTIALLY_PAID"
+    }
+  ],
+  "summary": {
+    "count": 1,
+    "totalAmount": "121.00",
+    "paidAmount": "100.00",
+    "returnedAmount": "21.00",
+    "pendingAmount": "21.00"
+  },
+  "nextCursor": null
+}
+```
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
+| `403` | `FORBIDDEN` | La sesion no tiene permiso. |
+| `422` | `VALIDATION_ERROR` | Filtros invalidos. |
+
+Audita `CUSTOMER_DUE_DATES_VIEWED` con filtros, paginacion,
+`resultCount` y `actorUserId`.
+
+## 5. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -85,7 +158,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 5. `POST /api/invoices/{invoiceId}/payment-returns`
+## 6. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
