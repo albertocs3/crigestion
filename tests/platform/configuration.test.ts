@@ -86,6 +86,55 @@ describe("platform configuration", () => {
     expect(auditPayload).not.toContain("B87654321");
     expect(auditPayload).not.toContain("contabilidad@example.test");
   });
+
+  it("does not allow changing company tax id after issued invoices exist", async () => {
+    const actor = await loginAsAdmin();
+    await createIssuedInvoice(actor.id);
+
+    const result = await updateCompanyConfiguration(
+      {
+        legalName: "CriGestion Actualizada SL",
+        taxId: "B87654321",
+        email: "contabilidad@example.test"
+      },
+      actor
+    );
+    const configuration = await getPlatformConfiguration();
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "COMPANY_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
+        message: "El NIF de la empresa no puede cambiarse cuando existen facturas emitidas."
+      }
+    });
+    expect(configuration?.company.taxId).toBe("B12345678");
+  });
+
+  it("allows changing non-tax company fields after issued invoices exist", async () => {
+    const actor = await loginAsAdmin();
+    await createIssuedInvoice(actor.id);
+
+    const result = await updateCompanyConfiguration(
+      {
+        legalName: "CriGestion Actualizada SL",
+        taxId: "B12345678",
+        email: "contabilidad@example.test"
+      },
+      actor
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      value: {
+        legalName: "CriGestion Actualizada SL",
+        taxId: "B12345678",
+        email: "contabilidad@example.test"
+      }
+    });
+  });
 });
 
 async function loginAsAdmin() {
@@ -114,10 +163,64 @@ async function initializeForConfiguration(): Promise<void> {
   }
 }
 
+async function createIssuedInvoice(actorUserId: string): Promise<void> {
+  const customer = await prisma.customer.create({
+    data: {
+      code: "C-FISCAL",
+      type: "COMPANY",
+      legalName: "Cliente Fiscal SL",
+      taxId: "B12345674",
+      normalizedTaxId: "B12345674",
+      fiscalTreatment: "DOMESTIC",
+      fiscalAddressLine: "Calle Fiscal 1",
+      fiscalPostalCode: "28001",
+      fiscalCity: "Madrid",
+      fiscalProvince: "Madrid",
+      fiscalCountry: "ES",
+      createdById: actorUserId
+    }
+  });
+
+  await prisma.invoice.create({
+    data: {
+      status: "ISSUED",
+      verifactuStatus: "PENDING",
+      series: "F",
+      year: 2026,
+      numberSequence: 1,
+      number: "F2600001",
+      customerId: customer.id,
+      customerCodeSnapshot: customer.code,
+      customerLegalNameSnapshot: customer.legalName,
+      customerTaxIdSnapshot: customer.taxId,
+      customerFiscalTreatmentSnapshot: customer.fiscalTreatment,
+      customerFiscalAddressSnapshot: {
+        line1: customer.fiscalAddressLine,
+        postalCode: customer.fiscalPostalCode,
+        city: customer.fiscalCity,
+        province: customer.fiscalProvince,
+        country: customer.fiscalCountry
+      },
+      issueDate: new Date("2026-07-07T00:00:00.000Z"),
+      operationDate: new Date("2026-07-07T00:00:00.000Z"),
+      issuedAt: new Date("2026-07-07T10:00:00.000Z"),
+      total: "0.00",
+      createdById: actorUserId,
+      issuedById: actorUserId
+    }
+  });
+}
+
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.invoiceDueDate.deleteMany(),
+    prisma.invoiceTaxSummary.deleteMany(),
+    prisma.invoiceLine.deleteMany(),
+    prisma.invoice.deleteMany(),
+    prisma.invoiceNumberSequence.deleteMany(),
     prisma.platformMaintenanceState.deleteMany(),
-prisma.idempotencyRecord.deleteMany(),
+    prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.installation.deleteMany(),
     prisma.reservedUserName.deleteMany(),

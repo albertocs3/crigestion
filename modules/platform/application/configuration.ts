@@ -37,7 +37,10 @@ export type UpdateCompanyConfigurationResult =
       ok: false;
       status: 404 | 409;
       error: {
-        code: "CONFIGURATION_NOT_FOUND" | "COMPANY_TAX_ID_ALREADY_USED";
+        code:
+          | "CONFIGURATION_NOT_FOUND"
+          | "COMPANY_TAX_ID_ALREADY_USED"
+          | "COMPANY_TAX_ID_LOCKED_BY_ISSUED_INVOICES";
         message: string;
       };
     };
@@ -105,6 +108,20 @@ export async function updateCompanyConfiguration(
 
   const previousCompany = installation.company;
   const changedFields = changedCompanyFields(previousCompany, command);
+  const taxIdChanged = previousCompany.taxId !== command.taxId;
+
+  const taxIdLocked = taxIdChanged && (await hasIssuedInvoices());
+
+  if (taxIdLocked) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "COMPANY_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
+        message: "El NIF de la empresa no puede cambiarse cuando existen facturas emitidas."
+      }
+    };
+  }
 
   try {
     const company = await prisma.$transaction(async (tx) => {
@@ -158,6 +175,18 @@ export async function updateCompanyConfiguration(
 
     throw error;
   }
+}
+
+async function hasIssuedInvoices(): Promise<boolean> {
+  const issuedInvoiceCount = await prisma.invoice.count({
+    where: {
+      status: {
+        not: "DRAFT"
+      }
+    }
+  });
+
+  return issuedInvoiceCount > 0;
 }
 
 function changedCompanyFields(
