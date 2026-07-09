@@ -191,6 +191,41 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               </tbody>
             </table>
           </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cobro</th>
+                  <th>Fecha</th>
+                  <th>Importe</th>
+                  <th>Origen</th>
+                  <th>Referencia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.payments.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>No hay cobros registrados.</td>
+                  </tr>
+                ) : (
+                  invoice.payments.map((payment, index) => (
+                    <tr key={payment.id}>
+                      <td>
+                        <strong>Cobro {index + 1}</strong>
+                        <span className="cell-detail">
+                          Vencimiento {dueDatePosition(invoice, payment.dueDateId)}
+                        </span>
+                      </td>
+                      <td>{formatDate(payment.paymentDate)}</td>
+                      <td>{formatMoney(payment.amount)}</td>
+                      <td>{paymentSourceLabel(payment.source)}</td>
+                      <td>{payment.reference ?? "Sin referencia"}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div className="panel stack">
@@ -369,6 +404,22 @@ function paymentStatusLabel(status: InvoiceDetail["paymentStatus"]): string {
     case "UNPAID":
       return "Impagada";
   }
+}
+
+function paymentSourceLabel(source: InvoiceDetail["payments"][number]["source"]): string {
+  switch (source) {
+    case "MANUAL":
+      return "Manual";
+    case "SEPA_REMITTANCE":
+      return "Remesa SEPA";
+  }
+}
+
+function dueDatePosition(
+  invoice: InvoiceDetail,
+  dueDateId: string
+): number | string {
+  return invoice.dueDates.find((dueDate) => dueDate.id === dueDateId)?.position ?? "-";
 }
 
 function verifactuStatusLabel(status: InvoiceDetail["verifactuStatus"]): string {

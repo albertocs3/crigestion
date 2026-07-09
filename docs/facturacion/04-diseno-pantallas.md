@@ -90,6 +90,7 @@ Una factura `ISSUED` se muestra en solo lectura:
 - Estado VeriFactu `PENDING` en el MVP.
 - Accion de descarga PDF para usuarios con `Billing.View`.
 - Accion de registrar cobro para usuarios con `Treasury.ManagePayments`.
+- Historial de cobros registrados con fecha, importe, origen y referencia.
 
 Acciones futuras, fuera del MVP:
 

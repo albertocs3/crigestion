@@ -394,6 +394,9 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(page.getByText("Cobro registrado.")).toBeVisible();
   await expect(page.getByText("Cobrada").first()).toBeVisible();
   await expect(page.getByText("0.00 EUR").first()).toBeVisible();
+  await expect(page.getByText("Cobro 1")).toBeVisible();
+  await expect(page.getByText("Transferencia E2E")).toBeVisible();
+  await expect(page.getByText("Manual").first()).toBeVisible();
 
   await page.getByRole("link", { name: "Facturas" }).click();
   await expect(page).toHaveURL(/\/app\/invoices$/);

@@ -33,13 +33,14 @@ export function CustomerPaymentRegisterForm({
   );
   const [paymentDate, setPaymentDate] = useState(todayDateInput());
   const [amount, setAmount] = useState(payableDueDates[0]?.pendingAmount ?? "0.00");
+  const [reference, setReference] = useState("");
+  const [notes, setNotes] = useState("");
   const disabled = payableDueDates.length === 0 || state.status === "submitting";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setState({ status: "submitting" });
 
-    const form = event.currentTarget;
     const csrfToken = await fetchCsrfToken();
     const response = await fetch(`/api/invoices/${invoiceId}/payments`, {
       method: "POST",
@@ -49,10 +50,12 @@ export function CustomerPaymentRegisterForm({
         "X-CSRF-Token": csrfToken
       },
       body: JSON.stringify(
-        paymentPayload(new FormData(form), {
+        paymentPayload({
           dueDateId: selectedDueDateId,
           paymentDate,
-          amount
+          amount,
+          reference,
+          notes
         })
       )
     });
@@ -129,11 +132,23 @@ export function CustomerPaymentRegisterForm({
         <div className="form-two-columns">
           <label>
             Referencia
-            <input name="reference" maxLength={120} disabled={disabled} />
+            <input
+              name="reference"
+              maxLength={120}
+              value={reference}
+              onChange={(event) => setReference(event.currentTarget.value)}
+              disabled={disabled}
+            />
           </label>
           <label>
             Observaciones internas
-            <input name="notes" maxLength={500} disabled={disabled} />
+            <input
+              name="notes"
+              maxLength={500}
+              value={notes}
+              onChange={(event) => setNotes(event.currentTarget.value)}
+              disabled={disabled}
+            />
           </label>
         </div>
       </fieldset>
@@ -154,25 +169,24 @@ export function CustomerPaymentRegisterForm({
   );
 }
 
-function paymentPayload(
-  formData: FormData,
-  controlled: {
-    dueDateId: string;
-    paymentDate: string;
-    amount: string;
-  }
-) {
+function paymentPayload(controlled: {
+  dueDateId: string;
+  paymentDate: string;
+  amount: string;
+  reference: string;
+  notes: string;
+}) {
   return {
     dueDateId: controlled.dueDateId,
     paymentDate: controlled.paymentDate,
     amount: controlled.amount,
-    reference: optionalString(formData.get("reference")),
-    notes: optionalString(formData.get("notes"))
+    reference: optionalText(controlled.reference),
+    notes: optionalText(controlled.notes)
   };
 }
 
-function optionalString(value: FormDataEntryValue | null): string | null {
-  const text = String(value ?? "").trim();
+function optionalText(value: string): string | null {
+  const text = value.trim();
 
   return text ? text : null;
 }

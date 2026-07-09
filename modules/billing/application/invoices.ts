@@ -166,6 +166,15 @@ export type InvoiceDetail = {
     paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
     status: "PENDING" | "PAID" | "RETURNED" | "UNPAID";
   }>;
+  payments: Array<{
+    id: string;
+    dueDateId: string;
+    source: "MANUAL" | "SEPA_REMITTANCE";
+    paymentDate: string;
+    amount: string;
+    reference: string | null;
+    createdAt: string;
+  }>;
   totals: {
     subtotal: string;
     discountTotal: string;
@@ -764,6 +773,18 @@ const invoiceDetailSelect = {
       }
     }
   },
+  payments: {
+    orderBy: [{ paymentDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      dueDateId: true,
+      source: true,
+      paymentDate: true,
+      amount: true,
+      reference: true,
+      createdAt: true
+    }
+  },
   createdAt: true,
   updatedAt: true
 } satisfies Prisma.InvoiceSelect;
@@ -1003,6 +1024,15 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
         status: dueDate.status
       };
     }),
+    payments: invoice.payments.map((payment) => ({
+      id: payment.id,
+      dueDateId: payment.dueDateId,
+      source: payment.source,
+      paymentDate: formatDateOnly(payment.paymentDate),
+      amount: payment.amount.toFixed(2),
+      reference: payment.reference,
+      createdAt: payment.createdAt.toISOString()
+    })),
     totals: {
       subtotal: invoice.subtotal.toFixed(2),
       discountTotal: invoice.discountTotal.toFixed(2),
