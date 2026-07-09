@@ -51,9 +51,17 @@ export const listJournalEntriesSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100).optional()
 });
 
+export const listAccountingAccountsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+  status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
+  search: z.string().trim().min(1).max(120).optional()
+});
+
 export type CreateAccountingAccountCommand = z.infer<typeof createAccountingAccountSchema>;
 export type CreateManualJournalEntryCommand = z.infer<typeof createManualJournalEntrySchema>;
 export type ListJournalEntriesCommand = z.infer<typeof listJournalEntriesSchema>;
+export type ListAccountingAccountsCommand = z.infer<typeof listAccountingAccountsSchema>;
 
 export type AccountingAccountDto = {
   id: string;
@@ -92,6 +100,11 @@ export type JournalEntryDto = {
 
 export type JournalEntryList = {
   entries: JournalEntryDto[];
+  nextCursor: string | null;
+};
+
+export type AccountingAccountList = {
+  accounts: AccountingAccountDto[];
   nextCursor: string | null;
 };
 
@@ -361,6 +374,50 @@ export async function listJournalEntries(
 
   return {
     entries: page.map(mapJournalEntry),
+    nextCursor: records.length > command.limit ? page.at(-1)?.id ?? null : null
+  };
+}
+
+export async function listAccountingAccounts(
+  command: ListAccountingAccountsCommand,
+  actor: SessionUser
+): Promise<AccountingAccountList> {
+  const records = await prisma.accountingAccount.findMany({
+    where: {
+      ...(command.status ? { status: command.status } : {}),
+      ...(command.search
+        ? {
+            OR: [
+              { code: { contains: command.search, mode: "insensitive" } },
+              { name: { contains: command.search, mode: "insensitive" } }
+            ]
+          }
+        : {})
+    },
+    orderBy: [{ code: "asc" }, { id: "asc" }],
+    cursor: command.cursor ? { id: command.cursor } : undefined,
+    skip: command.cursor ? 1 : 0,
+    take: command.limit + 1
+  });
+  const page = records.slice(0, command.limit);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "ACCOUNTING_ACCOUNTS_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        status: command.status ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        cursor: command.cursor ?? null,
+        resultCount: page.length
+      }
+    }
+  });
+
+  return {
+    accounts: page.map(mapAccount),
     nextCursor: records.length > command.limit ? page.at(-1)?.id ?? null : null
   };
 }
