@@ -421,7 +421,7 @@ function chunkInvoiceLines(
 }
 
 function invoiceTitle(invoice: InvoiceDetail): string {
-  if (invoice.status === "RECTIFIED") {
+  if (invoice.documentType === "RECTIFICATION") {
     return "Factura rectificativa";
   }
 

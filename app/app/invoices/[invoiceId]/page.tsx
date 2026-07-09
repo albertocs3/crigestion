@@ -6,6 +6,7 @@ import {
 } from "@/modules/billing/application/invoices";
 import { InvoiceIssueButton } from "@/modules/billing/presentation/InvoiceIssueButton";
 import { InvoiceLineCreateForm } from "@/modules/billing/presentation/InvoiceLineCreateForm";
+import { InvoiceRectificationCreateForm } from "@/modules/billing/presentation/InvoiceRectificationCreateForm";
 import { listCatalogItems } from "@/modules/catalog/application/items";
 import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -100,6 +101,11 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
     : [];
   const editable = invoice.status === "DRAFT";
   const issueDisabled = !editable || invoice.lines.length === 0;
+  const canCreateRectification =
+    canIssue &&
+    invoice.documentType === "STANDARD" &&
+    invoice.status === "ISSUED" &&
+    invoice.rectificationInvoices.length === 0;
 
   return (
     <main className="shell">
@@ -120,6 +126,7 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
             <div>
               <h1>{invoice.number ?? "Borrador de factura"}</h1>
               <p className="muted">
+                {documentTypeLabel(invoice.documentType)} -{" "}
                 {invoice.customerSnapshot.code} - {invoice.customerSnapshot.legalName}
               </p>
             </div>
@@ -150,6 +157,26 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               <span className="data-label">Total</span>
               <strong>{formatMoney(invoice.totals.total)}</strong>
             </div>
+            {invoice.rectifiesInvoice ? (
+              <div>
+                <span className="data-label">Rectifica a</span>
+                <strong>
+                  <Link href={`/app/invoices/${invoice.rectifiesInvoice.id}`}>
+                    {invoice.rectifiesInvoice.number ?? "Factura original"}
+                  </Link>
+                </strong>
+              </div>
+            ) : null}
+            {invoice.rectificationInvoices.length > 0 ? (
+              <div>
+                <span className="data-label">Rectificativa</span>
+                <strong>
+                  <Link href={`/app/invoices/${invoice.rectificationInvoices[0]?.id}`}>
+                    {invoice.rectificationInvoices[0]?.number ?? "Abrir rectificativa"}
+                  </Link>
+                </strong>
+              </div>
+            ) : null}
           </div>
 
           <div className="table-wrap">
@@ -370,6 +397,15 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
           </div>
         ) : null}
 
+        {canCreateRectification ? (
+          <div className="panel stack">
+            <InvoiceRectificationCreateForm
+              invoiceId={invoice.id}
+              defaultIssueDate={invoice.issueDate}
+            />
+          </div>
+        ) : null}
+
         {canManagePayments && invoice.status === "ISSUED" ? (
           <div className="panel stack">
             <CustomerPaymentRegisterForm
@@ -406,6 +442,15 @@ function invoiceStatusLabel(status: InvoiceDetail["status"]): string {
       return "Rectificada";
     case "VOIDED":
       return "Anulada";
+  }
+}
+
+function documentTypeLabel(documentType: InvoiceDetail["documentType"]): string {
+  switch (documentType) {
+    case "STANDARD":
+      return "Factura";
+    case "RECTIFICATION":
+      return "Factura rectificativa";
   }
 }
 

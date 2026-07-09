@@ -63,6 +63,21 @@ export const addInvoiceLineSchema = z.object({
 export const issueInvoiceSchema = z.object({
   issueDate: dateOnlySchema
 }).strict();
+export const createInvoiceRectificationSchema = z.object({
+  issueDate: dateOnlySchema,
+  reason: z
+    .enum([
+      "DATA_ERROR",
+      "AMOUNT_ERROR",
+      "RETURN",
+      "LATE_DISCOUNT",
+      "OPERATION_CANCELLED",
+      "UNPAID",
+      "OTHER"
+    ])
+    .default("OTHER"),
+  notes: z.string().trim().min(1).max(1000).nullable().default(null)
+}).strict();
 export const listInvoicesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(maxLimit).default(defaultLimit),
   cursor: z.string().uuid().optional(),
@@ -75,10 +90,14 @@ export const listInvoicesSchema = z.object({
 export type CreateInvoiceDraftCommand = z.infer<typeof createInvoiceDraftSchema>;
 export type AddInvoiceLineCommand = z.infer<typeof addInvoiceLineSchema>;
 export type IssueInvoiceCommand = z.infer<typeof issueInvoiceSchema>;
+export type CreateInvoiceRectificationCommand = z.infer<
+  typeof createInvoiceRectificationSchema
+>;
 export type ListInvoicesCommand = z.infer<typeof listInvoicesSchema>;
 
 export type InvoiceListItem = {
   id: string;
+  documentType: InvoiceDetail["documentType"];
   status: InvoiceDetail["status"];
   number: string | null;
   series: string;
@@ -104,6 +123,7 @@ export type InvoiceList = {
 
 export type InvoiceDetail = {
   id: string;
+  documentType: "STANDARD" | "RECTIFICATION";
   status: "DRAFT" | "ISSUED" | "RECTIFIED" | "VOIDED";
   number: string | null;
   series: string;
@@ -118,6 +138,15 @@ export type InvoiceDetail = {
   };
   issueDate: string;
   operationDate: string;
+  rectificationReason: string | null;
+  rectifiesInvoice: {
+    id: string;
+    number: string | null;
+  } | null;
+  rectificationInvoices: Array<{
+    id: string;
+    number: string | null;
+  }>;
   paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "UNPAID";
   verifactuStatus:
     | "NOT_APPLICABLE"
@@ -276,6 +305,23 @@ export type IssueInvoiceResult =
   | { ok: true; status: 200; value: InvoiceDetail }
   | InvoiceNotFoundResult
   | InvoiceNotIssuableResult;
+
+type InvoiceNotRectifiableResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code:
+      | "INVOICE_NOT_RECTIFIABLE"
+      | "INVOICE_ALREADY_RECTIFIED"
+      | "INVOICE_RECTIFICATION_CHRONOLOGY_VIOLATION";
+    message: string;
+  };
+};
+
+export type CreateInvoiceRectificationResult =
+  | { ok: true; status: 201; value: InvoiceDetail }
+  | InvoiceNotFoundResult
+  | InvoiceNotRectifiableResult;
 
 export async function listInvoices(
   command: ListInvoicesCommand,
@@ -697,6 +743,275 @@ export async function issueInvoice(
   };
 }
 
+export async function createInvoiceRectification(
+  invoiceId: string,
+  command: CreateInvoiceRectificationCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<CreateInvoiceRectificationResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const original = await tx.invoice.findUnique({
+      where: { id: invoiceId },
+      select: {
+        id: true,
+        documentType: true,
+        status: true,
+        series: true,
+        year: true,
+        number: true,
+        customerId: true,
+        customerCodeSnapshot: true,
+        customerLegalNameSnapshot: true,
+        customerTaxIdSnapshot: true,
+        customerFiscalTreatmentSnapshot: true,
+        customerFiscalAddressSnapshot: true,
+        issueDate: true,
+        operationDate: true,
+        subtotal: true,
+        discountTotal: true,
+        taxableBase: true,
+        taxAmount: true,
+        total: true,
+        lines: {
+          orderBy: { position: "asc" },
+          select: {
+            position: true,
+            catalogItemId: true,
+            catalogItemCodeSnapshot: true,
+            catalogItemKindSnapshot: true,
+            description: true,
+            quantity: true,
+            unitPrice: true,
+            discountPercent: true,
+            discountAmount: true,
+            taxRateId: true,
+            taxRateCodeSnapshot: true,
+            taxRateNameSnapshot: true,
+            taxRateSnapshot: true,
+            lineSubtotal: true,
+            lineDiscountTotal: true,
+            lineTaxableBase: true,
+            lineTaxAmount: true,
+            lineTotal: true
+          }
+        },
+        taxSummaries: {
+          select: {
+            taxRateCode: true,
+            taxRate: true,
+            taxableBase: true,
+            taxAmount: true,
+            total: true
+          }
+        },
+        dueDates: {
+          orderBy: { position: "asc" },
+          select: {
+            position: true,
+            dueDate: true,
+            amount: true,
+            paymentMethod: true
+          }
+        },
+        rectificationInvoices: {
+          select: { id: true }
+        }
+      }
+    });
+
+    if (!original) {
+      return { kind: "invoice-not-found" as const };
+    }
+
+    if (original.documentType !== "STANDARD" || original.status !== "ISSUED") {
+      return { kind: "invoice-not-rectifiable" as const };
+    }
+
+    if (original.rectificationInvoices.length > 0) {
+      return { kind: "invoice-already-rectified" as const };
+    }
+
+    const issueDate = parseDateOnly(command.issueDate);
+    const chronologyViolation = await hasChronologyViolation(tx, "R", issueDate);
+
+    if (chronologyViolation) {
+      return { kind: "chronology-violation" as const };
+    }
+
+    const sequence = await reserveInvoiceNumber(tx, "R", issueDate);
+    const number = formatInvoiceNumber("R", sequence.year, sequence.value);
+    const rectification = await tx.invoice.create({
+      data: {
+        documentType: "RECTIFICATION",
+        origin: "MANUAL",
+        status: "ISSUED",
+        paymentStatus: "PAID",
+        verifactuStatus: "PENDING",
+        series: "R",
+        year: sequence.year,
+        numberSequence: sequence.value,
+        number,
+        customerId: original.customerId,
+        customerCodeSnapshot: original.customerCodeSnapshot,
+        customerLegalNameSnapshot: original.customerLegalNameSnapshot,
+        customerTaxIdSnapshot: original.customerTaxIdSnapshot,
+        customerFiscalTreatmentSnapshot: original.customerFiscalTreatmentSnapshot,
+        customerFiscalAddressSnapshot:
+          original.customerFiscalAddressSnapshot as Prisma.InputJsonValue,
+        issueDate,
+        operationDate: original.operationDate,
+        issuedAt: new Date(),
+        subtotal: original.subtotal.neg(),
+        discountTotal: original.discountTotal.neg(),
+        taxableBase: original.taxableBase.neg(),
+        taxAmount: original.taxAmount.neg(),
+        total: original.total.neg(),
+        notes: command.notes,
+        rectificationReason: command.reason,
+        rectifiesInvoiceId: original.id,
+        createdById: actor.id,
+        updatedById: actor.id,
+        issuedById: actor.id
+      },
+      select: { id: true }
+    });
+
+    if (original.lines.length > 0) {
+      await tx.invoiceLine.createMany({
+        data: original.lines.map((line) => ({
+          invoiceId: rectification.id,
+          position: line.position,
+          catalogItemId: line.catalogItemId,
+          catalogItemCodeSnapshot: line.catalogItemCodeSnapshot,
+          catalogItemKindSnapshot: line.catalogItemKindSnapshot,
+          description: line.description,
+          quantity: line.quantity.neg(),
+          unitPrice: line.unitPrice,
+          discountPercent: line.discountPercent,
+          discountAmount: line.discountAmount,
+          taxRateId: line.taxRateId,
+          taxRateCodeSnapshot: line.taxRateCodeSnapshot,
+          taxRateNameSnapshot: line.taxRateNameSnapshot,
+          taxRateSnapshot: line.taxRateSnapshot,
+          lineSubtotal: line.lineSubtotal.neg(),
+          lineDiscountTotal: line.lineDiscountTotal.neg(),
+          lineTaxableBase: line.lineTaxableBase.neg(),
+          lineTaxAmount: line.lineTaxAmount.neg(),
+          lineTotal: line.lineTotal.neg()
+        }))
+      });
+    }
+
+    if (original.taxSummaries.length > 0) {
+      await tx.invoiceTaxSummary.createMany({
+        data: original.taxSummaries.map((summary) => ({
+          invoiceId: rectification.id,
+          taxRateCode: summary.taxRateCode,
+          taxRate: summary.taxRate,
+          taxableBase: summary.taxableBase.neg(),
+          taxAmount: summary.taxAmount.neg(),
+          total: summary.total.neg()
+        }))
+      });
+    }
+
+    const dueDateTemplate = original.dueDates[0];
+
+    await tx.invoiceDueDate.create({
+      data: {
+        invoiceId: rectification.id,
+        position: 1,
+        dueDate: issueDate,
+        amount: original.total.neg(),
+        paymentMethod: dueDateTemplate?.paymentMethod ?? "BANK_TRANSFER",
+        status: "PAID"
+      }
+    });
+
+    await tx.invoiceVerifactuRecord.create({
+      data: {
+        invoiceId: rectification.id,
+        status: "PENDING"
+      }
+    });
+
+    await tx.invoice.update({
+      where: { id: original.id },
+      data: {
+        status: "RECTIFIED",
+        updatedById: actor.id
+      }
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "INVOICE_RECTIFICATION_CREATED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          invoiceId: rectification.id,
+          rectifiesInvoiceId: original.id,
+          originalNumber: original.number,
+          number,
+          customerId: original.customerId,
+          total: original.total.neg().toFixed(2),
+          reason: command.reason,
+          issueDate: command.issueDate,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return {
+      kind: "created" as const,
+      invoice: await findInvoiceDetail(tx, rectification.id)
+    };
+  });
+
+  if (result.kind === "invoice-not-found") {
+    return invoiceNotFound();
+  }
+
+  if (result.kind === "invoice-not-rectifiable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_RECTIFIABLE",
+        message: "Solo se pueden rectificar facturas ordinarias emitidas."
+      }
+    };
+  }
+
+  if (result.kind === "invoice-already-rectified") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_ALREADY_RECTIFIED",
+        message: "La factura ya tiene una rectificativa asociada."
+      }
+    };
+  }
+
+  if (result.kind === "chronology-violation") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_RECTIFICATION_CHRONOLOGY_VIOLATION",
+        message: "La fecha de emision rompe el orden cronologico de la serie rectificativa."
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    status: 201,
+    value: mapInvoiceDetail(result.invoice)
+  };
+}
+
 const invoiceCustomerSelect = {
   id: true,
   code: true,
@@ -717,6 +1032,7 @@ const invoiceCustomerSelect = {
 
 const invoiceDetailSelect = {
   id: true,
+  documentType: true,
   status: true,
   number: true,
   series: true,
@@ -729,6 +1045,20 @@ const invoiceDetailSelect = {
   customerFiscalAddressSnapshot: true,
   issueDate: true,
   operationDate: true,
+  rectificationReason: true,
+  rectifiesInvoice: {
+    select: {
+      id: true,
+      number: true
+    }
+  },
+  rectificationInvoices: {
+    orderBy: [{ issueDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      number: true
+    }
+  },
   paymentStatus: true,
   verifactuStatus: true,
   subtotal: true,
@@ -824,6 +1154,7 @@ const invoiceDetailSelect = {
 
 const invoiceListSelect = {
   id: true,
+  documentType: true,
   status: true,
   number: true,
   series: true,
@@ -993,6 +1324,7 @@ async function reserveInvoiceNumber(
 export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): InvoiceDetail {
   return {
     id: invoice.id,
+    documentType: invoice.documentType,
     status: invoice.status,
     number: invoice.number,
     series: invoice.series,
@@ -1007,6 +1339,17 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
     },
     issueDate: formatDateOnly(invoice.issueDate),
     operationDate: formatDateOnly(invoice.operationDate),
+    rectificationReason: invoice.rectificationReason,
+    rectifiesInvoice: invoice.rectifiesInvoice
+      ? {
+          id: invoice.rectifiesInvoice.id,
+          number: invoice.rectifiesInvoice.number
+        }
+      : null,
+    rectificationInvoices: invoice.rectificationInvoices.map((rectification) => ({
+      id: rectification.id,
+      number: rectification.number
+    })),
     paymentStatus: invoice.paymentStatus,
     verifactuStatus: invoice.verifactuStatus,
     lines: invoice.lines.map((line) => ({
@@ -1099,6 +1442,7 @@ const mapInvoiceDetail = mapInvoiceDetailForTreasury;
 function mapInvoiceListItem(invoice: InvoiceListRecord): InvoiceListItem {
   return {
     id: invoice.id,
+    documentType: invoice.documentType,
     status: invoice.status,
     number: invoice.number,
     series: invoice.series,

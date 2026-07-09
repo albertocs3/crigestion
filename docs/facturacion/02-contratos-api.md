@@ -17,7 +17,6 @@ Incluye:
 Fuera del primer corte:
 
 - Presupuestos.
-- Facturas rectificativas.
 - Cobros, devoluciones, anticipos y remesas SEPA.
 - Plantilla PDF definitiva, firma digital y conservacion obligatoria del binario.
 - Envio por correo.
@@ -336,7 +335,52 @@ Errores:
 Audita `INVOICE_ISSUED` con `invoiceId`, `number`, `customerId`, `total`,
 `actorUserId` y `correlationId`.
 
-## 12. `GET /api/invoices/{invoiceId}/pdf`
+## 12. `POST /api/invoices/{invoiceId}/rectifications`
+
+Permiso requerido: `Billing.Issue`.
+
+Requiere `Idempotency-Key`.
+
+Body:
+
+```json
+{
+  "issueDate": "2026-07-08",
+  "reason": "AMOUNT_ERROR",
+  "notes": "Observaciones internas opcionales"
+}
+```
+
+Motivos admitidos: `DATA_ERROR`, `AMOUNT_ERROR`, `RETURN`,
+`LATE_DISCOUNT`, `OPERATION_CANCELLED`, `UNPAID` y `OTHER`.
+
+Reglas:
+
+- Solo se rectifican facturas ordinarias emitidas.
+- La rectificativa afecta a una unica factura.
+- Se crea ya emitida con serie `R`.
+- Copia las lineas de la factura original e invierte cantidades, bases,
+  impuestos y totales.
+- La factura original pasa a `RECTIFIED`.
+- La rectificativa queda vinculada con la factura original.
+- No se admite una segunda rectificativa sobre la misma factura en este corte.
+
+Respuesta `201`: DTO de detalle de la factura rectificativa.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `INVOICE_NOT_FOUND` | La factura original no existe. |
+| `409` | `INVOICE_NOT_RECTIFIABLE` | La factura no es ordinaria emitida. |
+| `409` | `INVOICE_ALREADY_RECTIFIED` | Ya existe una rectificativa asociada. |
+| `409` | `INVOICE_RECTIFICATION_CHRONOLOGY_VIOLATION` | La fecha rompe el orden cronologico de la serie `R`. |
+
+Audita `INVOICE_RECTIFICATION_CREATED` con `invoiceId`,
+`rectifiesInvoiceId`, numero original, numero rectificativo, total, motivo,
+`actorUserId` y `correlationId`.
+
+## 13. `GET /api/invoices/{invoiceId}/pdf`
 
 Permiso requerido: `Billing.View`.
 
@@ -361,7 +405,7 @@ Errores:
 Audita `INVOICE_PDF_DOWNLOADED` con `invoiceId`, `number`, `customerId` y
 `actorUserId`.
 
-## 13. Bloqueo por Mantenimiento
+## 14. Bloqueo por Mantenimiento
 
 Todas las mutaciones anteriores devuelven `423 MAINTENANCE_MODE_ACTIVE` si la
 plataforma esta en mantenimiento. Las consultas siguen permitidas para soporte

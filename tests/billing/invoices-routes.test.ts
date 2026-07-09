@@ -9,6 +9,7 @@ import {
 import { GET as invoiceDetailGet } from "@/app/api/invoices/[invoiceId]/route";
 import { POST as invoiceLinePost } from "@/app/api/invoices/[invoiceId]/lines/route";
 import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/route";
+import { POST as invoiceRectificationPost } from "@/app/api/invoices/[invoiceId]/rectifications/route";
 import { POST as invoicePaymentReturnPost } from "@/app/api/invoices/[invoiceId]/payment-returns/route";
 import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
@@ -363,6 +364,119 @@ describe("billing invoice HTTP contracts", () => {
       message: "La factura no esta en borrador."
     });
     expect(lineCount).toBe(1);
+  });
+
+  it("creates invoice rectifications through the invoice contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+
+    const response = await invoiceRectificationPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/rectifications`,
+        {
+          issueDate: "2026-07-08",
+          reason: "AMOUNT_ERROR",
+          notes: "No auditar literal completo"
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const body = await response.json();
+    const original = await prisma.invoice.findUniqueOrThrow({
+      where: { id: issued.id },
+      select: { status: true }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "INVOICE_RECTIFICATION_CREATED" }
+    });
+
+    expect(response.status).toBe(201);
+    expect(body).toMatchObject({
+      documentType: "RECTIFICATION",
+      status: "ISSUED",
+      series: "R",
+      number: "R2600001",
+      rectificationReason: "AMOUNT_ERROR",
+      rectifiesInvoice: {
+        id: issued.id,
+        number: "F2600001"
+      },
+      totals: {
+        total: "-121.00"
+      }
+    });
+    expect(original.status).toBe("RECTIFIED");
+    expect(auditEvent.payload).toMatchObject({
+      rectifiesInvoiceId: issued.id,
+      number: "R2600001",
+      total: "-121.00",
+      reason: "AMOUNT_ERROR"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
+  });
+
+  it("protects invoice rectification creation with CSRF, idempotency and permissions", async () => {
+    await loginAsAdmin();
+    const adminCsrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(adminCsrfToken);
+
+    const missingIdempotencyResponse = await invoiceRectificationPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/rectifications`,
+        {
+          issueDate: "2026-07-08",
+          reason: "OTHER",
+          notes: null
+        },
+        { csrfToken: adminCsrfToken, idempotencyKey: null }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    cookieMock.reset();
+    await createBillingUserWithoutIssue();
+    await loginWith("facturacion", limitedPassword);
+    const limitedCsrfToken = await getCsrfToken();
+    const forbiddenResponse = await invoiceRectificationPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/rectifications`,
+        {
+          issueDate: "2026-07-08",
+          reason: "OTHER",
+          notes: null
+        },
+        { csrfToken: limitedCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    cookieMock.reset();
+    const unauthenticatedResponse = await invoiceRectificationPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/rectifications`,
+        {
+          issueDate: "2026-07-08",
+          reason: "OTHER",
+          notes: null
+        },
+        { csrfToken: adminCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(forbiddenResponse.status).toBe(403);
+    expect(await forbiddenResponse.json()).toMatchObject({
+      code: "FORBIDDEN"
+    });
+    expect(unauthenticatedResponse.status).toBe(401);
+    expect(await unauthenticatedResponse.json()).toMatchObject({
+      code: "UNAUTHENTICATED"
+    });
   });
 
   it("blocks invoice mutations while maintenance is active", async () => {

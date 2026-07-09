@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   addInvoiceLine,
+  createInvoiceRectification,
   createInvoiceDraft,
   createInvoiceDraftSchema,
   issueInvoice,
@@ -404,6 +405,110 @@ describe("billing invoices application service", () => {
         code: "INVOICE_CHRONOLOGY_VIOLATION",
         message: "La fecha de emision rompe el orden cronologico de la serie."
       }
+    });
+  });
+
+  it("creates full invoice rectifications without mutating original invoice data", async () => {
+    const actor = await loginAsAdmin();
+    const original = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Rectificativa SL"
+    });
+
+    const rectification = await createInvoiceRectification(
+      original.issued.value.id,
+      {
+        issueDate: "2026-07-08",
+        reason: "AMOUNT_ERROR",
+        notes: "Motivo interno no sensible"
+      },
+      actor,
+      { correlationId: "invoice-rectification-0001" }
+    );
+    const duplicate = await createInvoiceRectification(
+      original.issued.value.id,
+      {
+        issueDate: "2026-07-09",
+        reason: "OTHER",
+        notes: null
+      },
+      actor
+    );
+    const storedOriginal = await prisma.invoice.findUniqueOrThrow({
+      where: { id: original.issued.value.id },
+      select: {
+        status: true,
+        number: true,
+        total: true,
+        lines: {
+          select: {
+            quantity: true,
+            lineTotal: true
+          }
+        }
+      }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "INVOICE_RECTIFICATION_CREATED" }
+    });
+
+    expect(rectification).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        documentType: "RECTIFICATION",
+        status: "ISSUED",
+        series: "R",
+        number: "R2600001",
+        paymentStatus: "PAID",
+        rectificationReason: "AMOUNT_ERROR",
+        rectifiesInvoice: {
+          id: original.issued.value.id,
+          number: "F2600001"
+        },
+        totals: {
+          taxableBase: "-100.00",
+          taxAmount: "-21.00",
+          total: "-121.00"
+        },
+        lines: [
+          {
+            quantity: "-1.000",
+            totals: {
+              total: "-121.00"
+            }
+          }
+        ],
+        dueDates: [
+          {
+            amount: "-121.00",
+            status: "PAID"
+          }
+        ]
+      }
+    });
+    expect(storedOriginal.status).toBe("RECTIFIED");
+    expect(storedOriginal.number).toBe("F2600001");
+    expect(storedOriginal.total.toFixed(2)).toBe("121.00");
+    expect(storedOriginal.lines[0]?.quantity.toFixed(3)).toBe("1.000");
+    expect(storedOriginal.lines[0]?.lineTotal.toFixed(2)).toBe("121.00");
+    expect(duplicate).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_RECTIFIABLE",
+        message: "Solo se pueden rectificar facturas ordinarias emitidas."
+      }
+    });
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      rectifiesInvoiceId: original.issued.value.id,
+      originalNumber: "F2600001",
+      number: "R2600001",
+      total: "-121.00",
+      reason: "AMOUNT_ERROR",
+      issueDate: "2026-07-08",
+      correlationId: "invoice-rectification-0001"
     });
   });
 

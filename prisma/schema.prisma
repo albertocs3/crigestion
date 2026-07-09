@@ -123,6 +123,7 @@ enum CustomerStoreStatus {
 
 enum InvoiceDocumentType {
   STANDARD
+  RECTIFICATION
 }
 
 enum InvoiceDocumentStatus {
@@ -509,22 +510,26 @@ model Invoice {
   taxAmount                       Decimal                 @default(0) @db.Decimal(12, 2)
   total                           Decimal                 @default(0) @db.Decimal(12, 2)
   notes                           String?                 @db.VarChar(1000)
+  rectificationReason             String?                 @db.VarChar(120)
+  rectifiesInvoiceId              String?                 @unique @db.Uuid
   createdById                     String                  @db.Uuid
   updatedById                     String?                 @db.Uuid
   issuedById                      String?                 @db.Uuid
   createdAt                       DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt                       DateTime                @updatedAt @db.Timestamptz(3)
 
-  customer        Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy       User                    @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy       User?                   @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  issuedBy        User?                   @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
-  lines           InvoiceLine[]
-  taxSummaries    InvoiceTaxSummary[]
-  dueDates        InvoiceDueDate[]
-  payments        CustomerPayment[]
-  paymentReturns  CustomerPaymentReturn[]
-  verifactuRecord InvoiceVerifactuRecord?
+  customer              Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  rectifiesInvoice      Invoice?                @relation("InvoiceRectifications", fields: [rectifiesInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices Invoice[]               @relation("InvoiceRectifications")
+  createdBy             User                    @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy             User?                   @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  issuedBy              User?                   @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  lines                 InvoiceLine[]
+  taxSummaries          InvoiceTaxSummary[]
+  dueDates              InvoiceDueDate[]
+  payments              CustomerPayment[]
+  paymentReturns        CustomerPaymentReturn[]
+  verifactuRecord       InvoiceVerifactuRecord?
 
   @@unique([series, year, numberSequence])
   @@index([status, issueDate, id])

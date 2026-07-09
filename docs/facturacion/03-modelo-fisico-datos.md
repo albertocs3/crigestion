@@ -3,20 +3,22 @@
 ## 1. Primer Corte MVP
 
 El primer corte implementa facturas ordinarias manuales con lineas, resumen de
-impuestos, vencimiento inicial, numeracion definitiva al emitir y descarga PDF
-regenerada para facturas emitidas. No incluye presupuestos, rectificativas,
-cobros, envios por correo, remesas SEPA ni envio VeriFactu real.
+impuestos, vencimiento inicial, numeracion definitiva al emitir, rectificativas
+integras, cobros/devoluciones manuales y descarga PDF regenerada para facturas
+emitidas. No incluye presupuestos, envios por correo, remesas SEPA ni envio
+VeriFactu real.
 
 ## 2. Enumerados
 
-- `InvoiceDocumentType`: `STANDARD`.
+- `InvoiceDocumentType`: `STANDARD`, `RECTIFICATION`.
 - `InvoiceDocumentStatus`: `DRAFT`, `ISSUED`, `RECTIFIED`, `VOIDED`.
 - `InvoicePaymentStatus`: `PENDING`, `PARTIALLY_PAID`, `PAID`, `UNPAID`.
 - `InvoiceVerifactuStatus`: `NOT_APPLICABLE`, `PENDING`, `SENT`, `ACCEPTED`,
   `ACCEPTED_WITH_ERRORS`, `REJECTED`.
 - `InvoiceOrigin`: `MANUAL`, `SUBSCRIPTION`.
 
-En el MVP solo se crean `STANDARD` y `MANUAL`.
+En el MVP se crean facturas `STANDARD` manuales y rectificativas
+`RECTIFICATION` vinculadas a una unica factura original.
 
 ## 3. Tabla `invoice_number_sequences`
 
@@ -40,7 +42,7 @@ Restricciones e indices:
 | Campo | Uso |
 |---|---|
 | `id` | UUID tecnico. |
-| `documentType` | Tipo documental. MVP: `STANDARD`. |
+| `documentType` | Tipo documental: `STANDARD` o `RECTIFICATION`. |
 | `origin` | Origen de la factura. MVP: `MANUAL`. |
 | `status` | Estado documental. |
 | `paymentStatus` | Estado de cobro separado del estado documental. |
@@ -54,6 +56,8 @@ Restricciones e indices:
 | `customerFiscalAddressSnapshot` | Direccion fiscal congelada como JSON seguro. |
 | `issueDate` | Fecha de expedicion. |
 | `operationDate` | Fecha de operacion. |
+| `rectificationReason` | Motivo normalizado de rectificacion, solo para rectificativas. |
+| `rectifiesInvoiceId` | Factura original rectificada. Unico en el primer corte. |
 | `issuedAt` | Instante de emision. |
 | `subtotal`, `discountTotal`, `taxableBase`, `taxAmount`, `total` | Totales calculados. |
 | `notes` | Observaciones internas del borrador. |
@@ -228,6 +232,17 @@ Registrar devolucion manual:
 6. Recalcula `paymentStatus` de la factura con importes netos.
 7. Audita `CUSTOMER_PAYMENT_RETURNED`.
 
+Crear rectificativa integra:
+
+1. Valida que la factura original existe, es ordinaria y esta `ISSUED`.
+2. Valida que no existe ya una rectificativa asociada.
+3. Bloquea o crea la secuencia de serie `R`.
+4. Crea la rectificativa ya `ISSUED` con importes invertidos.
+5. Copia lineas, resumen fiscal y vencimiento invertido.
+6. Crea placeholder VeriFactu.
+7. Marca la factura original como `RECTIFIED`.
+8. Audita `INVOICE_RECTIFICATION_CREATED`.
+
 ## 12. Auditoria
 
 Eventos actuales del MVP:
@@ -240,6 +255,7 @@ Eventos actuales del MVP:
 - `INVOICE_LINE_UPDATED`.
 - `INVOICE_LINE_DELETED`.
 - `INVOICE_ISSUED`.
+- `INVOICE_RECTIFICATION_CREATED`.
 - `INVOICE_PDF_DOWNLOADED`.
 - `CUSTOMER_PAYMENT_REGISTERED`.
 - `CUSTOMER_PAYMENT_RETURNED`.
