@@ -10,6 +10,7 @@ import { listCatalogItems } from "@/modules/catalog/application/items";
 import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 import { CustomerPaymentRegisterForm } from "@/modules/treasury/presentation/CustomerPaymentRegisterForm";
+import { CustomerPaymentReturnRegisterForm } from "@/modules/treasury/presentation/CustomerPaymentReturnRegisterForm";
 
 export const dynamic = "force-dynamic";
 
@@ -198,6 +199,8 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                   <th>Cobro</th>
                   <th>Fecha</th>
                   <th>Importe</th>
+                  <th>Devuelto</th>
+                  <th>Neto</th>
                   <th>Origen</th>
                   <th>Referencia</th>
                 </tr>
@@ -205,7 +208,7 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               <tbody>
                 {invoice.payments.length === 0 ? (
                   <tr>
-                    <td colSpan={5}>No hay cobros registrados.</td>
+                    <td colSpan={7}>No hay cobros registrados.</td>
                   </tr>
                 ) : (
                   invoice.payments.map((payment, index) => (
@@ -218,8 +221,43 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                       </td>
                       <td>{formatDate(payment.paymentDate)}</td>
                       <td>{formatMoney(payment.amount)}</td>
+                      <td>{formatMoney(payment.returnedAmount)}</td>
+                      <td>{formatMoney(payment.netAmount)}</td>
                       <td>{paymentSourceLabel(payment.source)}</td>
                       <td>{payment.reference ?? "Sin referencia"}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Devolucion</th>
+                  <th>Fecha</th>
+                  <th>Importe</th>
+                  <th>Motivo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.paymentReturns.length === 0 ? (
+                  <tr>
+                    <td colSpan={4}>No hay devoluciones registradas.</td>
+                  </tr>
+                ) : (
+                  invoice.paymentReturns.map((paymentReturn, index) => (
+                    <tr key={paymentReturn.id}>
+                      <td>
+                        <strong>Devolucion {index + 1}</strong>
+                        <span className="cell-detail">
+                          Vencimiento {dueDatePosition(invoice, paymentReturn.dueDateId)}
+                        </span>
+                      </td>
+                      <td>{formatDate(paymentReturn.returnDate)}</td>
+                      <td>{formatMoney(paymentReturn.amount)}</td>
+                      <td>{paymentReturn.reasonCode ?? "Sin motivo"}</td>
                     </tr>
                   ))
                 )}
@@ -337,6 +375,10 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
             <CustomerPaymentRegisterForm
               invoiceId={invoice.id}
               dueDates={invoice.dueDates}
+            />
+            <CustomerPaymentReturnRegisterForm
+              invoiceId={invoice.id}
+              payments={invoice.payments}
             />
           </div>
         ) : null}

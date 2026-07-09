@@ -470,6 +470,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rateLimitBucket.deleteMany(),
     prisma.loginAttempt.deleteMany(),
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),

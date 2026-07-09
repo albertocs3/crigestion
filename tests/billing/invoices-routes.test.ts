@@ -9,6 +9,7 @@ import {
 import { GET as invoiceDetailGet } from "@/app/api/invoices/[invoiceId]/route";
 import { POST as invoiceLinePost } from "@/app/api/invoices/[invoiceId]/lines/route";
 import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/route";
+import { POST as invoicePaymentReturnPost } from "@/app/api/invoices/[invoiceId]/payment-returns/route";
 import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { prisma } from "@/lib/prisma";
@@ -630,6 +631,94 @@ describe("billing invoice HTTP contracts", () => {
     expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
   });
 
+  it("registers customer payment returns through the invoice contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({
+      where: { invoiceId: issued.id },
+      select: { id: true }
+    });
+    const paymentResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "121.00",
+          reference: "Transferencia 003",
+          notes: null
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const paymentBody = await paymentResponse.json();
+    const paymentId = paymentBody.payments[0]?.id;
+
+    if (!paymentId) {
+      throw new Error("Missing payment.");
+    }
+
+    const returnResponse = await invoicePaymentReturnPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payment-returns`,
+        {
+          paymentId,
+          returnDate: "2026-07-12",
+          amount: "21.00",
+          reasonCode: "BANK_RETURN",
+          notes: "No auditar devolucion completa"
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const body = await returnResponse.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_PAYMENT_RETURNED" },
+      orderBy: { createdAt: "asc" }
+    });
+
+    expect(returnResponse.status).toBe(201);
+    expect(body).toMatchObject({
+      paymentStatus: "PARTIALLY_PAID",
+      dueDates: [
+        {
+          id: dueDate.id,
+          paidAmount: "100.00",
+          pendingAmount: "21.00",
+          status: "PENDING"
+        }
+      ],
+      payments: [
+        {
+          id: paymentId,
+          amount: "121.00",
+          returnedAmount: "21.00",
+          netAmount: "100.00"
+        }
+      ],
+      paymentReturns: [
+        {
+          paymentId,
+          dueDateId: dueDate.id,
+          returnDate: "2026-07-12",
+          amount: "21.00",
+          reasonCode: "BANK_RETURN"
+        }
+      ]
+    });
+    expect(auditEvent.payload).toMatchObject({
+      invoiceId: issued.id,
+      dueDateId: dueDate.id,
+      paymentId,
+      amount: "21.00",
+      resultingPaymentStatus: "PARTIALLY_PAID"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
+  });
+
   it("protects customer payment registration with CSRF, idempotency and permissions", async () => {
     await loginAsAdmin();
     const adminCsrfToken = await getCsrfToken();
@@ -993,6 +1082,7 @@ async function initializeForRoutes(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),

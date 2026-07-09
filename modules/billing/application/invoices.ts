@@ -172,7 +172,18 @@ export type InvoiceDetail = {
     source: "MANUAL" | "SEPA_REMITTANCE";
     paymentDate: string;
     amount: string;
+    returnedAmount: string;
+    netAmount: string;
     reference: string | null;
+    createdAt: string;
+  }>;
+  paymentReturns: Array<{
+    id: string;
+    paymentId: string;
+    dueDateId: string;
+    returnDate: string;
+    amount: string;
+    reasonCode: string | null;
     createdAt: string;
   }>;
   totals: {
@@ -768,7 +779,12 @@ const invoiceDetailSelect = {
       status: true,
       payments: {
         select: {
-          amount: true
+          amount: true,
+          returns: {
+            select: {
+              amount: true
+            }
+          }
         }
       }
     }
@@ -782,6 +798,23 @@ const invoiceDetailSelect = {
       paymentDate: true,
       amount: true,
       reference: true,
+      createdAt: true,
+      returns: {
+        select: {
+          amount: true
+        }
+      }
+    }
+  },
+  paymentReturns: {
+    orderBy: [{ returnDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      paymentId: true,
+      dueDateId: true,
+      returnDate: true,
+      amount: true,
+      reasonCode: true,
       createdAt: true
     }
   },
@@ -1008,7 +1041,7 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
     })),
     dueDates: invoice.dueDates.map((dueDate) => {
       const paidAmount = dueDate.payments.reduce(
-        (total, payment) => total.plus(payment.amount),
+        (total, payment) => total.plus(netPaymentAmount(payment)),
         new Prisma.Decimal(0)
       );
       const pendingAmount = dueDate.amount.minus(paidAmount);
@@ -1024,14 +1057,30 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
         status: dueDate.status
       };
     }),
-    payments: invoice.payments.map((payment) => ({
-      id: payment.id,
-      dueDateId: payment.dueDateId,
-      source: payment.source,
-      paymentDate: formatDateOnly(payment.paymentDate),
-      amount: payment.amount.toFixed(2),
-      reference: payment.reference,
-      createdAt: payment.createdAt.toISOString()
+    payments: invoice.payments.map((payment) => {
+      const returnedAmount = sumReturnAmounts(payment.returns);
+      const netAmount = payment.amount.minus(returnedAmount);
+
+      return {
+        id: payment.id,
+        dueDateId: payment.dueDateId,
+        source: payment.source,
+        paymentDate: formatDateOnly(payment.paymentDate),
+        amount: payment.amount.toFixed(2),
+        returnedAmount: returnedAmount.toFixed(2),
+        netAmount: netAmount.toFixed(2),
+        reference: payment.reference,
+        createdAt: payment.createdAt.toISOString()
+      };
+    }),
+    paymentReturns: invoice.paymentReturns.map((paymentReturn) => ({
+      id: paymentReturn.id,
+      paymentId: paymentReturn.paymentId,
+      dueDateId: paymentReturn.dueDateId,
+      returnDate: formatDateOnly(paymentReturn.returnDate),
+      amount: paymentReturn.amount.toFixed(2),
+      reasonCode: paymentReturn.reasonCode,
+      createdAt: paymentReturn.createdAt.toISOString()
     })),
     totals: {
       subtotal: invoice.subtotal.toFixed(2),
@@ -1067,6 +1116,22 @@ function mapInvoiceListItem(invoice: InvoiceListRecord): InvoiceListItem {
     createdAt: invoice.createdAt.toISOString(),
     updatedAt: invoice.updatedAt.toISOString()
   };
+}
+
+function netPaymentAmount(payment: {
+  amount: Prisma.Decimal;
+  returns: Array<{ amount: Prisma.Decimal }>;
+}): Prisma.Decimal {
+  return payment.amount.minus(sumReturnAmounts(payment.returns));
+}
+
+function sumReturnAmounts(
+  returns: Array<{ amount: Prisma.Decimal }>
+): Prisma.Decimal {
+  return returns.reduce(
+    (total, paymentReturn) => total.plus(paymentReturn.amount),
+    new Prisma.Decimal(0)
+  );
 }
 
 function fiscalAddressSnapshot(customer: {

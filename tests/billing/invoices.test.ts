@@ -10,7 +10,10 @@ import {
 } from "@/modules/billing/application/invoices";
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
-import { registerCustomerPayment } from "@/modules/treasury/application/payments";
+import {
+  registerCustomerPayment,
+  registerCustomerPaymentReturn
+} from "@/modules/treasury/application/payments";
 import {
   hashRequestBody,
   initializePlatform,
@@ -537,6 +540,190 @@ describe("billing invoices application service", () => {
     expect(auditPayload).not.toContain("No debe aparecer");
   });
 
+  it("registers manual customer payment returns and recalculates net balances", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(actor.id);
+    const taxRate = await defaultTaxRate();
+    const draft = await createInvoiceDraft(
+      {
+        customerId: customer.id,
+        issueDate: "2026-07-07",
+        operationDate: "2026-07-07",
+        notes: null
+      },
+      actor
+    );
+
+    if (!draft.ok) {
+      throw new Error(draft.error.code);
+    }
+
+    const line = await addInvoiceLine(
+      draft.value.id,
+      {
+        description: "Linea manual",
+        quantity: "1.000",
+        unitPrice: "100.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      actor
+    );
+
+    if (!line.ok) {
+      throw new Error(line.error.code);
+    }
+
+    const issued = await issueInvoice(
+      draft.value.id,
+      { issueDate: "2026-07-07" },
+      actor
+    );
+
+    if (!issued.ok) {
+      throw new Error(issued.error.code);
+    }
+
+    const dueDateId = issued.value.dueDates[0]?.id;
+
+    if (!dueDateId) {
+      throw new Error("Missing due date.");
+    }
+
+    const payment = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId,
+        paymentDate: "2026-07-10",
+        amount: "121.00",
+        reference: "Transferencia 003",
+        notes: null
+      },
+      actor
+    );
+
+    if (!payment.ok) {
+      throw new Error(payment.error.code);
+    }
+
+    const paymentId = payment.value.payments[0]?.id;
+
+    if (!paymentId) {
+      throw new Error("Missing payment.");
+    }
+
+    const partialReturn = await registerCustomerPaymentReturn(
+      issued.value.id,
+      {
+        paymentId,
+        returnDate: "2026-07-12",
+        amount: "50.00",
+        reasonCode: "BANK_RETURN",
+        notes: "Texto interno no auditable"
+      },
+      actor,
+      { correlationId: "customer-payment-return-0001" }
+    );
+    const fullReturn = await registerCustomerPaymentReturn(
+      issued.value.id,
+      {
+        paymentId,
+        returnDate: "2026-07-13",
+        amount: "71.00",
+        reasonCode: null,
+        notes: null
+      },
+      actor
+    );
+    const overReturn = await registerCustomerPaymentReturn(
+      issued.value.id,
+      {
+        paymentId,
+        returnDate: "2026-07-14",
+        amount: "0.01",
+        reasonCode: null,
+        notes: null
+      },
+      actor
+    );
+    const storedReturns = await prisma.customerPaymentReturn.findMany({
+      where: { paymentId },
+      orderBy: { returnDate: "asc" }
+    });
+    const dueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
+      where: { id: dueDateId }
+    });
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_PAYMENT_RETURNED" },
+      orderBy: { createdAt: "asc" }
+    });
+
+    expect(partialReturn).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        paymentStatus: "PARTIALLY_PAID",
+        dueDates: [
+          {
+            id: dueDateId,
+            paidAmount: "71.00",
+            pendingAmount: "50.00",
+            status: "PENDING"
+          }
+        ],
+        payments: [
+          {
+            id: paymentId,
+            amount: "121.00",
+            returnedAmount: "50.00",
+            netAmount: "71.00"
+          }
+        ]
+      }
+    });
+    expect(fullReturn).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        paymentStatus: "PENDING",
+        dueDates: [
+          {
+            id: dueDateId,
+            paidAmount: "0.00",
+            pendingAmount: "121.00",
+            status: "RETURNED"
+          }
+        ]
+      }
+    });
+    expect(overReturn).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "PAYMENT_RETURN_AMOUNT_EXCEEDS_PAYMENT",
+        message: "La devolucion supera el importe no devuelto del cobro."
+      }
+    });
+    expect(storedReturns.map((paymentReturn) => paymentReturn.amount.toFixed(2))).toEqual([
+      "50.00",
+      "71.00"
+    ]);
+    expect(dueDate.status).toBe("RETURNED");
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      paymentId,
+      invoiceId: issued.value.id,
+      dueDateId,
+      customerId: customer.id,
+      amount: "50.00",
+      returnDate: "2026-07-12",
+      resultingPaymentStatus: "PARTIALLY_PAID",
+      correlationId: "customer-payment-return-0001"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("Texto interno");
+  });
+
   it("rejects customer payments for drafts and overpayments", async () => {
     const actor = await loginAsAdmin();
     const customer = await createCustomer(actor.id);
@@ -693,6 +880,7 @@ async function initializeForBilling(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),

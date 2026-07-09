@@ -346,28 +346,29 @@ model User {
   createdAt          DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
 
-  role                         Role                       @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  sessions                     Session[]
-  requestedBackups             BackupOperation[]
-  requestedRestores            RestoreOperation[]
-  enabledMaintenances          PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
-  disabledMaintenances         PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
-  createdCustomers             Customer[]                 @relation("CustomersCreatedBy")
-  updatedCustomers             Customer[]                 @relation("CustomersUpdatedBy")
-  createdCustomerAddresses     CustomerAddress[]          @relation("CustomerAddressesCreatedBy")
-  updatedCustomerAddresses     CustomerAddress[]          @relation("CustomerAddressesUpdatedBy")
-  createdCustomerSepaMandates  CustomerSepaMandate[]      @relation("CustomerSepaMandatesCreatedBy")
-  revokedCustomerSepaMandates  CustomerSepaMandate[]      @relation("CustomerSepaMandatesRevokedBy")
-  createdCustomerStores        CustomerStore[]            @relation("CustomerStoresCreatedBy")
-  updatedCustomerStores        CustomerStore[]            @relation("CustomerStoresUpdatedBy")
-  createdCatalogItems          CatalogItem[]              @relation("CatalogItemsCreatedBy")
-  updatedCatalogItems          CatalogItem[]              @relation("CatalogItemsUpdatedBy")
-  createdCatalogStockMovements CatalogStockMovement[]     @relation("CatalogStockMovementsCreatedBy")
-  createdInvoices              Invoice[]                  @relation("InvoicesCreatedBy")
-  updatedInvoices              Invoice[]                  @relation("InvoicesUpdatedBy")
-  issuedInvoices               Invoice[]                  @relation("InvoicesIssuedBy")
-  createdCustomerPayments      CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
-  initialInstallation          Installation?
+  role                          Role                       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  sessions                      Session[]
+  requestedBackups              BackupOperation[]
+  requestedRestores             RestoreOperation[]
+  enabledMaintenances           PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
+  disabledMaintenances          PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
+  createdCustomers              Customer[]                 @relation("CustomersCreatedBy")
+  updatedCustomers              Customer[]                 @relation("CustomersUpdatedBy")
+  createdCustomerAddresses      CustomerAddress[]          @relation("CustomerAddressesCreatedBy")
+  updatedCustomerAddresses      CustomerAddress[]          @relation("CustomerAddressesUpdatedBy")
+  createdCustomerSepaMandates   CustomerSepaMandate[]      @relation("CustomerSepaMandatesCreatedBy")
+  revokedCustomerSepaMandates   CustomerSepaMandate[]      @relation("CustomerSepaMandatesRevokedBy")
+  createdCustomerStores         CustomerStore[]            @relation("CustomerStoresCreatedBy")
+  updatedCustomerStores         CustomerStore[]            @relation("CustomerStoresUpdatedBy")
+  createdCatalogItems           CatalogItem[]              @relation("CatalogItemsCreatedBy")
+  updatedCatalogItems           CatalogItem[]              @relation("CatalogItemsUpdatedBy")
+  createdCatalogStockMovements  CatalogStockMovement[]     @relation("CatalogStockMovementsCreatedBy")
+  createdInvoices               Invoice[]                  @relation("InvoicesCreatedBy")
+  updatedInvoices               Invoice[]                  @relation("InvoicesUpdatedBy")
+  issuedInvoices                Invoice[]                  @relation("InvoicesIssuedBy")
+  createdCustomerPayments       CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
+  createdCustomerPaymentReturns CustomerPaymentReturn[]    @relation("CustomerPaymentReturnsCreatedBy")
+  initialInstallation           Installation?
 
   @@map("users")
 }
@@ -522,6 +523,7 @@ model Invoice {
   taxSummaries    InvoiceTaxSummary[]
   dueDates        InvoiceDueDate[]
   payments        CustomerPayment[]
+  paymentReturns  CustomerPaymentReturn[]
   verifactuRecord InvoiceVerifactuRecord?
 
   @@unique([series, year, numberSequence])
@@ -591,8 +593,9 @@ model InvoiceDueDate {
   paymentMethod CustomerPaymentMethod
   status        InvoiceDueDateStatus  @default(PENDING)
 
-  invoice  Invoice           @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  payments CustomerPayment[]
+  invoice        Invoice                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payments       CustomerPayment[]
+  paymentReturns CustomerPaymentReturn[]
 
   @@unique([invoiceId, position])
   @@index([status, dueDate, id])
@@ -611,14 +614,39 @@ model CustomerPayment {
   createdById String                @db.Uuid
   createdAt   DateTime              @default(now()) @db.Timestamptz(3)
 
-  invoice   Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  dueDate   InvoiceDueDate @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
-  createdBy User           @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  invoice   Invoice                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate   InvoiceDueDate          @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  createdBy User                    @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  returns   CustomerPaymentReturn[]
 
   @@index([invoiceId, paymentDate, id])
   @@index([dueDateId, paymentDate, id])
   @@index([createdById, createdAt])
   @@map("customer_payments")
+}
+
+model CustomerPaymentReturn {
+  id          String   @id @default(uuid()) @db.Uuid
+  paymentId   String   @db.Uuid
+  invoiceId   String   @db.Uuid
+  dueDateId   String   @db.Uuid
+  returnDate  DateTime @db.Date
+  amount      Decimal  @db.Decimal(12, 2)
+  reasonCode  String?  @db.VarChar(80)
+  notes       String?  @db.VarChar(500)
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  payment   CustomerPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice   Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate   InvoiceDueDate  @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  createdBy User            @relation("CustomerPaymentReturnsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, returnDate, id])
+  @@index([invoiceId, returnDate, id])
+  @@index([dueDateId, returnDate, id])
+  @@index([createdById, createdAt])
+  @@map("customer_payment_returns")
 }
 
 model InvoiceVerifactuRecord {

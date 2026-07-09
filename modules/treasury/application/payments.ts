@@ -39,8 +39,19 @@ export const registerCustomerPaymentSchema = z.object({
   notes: z.string().trim().min(1).max(500).nullable().default(null)
 }).strict();
 
+export const registerCustomerPaymentReturnSchema = z.object({
+  paymentId: z.string().uuid(),
+  returnDate: dateOnlySchema,
+  amount: paymentAmountSchema,
+  reasonCode: z.string().trim().min(1).max(80).nullable().default(null),
+  notes: z.string().trim().min(1).max(500).nullable().default(null)
+}).strict();
+
 export type RegisterCustomerPaymentCommand = z.infer<
   typeof registerCustomerPaymentSchema
+>;
+export type RegisterCustomerPaymentReturnCommand = z.infer<
+  typeof registerCustomerPaymentReturnSchema
 >;
 
 type PaymentNotFoundResult = {
@@ -68,6 +79,29 @@ export type RegisterCustomerPaymentResult =
   | { ok: true; status: 201; value: InvoiceDetail }
   | PaymentNotFoundResult
   | PaymentConflictResult;
+
+type PaymentReturnNotFoundResult = {
+  ok: false;
+  status: 404;
+  error: {
+    code: "INVOICE_NOT_FOUND" | "CUSTOMER_PAYMENT_NOT_FOUND";
+    message: string;
+  };
+};
+
+type PaymentReturnConflictResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "INVOICE_NOT_PAYABLE" | "PAYMENT_RETURN_AMOUNT_EXCEEDS_PAYMENT";
+    message: string;
+  };
+};
+
+export type RegisterCustomerPaymentReturnResult =
+  | { ok: true; status: 201; value: InvoiceDetail }
+  | PaymentReturnNotFoundResult
+  | PaymentReturnConflictResult;
 
 export async function registerCustomerPayment(
   invoiceId: string,
@@ -116,7 +150,7 @@ export async function registerCustomerPayment(
       return { kind: "due-date-not-payable" as const };
     }
 
-    const existingPaid = await sumPaymentsForDueDate(tx, dueDate.id);
+    const existingPaid = await sumNetPaymentsForDueDate(tx, dueDate.id);
     const paymentAmount = new Prisma.Decimal(command.amount);
     const pendingAmount = dueDate.amount.minus(existingPaid);
 
@@ -145,12 +179,8 @@ export async function registerCustomerPayment(
       data: { status: dueDateStatus }
     });
 
-    const invoicePaid = await sumPaymentsForInvoice(tx, invoiceId);
-    const paymentStatus = invoicePaid.equals(0)
-      ? "PENDING"
-      : invoicePaid.equals(invoice.total)
-        ? "PAID"
-        : "PARTIALLY_PAID";
+    const invoicePaid = await sumNetPaymentsForInvoice(tx, invoiceId);
+    const paymentStatus = invoicePaymentStatus(invoicePaid, invoice.total);
 
     await tx.invoice.update({
       where: { id: invoiceId },
@@ -247,28 +277,257 @@ export async function registerCustomerPayment(
   };
 }
 
-async function sumPaymentsForDueDate(
+export async function registerCustomerPaymentReturn(
+  invoiceId: string,
+  command: RegisterCustomerPaymentReturnCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<RegisterCustomerPaymentReturnResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const invoice = await tx.invoice.findUnique({
+      where: { id: invoiceId },
+      select: {
+        id: true,
+        status: true,
+        total: true,
+        customerId: true,
+        number: true
+      }
+    });
+
+    if (!invoice) {
+      return { kind: "invoice-not-found" as const };
+    }
+
+    if (invoice.status !== "ISSUED") {
+      return { kind: "invoice-not-payable" as const };
+    }
+
+    const payment = await tx.customerPayment.findFirst({
+      where: {
+        id: command.paymentId,
+        invoiceId
+      },
+      select: {
+        id: true,
+        dueDateId: true,
+        amount: true,
+        dueDate: {
+          select: {
+            id: true,
+            amount: true
+          }
+        }
+      }
+    });
+
+    if (!payment) {
+      return { kind: "payment-not-found" as const };
+    }
+
+    const alreadyReturned = await sumReturnsForPayment(tx, payment.id);
+    const returnAmount = new Prisma.Decimal(command.amount);
+    const remainingReturnable = payment.amount.minus(alreadyReturned);
+
+    if (returnAmount.gt(remainingReturnable)) {
+      return { kind: "return-exceeds-payment" as const };
+    }
+
+    const paymentReturn = await tx.customerPaymentReturn.create({
+      data: {
+        paymentId: payment.id,
+        invoiceId,
+        dueDateId: payment.dueDateId,
+        returnDate: parseDateOnly(command.returnDate),
+        amount: returnAmount,
+        reasonCode: command.reasonCode,
+        notes: command.notes,
+        createdById: actor.id
+      },
+      select: { id: true }
+    });
+
+    const dueDatePaid = await sumNetPaymentsForDueDate(tx, payment.dueDateId);
+    const dueDateStatus = dueDatePaymentStatus(dueDatePaid, payment.dueDate.amount);
+
+    await tx.invoiceDueDate.update({
+      where: { id: payment.dueDateId },
+      data: { status: dueDateStatus }
+    });
+
+    const invoicePaid = await sumNetPaymentsForInvoice(tx, invoiceId);
+    const paymentStatus = invoicePaymentStatus(invoicePaid, invoice.total);
+
+    await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        paymentStatus,
+        updatedById: actor.id
+      }
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_PAYMENT_RETURNED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          paymentReturnId: paymentReturn.id,
+          paymentId: payment.id,
+          invoiceId,
+          dueDateId: payment.dueDateId,
+          customerId: invoice.customerId,
+          number: invoice.number,
+          amount: returnAmount.toFixed(2),
+          returnDate: command.returnDate,
+          resultingPaymentStatus: paymentStatus,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return {
+      kind: "returned" as const,
+      invoice: await findInvoiceDetailForTreasury(tx, invoiceId)
+    };
+  });
+
+  if (result.kind === "invoice-not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "INVOICE_NOT_FOUND",
+        message: "La factura no existe."
+      }
+    };
+  }
+
+  if (result.kind === "payment-not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "CUSTOMER_PAYMENT_NOT_FOUND",
+        message: "El cobro no existe para la factura."
+      }
+    };
+  }
+
+  if (result.kind === "invoice-not-payable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_PAYABLE",
+        message: "Solo se pueden registrar devoluciones en facturas emitidas."
+      }
+    };
+  }
+
+  if (result.kind === "return-exceeds-payment") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "PAYMENT_RETURN_AMOUNT_EXCEEDS_PAYMENT",
+        message: "La devolucion supera el importe no devuelto del cobro."
+      }
+    };
+  }
+
+  return {
+    ok: true,
+    status: 201,
+    value: mapInvoiceDetailForTreasury(result.invoice)
+  };
+}
+
+async function sumNetPaymentsForDueDate(
   tx: Prisma.TransactionClient,
   dueDateId: string
 ): Promise<Prisma.Decimal> {
-  const aggregate = await tx.customerPayment.aggregate({
+  const payments = await tx.customerPayment.findMany({
     where: { dueDateId },
+    select: {
+      amount: true,
+      returns: {
+        select: {
+          amount: true
+        }
+      }
+    }
+  });
+
+  return payments.reduce(
+    (total, payment) => total.plus(payment.amount).minus(sumReturnAmounts(payment.returns)),
+    new Prisma.Decimal(0)
+  );
+}
+
+async function sumNetPaymentsForInvoice(
+  tx: Prisma.TransactionClient,
+  invoiceId: string
+): Promise<Prisma.Decimal> {
+  const payments = await tx.customerPayment.findMany({
+    where: { invoiceId },
+    select: {
+      amount: true,
+      returns: {
+        select: {
+          amount: true
+        }
+      }
+    }
+  });
+
+  return payments.reduce(
+    (total, payment) => total.plus(payment.amount).minus(sumReturnAmounts(payment.returns)),
+    new Prisma.Decimal(0)
+  );
+}
+
+async function sumReturnsForPayment(
+  tx: Prisma.TransactionClient,
+  paymentId: string
+): Promise<Prisma.Decimal> {
+  const aggregate = await tx.customerPaymentReturn.aggregate({
+    where: { paymentId },
     _sum: { amount: true }
   });
 
   return aggregate._sum.amount ?? new Prisma.Decimal(0);
 }
 
-async function sumPaymentsForInvoice(
-  tx: Prisma.TransactionClient,
-  invoiceId: string
-): Promise<Prisma.Decimal> {
-  const aggregate = await tx.customerPayment.aggregate({
-    where: { invoiceId },
-    _sum: { amount: true }
-  });
+function sumReturnAmounts(
+  returns: Array<{ amount: Prisma.Decimal }>
+): Prisma.Decimal {
+  return returns.reduce(
+    (total, paymentReturn) => total.plus(paymentReturn.amount),
+    new Prisma.Decimal(0)
+  );
+}
 
-  return aggregate._sum.amount ?? new Prisma.Decimal(0);
+function invoicePaymentStatus(
+  paidAmount: Prisma.Decimal,
+  invoiceTotal: Prisma.Decimal
+): "PENDING" | "PARTIALLY_PAID" | "PAID" {
+  if (paidAmount.equals(0)) {
+    return "PENDING";
+  }
+
+  return paidAmount.equals(invoiceTotal) ? "PAID" : "PARTIALLY_PAID";
+}
+
+function dueDatePaymentStatus(
+  paidAmount: Prisma.Decimal,
+  dueDateAmount: Prisma.Decimal
+): "PENDING" | "PAID" | "RETURNED" {
+  if (paidAmount.equals(0)) {
+    return "RETURNED";
+  }
+
+  return paidAmount.equals(dueDateAmount) ? "PAID" : "PENDING";
 }
 
 function isValidDateOnly(value: string): boolean {

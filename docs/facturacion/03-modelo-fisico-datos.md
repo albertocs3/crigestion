@@ -165,10 +165,33 @@ Restricciones e indices:
 - Indices por `(invoiceId, paymentDate, id)`, `(dueDateId, paymentDate, id)` y
   `(createdById, createdAt)`.
 
-La aplicacion impide sobrecobros comparando la suma de cobros registrados con el
-importe del vencimiento dentro de la transaccion.
+La aplicacion impide sobrecobros comparando la suma neta de cobros menos
+devoluciones con el importe del vencimiento dentro de la transaccion.
 
-## 10. Transacciones Criticas
+## 10. Tabla `customer_payment_returns`
+
+| Campo | Uso |
+|---|---|
+| `id` | UUID tecnico. |
+| `paymentId` | Cobro sobre el que se registra la devolucion. |
+| `invoiceId` | Factura emitida afectada. |
+| `dueDateId` | Vencimiento afectado. |
+| `returnDate` | Fecha de devolucion. |
+| `amount` | Importe devuelto. |
+| `reasonCode` | Motivo opcional normalizable. |
+| `notes` | Observaciones internas opcionales. |
+| `createdById`, `createdAt` | Trazabilidad de alta. |
+
+Restricciones e indices:
+
+- `amount > 0`.
+- FK restrictivas a cobro, factura, vencimiento y usuario.
+- Indices por `(paymentId, returnDate, id)`, `(invoiceId, returnDate, id)`,
+  `(dueDateId, returnDate, id)` y `(createdById, createdAt)`.
+
+La aplicacion impide que la suma de devoluciones supere el importe del cobro.
+
+## 11. Transacciones Criticas
 
 Crear/editar borradores:
 
@@ -189,13 +212,23 @@ Registrar cobro manual:
 
 1. Valida que la factura esta `ISSUED`.
 2. Valida que el vencimiento pertenece a la factura y admite cobro.
-3. Calcula el saldo pendiente del vencimiento.
+3. Calcula el saldo pendiente neto del vencimiento.
 4. Crea `customer_payments`.
 5. Actualiza estado del vencimiento.
 6. Recalcula `paymentStatus` de la factura.
 7. Audita `CUSTOMER_PAYMENT_REGISTERED`.
 
-## 11. Auditoria
+Registrar devolucion manual:
+
+1. Valida que la factura esta `ISSUED`.
+2. Valida que el cobro pertenece a la factura.
+3. Calcula el importe todavia no devuelto del cobro.
+4. Crea `customer_payment_returns`.
+5. Recalcula el estado del vencimiento con importes netos.
+6. Recalcula `paymentStatus` de la factura con importes netos.
+7. Audita `CUSTOMER_PAYMENT_RETURNED`.
+
+## 12. Auditoria
 
 Eventos actuales del MVP:
 
@@ -209,12 +242,13 @@ Eventos actuales del MVP:
 - `INVOICE_ISSUED`.
 - `INVOICE_PDF_DOWNLOADED`.
 - `CUSTOMER_PAYMENT_REGISTERED`.
+- `CUSTOMER_PAYMENT_RETURNED`.
 
 Los payloads incluyen ids, numero, estado, total y campos modificados. No deben
 incluir NIF, direccion fiscal completa, email, IBAN, notas completas ni textos
 largos de lineas.
 
-## 12. PDF
+## 13. PDF
 
 El PDF del MVP se genera bajo demanda para facturas emitidas desde los datos
 congelados de la factura, lineas, resumen de impuestos y vencimientos. No anade
