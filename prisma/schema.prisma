@@ -160,6 +160,11 @@ enum InvoiceDueDateStatus {
   UNPAID
 }
 
+enum CustomerPaymentSource {
+  MANUAL
+  SEPA_REMITTANCE
+}
+
 model Installation {
   id                     String             @id @default(uuid()) @db.Uuid
   singletonKey           Int                @default(1)
@@ -361,6 +366,7 @@ model User {
   createdInvoices              Invoice[]                  @relation("InvoicesCreatedBy")
   updatedInvoices              Invoice[]                  @relation("InvoicesUpdatedBy")
   issuedInvoices               Invoice[]                  @relation("InvoicesIssuedBy")
+  createdCustomerPayments      CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
   initialInstallation          Installation?
 
   @@map("users")
@@ -515,6 +521,7 @@ model Invoice {
   lines           InvoiceLine[]
   taxSummaries    InvoiceTaxSummary[]
   dueDates        InvoiceDueDate[]
+  payments        CustomerPayment[]
   verifactuRecord InvoiceVerifactuRecord?
 
   @@unique([series, year, numberSequence])
@@ -584,11 +591,34 @@ model InvoiceDueDate {
   paymentMethod CustomerPaymentMethod
   status        InvoiceDueDateStatus  @default(PENDING)
 
-  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  invoice  Invoice           @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payments CustomerPayment[]
 
   @@unique([invoiceId, position])
   @@index([status, dueDate, id])
   @@map("invoice_due_dates")
+}
+
+model CustomerPayment {
+  id          String                @id @default(uuid()) @db.Uuid
+  invoiceId   String                @db.Uuid
+  dueDateId   String                @db.Uuid
+  source      CustomerPaymentSource @default(MANUAL)
+  paymentDate DateTime              @db.Date
+  amount      Decimal               @db.Decimal(12, 2)
+  reference   String?               @db.VarChar(120)
+  notes       String?               @db.VarChar(500)
+  createdById String                @db.Uuid
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+
+  invoice   Invoice        @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate   InvoiceDueDate @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  createdBy User           @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId, paymentDate, id])
+  @@index([dueDateId, paymentDate, id])
+  @@index([createdById, createdAt])
+  @@map("customer_payments")
 }
 
 model InvoiceVerifactuRecord {

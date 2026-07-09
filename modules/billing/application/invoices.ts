@@ -779,7 +779,7 @@ const invoiceListSelect = {
   updatedAt: true
 } satisfies Prisma.InvoiceSelect;
 
-async function findInvoiceDetail(
+export async function findInvoiceDetailForTreasury(
   tx: Prisma.TransactionClient,
   invoiceId: string
 ): Promise<InvoiceDetailRecord> {
@@ -788,6 +788,8 @@ async function findInvoiceDetail(
     select: invoiceDetailSelect
   });
 }
+
+const findInvoiceDetail = findInvoiceDetailForTreasury;
 
 type InvoiceDetailRecord = Prisma.InvoiceGetPayload<{
   select: typeof invoiceDetailSelect;
@@ -927,7 +929,7 @@ async function reserveInvoiceNumber(
   return { year, value };
 }
 
-function mapInvoiceDetail(invoice: InvoiceDetailRecord): InvoiceDetail {
+export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): InvoiceDetail {
   return {
     id: invoice.id,
     status: invoice.status,
@@ -995,6 +997,8 @@ function mapInvoiceDetail(invoice: InvoiceDetailRecord): InvoiceDetail {
     updatedAt: invoice.updatedAt.toISOString()
   };
 }
+
+const mapInvoiceDetail = mapInvoiceDetailForTreasury;
 
 function mapInvoiceListItem(invoice: InvoiceListRecord): InvoiceListItem {
   return {
@@ -1074,7 +1078,7 @@ function formatInvoiceNumber(series: string, year: number, sequence: number): st
   return `${series}${year.toString().slice(-2)}${sequence.toString().padStart(5, "0")}`;
 }
 
-function normalizeDateOnlyInput(value: string): string {
+export function normalizeDateOnlyInput(value: string): string {
   const text = value.trim().replace(/[\u200e\u200f]/g, "");
 
   if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {

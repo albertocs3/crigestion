@@ -35,7 +35,12 @@ describe("billing persistence", () => {
     const permissions = await prisma.permission.findMany({
       where: {
         code: {
-          in: ["Billing.View", "Billing.ManageDrafts", "Billing.Issue"]
+          in: [
+            "Billing.View",
+            "Billing.ManageDrafts",
+            "Billing.Issue",
+            "Treasury.ManagePayments"
+          ]
         }
       },
       orderBy: { code: "asc" },
@@ -64,10 +69,16 @@ describe("billing persistence", () => {
     expect(permissions.map((permission) => permission.code)).toEqual([
       "Billing.Issue",
       "Billing.ManageDrafts",
-      "Billing.View"
+      "Billing.View",
+      "Treasury.ManagePayments"
     ]);
     expect(adminPermissionCodes).toEqual(
-      expect.arrayContaining(["Billing.View", "Billing.ManageDrafts", "Billing.Issue"])
+      expect.arrayContaining([
+        "Billing.View",
+        "Billing.ManageDrafts",
+        "Billing.Issue",
+        "Treasury.ManagePayments"
+      ])
     );
   });
 
@@ -259,6 +270,7 @@ async function initializeForBilling(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),
     prisma.invoiceLine.deleteMany(),

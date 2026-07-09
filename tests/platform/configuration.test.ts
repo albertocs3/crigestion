@@ -214,6 +214,7 @@ async function createIssuedInvoice(actorUserId: string): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),
     prisma.invoiceLine.deleteMany(),

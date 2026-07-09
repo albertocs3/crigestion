@@ -10,6 +10,7 @@ import {
 } from "@/modules/billing/application/invoices";
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
+import { registerCustomerPayment } from "@/modules/treasury/application/payments";
 import {
   hashRequestBody,
   initializePlatform,
@@ -401,6 +402,226 @@ describe("billing invoices application service", () => {
       }
     });
   });
+
+  it("registers partial and full customer payments with safe audit payloads", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(actor.id);
+    const taxRate = await defaultTaxRate();
+    const draft = await createInvoiceDraft(
+      {
+        customerId: customer.id,
+        issueDate: "2026-07-07",
+        operationDate: "2026-07-07",
+        notes: null
+      },
+      actor
+    );
+
+    if (!draft.ok) {
+      throw new Error(draft.error.code);
+    }
+
+    const line = await addInvoiceLine(
+      draft.value.id,
+      {
+        description: "Linea manual",
+        quantity: "1.000",
+        unitPrice: "100.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      actor
+    );
+
+    if (!line.ok) {
+      throw new Error(line.error.code);
+    }
+
+    const issued = await issueInvoice(
+      draft.value.id,
+      { issueDate: "2026-07-07" },
+      actor
+    );
+
+    if (!issued.ok) {
+      throw new Error(issued.error.code);
+    }
+
+    const dueDateId = issued.value.dueDates[0]?.id;
+
+    if (!dueDateId) {
+      throw new Error("Missing due date.");
+    }
+
+    const partial = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId,
+        paymentDate: "2026-07-10",
+        amount: "60.00",
+        reference: "Transferencia 001",
+        notes: "No debe aparecer NIF ni secretos"
+      },
+      actor,
+      { correlationId: "customer-payment-0001" }
+    );
+    const paid = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId,
+        paymentDate: "2026-07-11",
+        amount: "61.00",
+        reference: "Transferencia 002",
+        notes: null
+      },
+      actor,
+      { correlationId: "customer-payment-0002" }
+    );
+    const auditEvents = await prisma.auditEvent.findMany({
+      where: { eventType: "CUSTOMER_PAYMENT_REGISTERED" },
+      orderBy: { createdAt: "asc" }
+    });
+    const storedPayments = await prisma.customerPayment.findMany({
+      where: { invoiceId: issued.value.id },
+      orderBy: { paymentDate: "asc" }
+    });
+    const dueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
+      where: { id: dueDateId }
+    });
+    const auditPayload = JSON.stringify(auditEvents.map((event) => event.payload));
+
+    expect(partial).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        paymentStatus: "PARTIALLY_PAID",
+        dueDates: [
+          {
+            id: dueDateId,
+            status: "PENDING"
+          }
+        ]
+      }
+    });
+    expect(paid).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        paymentStatus: "PAID",
+        dueDates: [
+          {
+            id: dueDateId,
+            status: "PAID"
+          }
+        ]
+      }
+    });
+    expect(storedPayments.map((payment) => payment.amount.toFixed(2))).toEqual([
+      "60.00",
+      "61.00"
+    ]);
+    expect(dueDate.status).toBe("PAID");
+    expect(auditEvents).toHaveLength(2);
+    expect(auditEvents[0]?.payload).toMatchObject({
+      actorUserId: actor.id,
+      invoiceId: issued.value.id,
+      dueDateId,
+      customerId: customer.id,
+      amount: "60.00",
+      paymentDate: "2026-07-10",
+      resultingPaymentStatus: "PARTIALLY_PAID",
+      correlationId: "customer-payment-0001"
+    });
+    expect(auditPayload).not.toContain(customer.taxId);
+    expect(auditPayload).not.toContain("No debe aparecer");
+  });
+
+  it("rejects customer payments for drafts and overpayments", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(actor.id);
+    const taxRate = await defaultTaxRate();
+    const draft = await createInvoiceDraft(
+      {
+        customerId: customer.id,
+        issueDate: "2026-07-07",
+        operationDate: "2026-07-07",
+        notes: null
+      },
+      actor
+    );
+
+    if (!draft.ok) {
+      throw new Error(draft.error.code);
+    }
+
+    const line = await addInvoiceLine(
+      draft.value.id,
+      {
+        description: "Linea manual",
+        quantity: "1.000",
+        unitPrice: "100.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      actor
+    );
+
+    if (!line.ok) {
+      throw new Error(line.error.code);
+    }
+
+    const draftPayment = await registerCustomerPayment(
+      draft.value.id,
+      {
+        dueDateId: line.value.dueDates[0]?.id ?? randomUUID(),
+        paymentDate: "2026-07-10",
+        amount: "1.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+    const issued = await issueInvoice(
+      draft.value.id,
+      { issueDate: "2026-07-07" },
+      actor
+    );
+
+    if (!issued.ok) {
+      throw new Error(issued.error.code);
+    }
+
+    const overpayment = await registerCustomerPayment(
+      issued.value.id,
+      {
+        dueDateId: issued.value.dueDates[0]?.id ?? randomUUID(),
+        paymentDate: "2026-07-10",
+        amount: "122.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+
+    expect(draftPayment).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_NOT_PAYABLE",
+        message: "Solo se pueden registrar cobros en facturas emitidas."
+      }
+    });
+    expect(overpayment).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "PAYMENT_AMOUNT_EXCEEDS_PENDING",
+        message: "El importe supera el saldo pendiente del vencimiento."
+      }
+    });
+  });
 });
 
 async function loginAsAdmin() {
@@ -472,6 +693,7 @@ async function initializeForBilling(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),
     prisma.invoiceLine.deleteMany(),

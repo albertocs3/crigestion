@@ -144,7 +144,31 @@ Restricciones e indices:
 El MVP no envia a AEAT ni guarda certificados. La tabla reserva el punto de
 integracion para el adaptador VeriFactu server-side.
 
-## 9. Transacciones Criticas
+## 9. Tabla `customer_payments`
+
+| Campo | Uso |
+|---|---|
+| `id` | UUID tecnico. |
+| `invoiceId` | Factura emitida cobrada total o parcialmente. |
+| `dueDateId` | Vencimiento sobre el que se aplica el cobro. |
+| `source` | Origen del cobro. Primer corte: `MANUAL`. |
+| `paymentDate` | Fecha del cobro. |
+| `amount` | Importe cobrado. |
+| `reference` | Referencia bancaria o interna opcional. |
+| `notes` | Observaciones internas opcionales. |
+| `createdById`, `createdAt` | Trazabilidad de alta. |
+
+Restricciones e indices:
+
+- `amount > 0`.
+- FK restrictivas a factura, vencimiento y usuario.
+- Indices por `(invoiceId, paymentDate, id)`, `(dueDateId, paymentDate, id)` y
+  `(createdById, createdAt)`.
+
+La aplicacion impide sobrecobros comparando la suma de cobros registrados con el
+importe del vencimiento dentro de la transaccion.
+
+## 10. Transacciones Criticas
 
 Crear/editar borradores:
 
@@ -161,7 +185,17 @@ Emitir:
 6. Crea `invoice_verifactu_records`.
 7. Audita `INVOICE_ISSUED`.
 
-## 10. Auditoria
+Registrar cobro manual:
+
+1. Valida que la factura esta `ISSUED`.
+2. Valida que el vencimiento pertenece a la factura y admite cobro.
+3. Calcula el saldo pendiente del vencimiento.
+4. Crea `customer_payments`.
+5. Actualiza estado del vencimiento.
+6. Recalcula `paymentStatus` de la factura.
+7. Audita `CUSTOMER_PAYMENT_REGISTERED`.
+
+## 11. Auditoria
 
 Eventos actuales del MVP:
 
@@ -174,12 +208,13 @@ Eventos actuales del MVP:
 - `INVOICE_LINE_DELETED`.
 - `INVOICE_ISSUED`.
 - `INVOICE_PDF_DOWNLOADED`.
+- `CUSTOMER_PAYMENT_REGISTERED`.
 
 Los payloads incluyen ids, numero, estado, total y campos modificados. No deben
 incluir NIF, direccion fiscal completa, email, IBAN, notas completas ni textos
 largos de lineas.
 
-## 11. PDF
+## 12. PDF
 
 El PDF del MVP se genera bajo demanda para facturas emitidas desde los datos
 congelados de la factura, lineas, resumen de impuestos y vencimientos. No anade
@@ -188,12 +223,12 @@ tablas de persistencia propias ni conserva obligatoriamente el binario generado.
 Quedan fuera del MVP la firma digital, el envio por correo, la plantilla
 definitiva versionada y el hash del PDF enviado.
 
-## 12. Decisiones Pendientes
+## 13. Decisiones Pendientes
 
 - Modelo definitivo de presupuestos.
 - Rectificativas integras.
 - Varios vencimientos manuales.
-- Cobros y anticipos.
+- Devoluciones, anticipos, remesas y conciliacion.
 - Plantilla PDF definitiva, firma digital y hash de plantilla.
 - Encadenamiento y envio VeriFactu real.
 - Conexion con contabilidad.

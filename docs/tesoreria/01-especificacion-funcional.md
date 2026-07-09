@@ -33,6 +33,7 @@ El módulo permitirá:
 
 ### Incluido
 
+- Registro manual basico de cobros de clientes sobre vencimientos emitidos.
 - Una cuenta bancaria en euros.
 - Mandatos SEPA CORE.
 - Remesas de cobros de clientes.
@@ -225,6 +226,11 @@ Al marcar una remesa como procesada:
 - Se registran los cobros de sus vencimientos.
 - Se actualizan facturas y estados de cobro.
 - Se generan los asientos correspondientes.
+
+Antes de implementar remesas completas, el primer corte tecnico permite
+registrar cobros manuales de vencimientos de facturas emitidas. Este registro
+actualiza el estado del vencimiento y el estado de cobro de la factura, pero no
+genera asientos contables ni conciliaciones bancarias automaticas.
 
 También se podrá procesar cada vencimiento como:
 
@@ -486,6 +492,7 @@ El saldo real se obtiene del último extracto importado.
 
 Se auditarán:
 
+- Registro manual de cobros.
 - Cambios de la cuenta bancaria.
 - Creación y modificación de remesas.
 - Generación del XML.

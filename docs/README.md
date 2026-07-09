@@ -55,7 +55,7 @@ La base tecnologica vigente es:
 | Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md), [Contratos HTTP](facturacion/02-contratos-api.md), [Modelo fisico](facturacion/03-modelo-fisico-datos.md), [Diseno de pantallas](facturacion/04-diseno-pantallas.md), [Plan de pruebas](facturacion/05-plan-de-pruebas.md) |
 | Atencion al Cliente | [Especificacion funcional](atencion-cliente/01-especificacion-funcional.md) |
 | Contabilidad, Compras y Proveedores | [Especificacion funcional](contabilidad/01-especificacion-funcional.md) |
-| Tesoreria y SEPA | [Especificacion funcional](tesoreria/01-especificacion-funcional.md) |
+| Tesoreria y SEPA | [Especificacion funcional](tesoreria/01-especificacion-funcional.md), [Contratos HTTP](tesoreria/02-contratos-api.md) |
 | Usuarios, Roles y Seguridad | [Especificacion funcional](seguridad/01-especificacion-funcional.md) |
 | Configuracion General | [Especificacion funcional](configuracion/01-especificacion-funcional.md) |
 | Plataforma - Fase 0 | [Casos de uso](plataforma/02-casos-de-uso.md) |

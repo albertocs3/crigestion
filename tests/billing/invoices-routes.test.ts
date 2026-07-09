@@ -9,6 +9,7 @@ import {
 import { GET as invoiceDetailGet } from "@/app/api/invoices/[invoiceId]/route";
 import { POST as invoiceLinePost } from "@/app/api/invoices/[invoiceId]/lines/route";
 import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/route";
+import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
@@ -555,6 +556,150 @@ describe("billing invoice HTTP contracts", () => {
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain(adminPassword);
   });
+
+  it("registers customer payments through the invoice contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({
+      where: { invoiceId: issued.id },
+      select: { id: true }
+    });
+
+    const partialResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "60.00",
+          reference: "Transferencia 001",
+          notes: "No auditar completo"
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const partial = await partialResponse.json();
+    const fullResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-11",
+          amount: "61.00",
+          reference: "Transferencia 002",
+          notes: null
+        },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const full = await fullResponse.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_PAYMENT_REGISTERED" },
+      orderBy: { createdAt: "asc" }
+    });
+
+    expect(partialResponse.status).toBe(201);
+    expect(partial).toMatchObject({
+      paymentStatus: "PARTIALLY_PAID",
+      dueDates: [
+        {
+          id: dueDate.id,
+          status: "PENDING"
+        }
+      ]
+    });
+    expect(fullResponse.status).toBe(201);
+    expect(full).toMatchObject({
+      paymentStatus: "PAID",
+      dueDates: [
+        {
+          id: dueDate.id,
+          status: "PAID"
+        }
+      ]
+    });
+    expect(auditEvent.payload).toMatchObject({
+      invoiceId: issued.id,
+      dueDateId: dueDate.id,
+      amount: "60.00",
+      resultingPaymentStatus: "PARTIALLY_PAID"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
+  });
+
+  it("protects customer payment registration with CSRF, idempotency and permissions", async () => {
+    await loginAsAdmin();
+    const adminCsrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(adminCsrfToken);
+    const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({
+      where: { invoiceId: issued.id },
+      select: { id: true }
+    });
+    const missingIdempotencyResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "10.00",
+          reference: null,
+          notes: null
+        },
+        { csrfToken: adminCsrfToken, idempotencyKey: null }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    cookieMock.reset();
+    await createBillingUserWithoutIssue();
+    await loginWith("facturacion", limitedPassword);
+    const limitedCsrfToken = await getCsrfToken();
+    const forbiddenResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "10.00",
+          reference: null,
+          notes: null
+        },
+        { csrfToken: limitedCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    cookieMock.reset();
+    const unauthenticatedResponse = await invoicePaymentPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payments`,
+        {
+          dueDateId: dueDate.id,
+          paymentDate: "2026-07-10",
+          amount: "10.00",
+          reference: null,
+          notes: null
+        },
+        { csrfToken: adminCsrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(forbiddenResponse.status).toBe(403);
+    expect(await forbiddenResponse.json()).toMatchObject({
+      code: "FORBIDDEN"
+    });
+    expect(unauthenticatedResponse.status).toBe(401);
+    expect(await unauthenticatedResponse.json()).toMatchObject({
+      code: "UNAUTHENTICATED"
+    });
+  });
 });
 
 async function createLimitedUserWithoutBilling(): Promise<void> {
@@ -848,6 +993,7 @@ async function initializeForRoutes(): Promise<void> {
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),
     prisma.invoiceLine.deleteMany(),
