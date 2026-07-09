@@ -26,6 +26,7 @@ Fuera del primer corte:
 - Base inicial de devoluciones: `/api/invoices/{invoiceId}/payment-returns`.
 - Base inicial de vencimientos: `/api/treasury/customer-due-dates`.
 - Exportacion de vencimientos: `/api/treasury/customer-due-dates/export`.
+- Prevision mensual de cobros: `/api/treasury/customer-collection-forecast`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -166,7 +167,73 @@ Errores:
 Audita `CUSTOMER_DUE_DATES_EXPORTED` con filtros, limite, `resultCount` y
 `actorUserId`.
 
-## 6. `POST /api/invoices/{invoiceId}/payments`
+## 6. `GET /api/treasury/customer-collection-forecast`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `year` | Ejercicio a proyectar. Por defecto, ejercicio actual. |
+| `asOf` | Fecha de referencia en formato `AAAA-MM-DD`. Por defecto, hoy. |
+| `customerId` | Filtro opcional por cliente. |
+| `search` | Busqueda por factura, codigo o nombre de cliente. |
+| `limit` | Maximo de vencimientos considerados. Por defecto y maximo `500`. |
+
+Reglas:
+
+- Considera vencimientos de facturas emitidas con saldo pendiente.
+- Excluye vencimientos pagados completamente.
+- Los vencimientos anteriores a `asOf` se agrupan en el mes de `asOf` como
+  atrasados.
+- No modifica vencimientos, facturas ni cobros.
+- No devuelve notas internas, NIF, IBAN ni datos bancarios completos.
+
+Respuesta `200`:
+
+```json
+{
+  "year": 2026,
+  "asOf": "2026-07-10",
+  "summary": {
+    "itemCount": 2,
+    "expectedAmount": "222.00",
+    "overdueAmount": "101.00"
+  },
+  "months": [
+    {
+      "month": 7,
+      "itemCount": 1,
+      "expectedAmount": "101.00",
+      "overdueAmount": "101.00"
+    }
+  ],
+  "items": [
+    {
+      "dueDateId": "uuid",
+      "invoiceId": "uuid",
+      "invoiceNumber": "F2600001",
+      "forecastMonth": 7,
+      "pendingAmount": "101.00",
+      "overdue": true
+    }
+  ]
+}
+```
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
+| `403` | `FORBIDDEN` | La sesion no tiene permiso. |
+| `422` | `VALIDATION_ERROR` | Filtros invalidos. |
+
+Audita `CUSTOMER_COLLECTION_FORECAST_VIEWED` con ejercicio, fecha de
+referencia, filtros, limite, `resultCount` y `actorUserId`.
+
+## 7. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -212,7 +279,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 7. `POST /api/invoices/{invoiceId}/payment-returns`
+## 8. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -257,7 +324,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 8. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 9. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

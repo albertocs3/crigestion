@@ -17,6 +17,7 @@ import {
   registerCustomerPaymentReturn
 } from "@/modules/treasury/application/payments";
 import { listCustomerDueDates } from "@/modules/treasury/application/dueDates";
+import { getCustomerCollectionForecast } from "@/modules/treasury/application/forecast";
 import {
   hashRequestBody,
   initializePlatform,
@@ -1052,6 +1053,96 @@ describe("billing invoices application service", () => {
     });
   });
 
+  it("builds customer collection forecasts from open due dates", async () => {
+    const actor = await loginAsAdmin();
+    const overdue = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-05-15",
+      legalName: "Cliente Prevision Atrasada SL",
+      paymentTermsType: "DAYS",
+      paymentDays: 30
+    });
+    const future = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-10",
+      legalName: "Cliente Prevision Futura SL",
+      paymentTermsType: "DAYS",
+      paymentDays: 30
+    });
+    const overdueDueDateId = overdue.issued.value.dueDates[0]?.id;
+    const futureDueDateId = future.issued.value.dueDates[0]?.id;
+
+    if (!overdueDueDateId || !futureDueDateId) {
+      throw new Error("Missing due date.");
+    }
+
+    const partialPayment = await registerCustomerPayment(
+      overdue.issued.value.id,
+      {
+        dueDateId: overdueDueDateId,
+        paymentDate: "2026-06-20",
+        amount: "20.00",
+        reference: null,
+        notes: null
+      },
+      actor
+    );
+
+    if (!partialPayment.ok) {
+      throw new Error(partialPayment.error.code);
+    }
+
+    const forecast = await getCustomerCollectionForecast(
+      { year: 2026, asOf: "2026-07-10", limit: 25 },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_COLLECTION_FORECAST_VIEWED" }
+    });
+
+    expect(forecast.summary).toEqual({
+      itemCount: 2,
+      expectedAmount: "222.00",
+      overdueAmount: "101.00"
+    });
+    expect(forecast.months[6]).toMatchObject({
+      month: 7,
+      itemCount: 1,
+      expectedAmount: "101.00",
+      overdueAmount: "101.00"
+    });
+    expect(forecast.months[7]).toMatchObject({
+      month: 8,
+      itemCount: 1,
+      expectedAmount: "121.00",
+      overdueAmount: "0.00"
+    });
+    expect(forecast.items).toEqual([
+      expect.objectContaining({
+        dueDateId: overdueDueDateId,
+        forecastMonth: 7,
+        pendingAmount: "101.00",
+        overdue: true,
+        customer: expect.objectContaining({
+          legalName: "Cliente Prevision Atrasada SL"
+        })
+      }),
+      expect.objectContaining({
+        dueDateId: futureDueDateId,
+        forecastMonth: 8,
+        pendingAmount: "121.00",
+        overdue: false,
+        customer: expect.objectContaining({
+          legalName: "Cliente Prevision Futura SL"
+        })
+      })
+    ]);
+    expect(auditEvent.payload).toMatchObject({
+      actorUserId: actor.id,
+      year: 2026,
+      asOf: "2026-07-10",
+      resultCount: 2
+    });
+  });
+
   it("rejects customer payments for drafts and overpayments", async () => {
     const actor = await loginAsAdmin();
     const customer = await createCustomer(actor.id);
@@ -1164,10 +1255,16 @@ async function createIssuedInvoiceWithOneLine(
   options: {
     issueDate: string;
     legalName: string;
+    paymentTermsType?: "IMMEDIATE" | "DAYS" | "FIXED_DAY_OF_MONTH";
+    paymentDays?: number | null;
+    paymentFixedDay?: number | null;
   }
 ) {
   const customer = await createCustomer(actor.id, {
-    legalName: options.legalName
+    legalName: options.legalName,
+    paymentTermsType: options.paymentTermsType,
+    paymentDays: options.paymentDays,
+    paymentFixedDay: options.paymentFixedDay
   });
   const taxRate = await defaultTaxRate();
   const draft = await createInvoiceDraft(

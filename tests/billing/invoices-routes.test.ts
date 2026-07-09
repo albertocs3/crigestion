@@ -16,6 +16,7 @@ import { POST as invoiceUnpaidDueDatePost } from "@/app/api/invoices/[invoiceId]
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { GET as customerDueDatesGet } from "@/app/api/treasury/customer-due-dates/route";
 import { GET as customerDueDatesExportGet } from "@/app/api/treasury/customer-due-dates/export/route";
+import { GET as customerCollectionForecastGet } from "@/app/api/treasury/customer-collection-forecast/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -1050,6 +1051,50 @@ describe("billing invoice HTTP contracts", () => {
     });
   });
 
+  it("returns customer collection forecast through the treasury contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const response = await customerCollectionForecastGet(
+      apiRequest("/api/treasury/customer-collection-forecast?year=2026&asOf=2026-07-10")
+    );
+    const body = await response.json();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_COLLECTION_FORECAST_VIEWED" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      year: 2026,
+      asOf: "2026-07-10",
+      summary: {
+        itemCount: 1,
+        expectedAmount: "121.00",
+        overdueAmount: "121.00"
+      },
+      items: [
+        {
+          invoiceId: issued.id,
+          invoiceNumber: "F2600001",
+          forecastMonth: 7,
+          pendingAmount: "121.00",
+          overdue: true
+        }
+      ]
+    });
+    expect(body.months[6]).toMatchObject({
+      month: 7,
+      itemCount: 1,
+      expectedAmount: "121.00",
+      overdueAmount: "121.00"
+    });
+    expect(auditEvent.payload).toMatchObject({
+      year: 2026,
+      asOf: "2026-07-10",
+      resultCount: 1
+    });
+  });
+
   it("protects customer due date listing with authentication, permissions and validation", async () => {
     const unauthenticatedResponse = await customerDueDatesGet(
       apiRequest("/api/treasury/customer-due-dates")
@@ -1065,6 +1110,37 @@ describe("billing invoice HTTP contracts", () => {
     await loginWith("facturacion", limitedPassword);
     const forbiddenResponse = await customerDueDatesGet(
       apiRequest("/api/treasury/customer-due-dates")
+    );
+
+    expect(unauthenticatedResponse.status).toBe(401);
+    expect(await unauthenticatedResponse.json()).toMatchObject({
+      code: "UNAUTHENTICATED"
+    });
+    expect(invalidResponse.status).toBe(422);
+    expect(await invalidResponse.json()).toMatchObject({
+      code: "VALIDATION_ERROR"
+    });
+    expect(forbiddenResponse.status).toBe(403);
+    expect(await forbiddenResponse.json()).toMatchObject({
+      code: "FORBIDDEN"
+    });
+  });
+
+  it("protects customer collection forecast with authentication, permissions and validation", async () => {
+    const unauthenticatedResponse = await customerCollectionForecastGet(
+      apiRequest("/api/treasury/customer-collection-forecast")
+    );
+
+    await loginAsAdmin();
+    const invalidResponse = await customerCollectionForecastGet(
+      apiRequest("/api/treasury/customer-collection-forecast?year=1999")
+    );
+
+    cookieMock.reset();
+    await createBillingUserWithoutIssue();
+    await loginWith("facturacion", limitedPassword);
+    const forbiddenResponse = await customerCollectionForecastGet(
+      apiRequest("/api/treasury/customer-collection-forecast")
     );
 
     expect(unauthenticatedResponse.status).toBe(401);
