@@ -17,6 +17,7 @@ import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { GET as customerDueDatesGet } from "@/app/api/treasury/customer-due-dates/route";
 import { GET as customerDueDatesExportGet } from "@/app/api/treasury/customer-due-dates/export/route";
 import { GET as customerCollectionForecastGet } from "@/app/api/treasury/customer-collection-forecast/route";
+import { GET as customerCollectionForecastExportGet } from "@/app/api/treasury/customer-collection-forecast/export/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -1095,6 +1096,40 @@ describe("billing invoice HTTP contracts", () => {
     });
   });
 
+  it("exports customer collection forecast as CSV through the treasury contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    await createIssuedInvoice(csrfToken);
+
+    const response = await customerCollectionForecastExportGet(
+      apiRequest(
+        "/api/treasury/customer-collection-forecast/export?year=2026&asOf=2026-07-10"
+      )
+    );
+    const csv = await response.text();
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_COLLECTION_FORECAST_EXPORTED" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("text/csv; charset=utf-8");
+    expect(response.headers.get("Content-Disposition")).toBe(
+      'attachment; filename="prevision-cobros-clientes-2026-2026-07-10.csv"'
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(csv).toContain(
+      '"ejercicio","referencia","mes_previsto","vencimiento","factura","cliente_codigo","cliente_nombre"'
+    );
+    expect(csv).toContain('"2026","2026-07-10","7","2026-07-07","F2600001"');
+    expect(csv).toContain('"121.00","0.00","121.00","SI"');
+    expect(csv).not.toContain("B12345678");
+    expect(auditEvent.payload).toMatchObject({
+      year: 2026,
+      asOf: "2026-07-10",
+      resultCount: 1
+    });
+  });
+
   it("protects customer due date listing with authentication, permissions and validation", async () => {
     const unauthenticatedResponse = await customerDueDatesGet(
       apiRequest("/api/treasury/customer-due-dates")
@@ -1130,10 +1165,16 @@ describe("billing invoice HTTP contracts", () => {
     const unauthenticatedResponse = await customerCollectionForecastGet(
       apiRequest("/api/treasury/customer-collection-forecast")
     );
+    const unauthenticatedExportResponse = await customerCollectionForecastExportGet(
+      apiRequest("/api/treasury/customer-collection-forecast/export")
+    );
 
     await loginAsAdmin();
     const invalidResponse = await customerCollectionForecastGet(
       apiRequest("/api/treasury/customer-collection-forecast?year=1999")
+    );
+    const invalidExportResponse = await customerCollectionForecastExportGet(
+      apiRequest("/api/treasury/customer-collection-forecast/export?year=1999")
     );
 
     cookieMock.reset();
@@ -1142,17 +1183,32 @@ describe("billing invoice HTTP contracts", () => {
     const forbiddenResponse = await customerCollectionForecastGet(
       apiRequest("/api/treasury/customer-collection-forecast")
     );
+    const forbiddenExportResponse = await customerCollectionForecastExportGet(
+      apiRequest("/api/treasury/customer-collection-forecast/export")
+    );
 
     expect(unauthenticatedResponse.status).toBe(401);
     expect(await unauthenticatedResponse.json()).toMatchObject({
+      code: "UNAUTHENTICATED"
+    });
+    expect(unauthenticatedExportResponse.status).toBe(401);
+    expect(await unauthenticatedExportResponse.json()).toMatchObject({
       code: "UNAUTHENTICATED"
     });
     expect(invalidResponse.status).toBe(422);
     expect(await invalidResponse.json()).toMatchObject({
       code: "VALIDATION_ERROR"
     });
+    expect(invalidExportResponse.status).toBe(422);
+    expect(await invalidExportResponse.json()).toMatchObject({
+      code: "VALIDATION_ERROR"
+    });
     expect(forbiddenResponse.status).toBe(403);
     expect(await forbiddenResponse.json()).toMatchObject({
+      code: "FORBIDDEN"
+    });
+    expect(forbiddenExportResponse.status).toBe(403);
+    expect(await forbiddenExportResponse.json()).toMatchObject({
       code: "FORBIDDEN"
     });
   });

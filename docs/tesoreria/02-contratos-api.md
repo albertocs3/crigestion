@@ -27,6 +27,7 @@ Fuera del primer corte:
 - Base inicial de vencimientos: `/api/treasury/customer-due-dates`.
 - Exportacion de vencimientos: `/api/treasury/customer-due-dates/export`.
 - Prevision mensual de cobros: `/api/treasury/customer-collection-forecast`.
+- Exportacion de prevision: `/api/treasury/customer-collection-forecast/export`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -233,7 +234,37 @@ Errores:
 Audita `CUSTOMER_COLLECTION_FORECAST_VIEWED` con ejercicio, fecha de
 referencia, filtros, limite, `resultCount` y `actorUserId`.
 
-## 7. `POST /api/invoices/{invoiceId}/payments`
+## 7. `GET /api/treasury/customer-collection-forecast/export`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Acepta los mismos filtros que
+`GET /api/treasury/customer-collection-forecast`.
+
+Respuesta `200`: CSV con cabecera:
+
+```csv
+"ejercicio","referencia","mes_previsto","vencimiento","factura","cliente_codigo","cliente_nombre","estado_vencimiento","estado_factura","importe","cobrado_neto","pendiente","atrasado"
+```
+
+Reglas:
+
+- Respeta los mismos filtros que la consulta.
+- Aplica neutralizacion CSV para valores que puedan interpretarse como formula.
+- No exporta notas internas, NIF, IBAN ni datos bancarios completos.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
+| `403` | `FORBIDDEN` | La sesion no tiene permiso. |
+| `422` | `VALIDATION_ERROR` | Filtros invalidos. |
+
+Audita `CUSTOMER_COLLECTION_FORECAST_EXPORTED` con ejercicio, fecha de
+referencia, filtros, limite, `resultCount` y `actorUserId`.
+
+## 8. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -279,7 +310,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 8. `POST /api/invoices/{invoiceId}/payment-returns`
+## 9. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -324,7 +355,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 9. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 10. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

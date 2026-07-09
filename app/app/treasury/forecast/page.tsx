@@ -149,6 +149,9 @@ export default async function TreasuryForecastPage({
               <Link className="button button-secondary" href="/app/treasury/forecast">
                 Limpiar
               </Link>
+              <Link className="button button-secondary" href={exportHref(params, forecast)}>
+                Exportar CSV
+              </Link>
             </div>
           </form>
 
@@ -277,4 +280,32 @@ function formatMoney(value: string): string {
 
 function todayDateOnly(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function exportHref(
+  params: {
+    year?: string;
+    asOf?: string;
+    customerId?: string;
+    search?: string;
+  },
+  forecast: {
+    year: number;
+    asOf: string;
+  }
+): string {
+  const searchParams = new URLSearchParams({
+    year: params.year ?? String(forecast.year),
+    asOf: params.asOf ?? forecast.asOf
+  });
+
+  if (params.customerId) {
+    searchParams.set("customerId", params.customerId);
+  }
+
+  if (params.search) {
+    searchParams.set("search", params.search);
+  }
+
+  return `/api/treasury/customer-collection-forecast/export?${searchParams.toString()}`;
 }

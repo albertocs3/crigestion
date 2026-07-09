@@ -67,6 +67,11 @@ export type CustomerCollectionForecast = {
   };
 };
 
+export type CustomerCollectionForecastExport = {
+  filename: string;
+  content: string;
+};
+
 const forecastDueDateSelect = {
   id: true,
   dueDate: true,
@@ -101,6 +106,58 @@ type ForecastDueDateRecord = Prisma.InvoiceDueDateGetPayload<{
 export async function getCustomerCollectionForecast(
   command: GetCustomerCollectionForecastCommand,
   actor: SessionUser
+): Promise<CustomerCollectionForecast> {
+  const forecast = await findCustomerCollectionForecast(command);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_COLLECTION_FORECAST_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        year: command.year,
+        asOf: command.asOf,
+        customerId: command.customerId ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        resultCount: forecast.items.length
+      }
+    }
+  });
+
+  return forecast;
+}
+
+export async function exportCustomerCollectionForecastCsv(
+  command: GetCustomerCollectionForecastCommand,
+  actor: SessionUser
+): Promise<CustomerCollectionForecastExport> {
+  const forecast = await findCustomerCollectionForecast(command);
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_COLLECTION_FORECAST_EXPORTED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        year: command.year,
+        asOf: command.asOf,
+        customerId: command.customerId ?? null,
+        hasSearch: Boolean(command.search),
+        limit: command.limit,
+        resultCount: forecast.items.length
+      }
+    }
+  });
+
+  return {
+    filename: `prevision-cobros-clientes-${command.year}-${command.asOf}.csv`,
+    content: customerCollectionForecastCsv(forecast)
+  };
+}
+
+async function findCustomerCollectionForecast(
+  command: GetCustomerCollectionForecastCommand
 ): Promise<CustomerCollectionForecast> {
   const asOfDate = parseDateOnly(command.asOf);
   const records = await prisma.invoiceDueDate.findMany({
@@ -152,22 +209,6 @@ export async function getCustomerCollectionForecast(
     }
   );
 
-  await prisma.auditEvent.create({
-    data: {
-      eventType: "CUSTOMER_COLLECTION_FORECAST_VIEWED",
-      actorType: "USER",
-      payload: {
-        actorUserId: actor.id,
-        year: command.year,
-        asOf: command.asOf,
-        customerId: command.customerId ?? null,
-        hasSearch: Boolean(command.search),
-        limit: command.limit,
-        resultCount: items.length
-      }
-    }
-  });
-
   return {
     year: command.year,
     asOf: command.asOf,
@@ -179,6 +220,51 @@ export async function getCustomerCollectionForecast(
       overdueAmount: summary.overdueAmount.toFixed(2)
     }
   };
+}
+
+function customerCollectionForecastCsv(forecast: CustomerCollectionForecast): string {
+  const header = [
+    "ejercicio",
+    "referencia",
+    "mes_previsto",
+    "vencimiento",
+    "factura",
+    "cliente_codigo",
+    "cliente_nombre",
+    "estado_vencimiento",
+    "estado_factura",
+    "importe",
+    "cobrado_neto",
+    "pendiente",
+    "atrasado"
+  ];
+  const rows = forecast.items.map((item) => [
+    forecast.year.toString(),
+    forecast.asOf,
+    item.forecastMonth.toString(),
+    item.dueDate,
+    item.invoiceNumber ?? "",
+    item.customer.code,
+    item.customer.legalName,
+    item.status,
+    item.paymentStatus,
+    item.amount,
+    item.paidAmount,
+    item.pendingAmount,
+    item.overdue ? "SI" : "NO"
+  ]);
+
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function csvCell(value: string): string {
+  const safeValue = spreadsheetSafeText(value);
+
+  return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+function spreadsheetSafeText(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }
 
 function mapForecastItem(
