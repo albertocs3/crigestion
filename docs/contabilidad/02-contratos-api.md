@@ -117,3 +117,33 @@ Errores funcionales:
 | `409` | `JOURNAL_ENTRY_NOT_BALANCED` | Asiento descuadrado o linea invalida. |
 
 Audita `ACCOUNTING_JOURNAL_ENTRY_CREATED` sin copiar conceptos de linea.
+
+## 6. `GET /api/accounting/journal-entries/export`
+
+Permiso requerido: `Accounting.View`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Maximo `1000`. Por defecto `1000`. |
+| `year` | Ejercicio opcional. |
+
+Respuesta `200`: CSV `text/csv; charset=utf-8` con BOM, una fila por linea
+contable, cabeceras estables y descarga privada sin cache.
+
+Columnas:
+
+- `numero`
+- `ejercicio`
+- `fecha_contable`
+- `estado`
+- `concepto_asiento`
+- `linea`
+- `cuenta`
+- `nombre_cuenta`
+- `concepto_linea`
+- `debe`
+- `haber`
+
+Audita `ACCOUNTING_JOURNAL_EXPORTED`.

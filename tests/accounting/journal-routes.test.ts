@@ -10,6 +10,7 @@ import {
   GET as journalEntriesGet,
   POST as journalEntriesPost
 } from "@/app/api/accounting/journal-entries/route";
+import { GET as journalEntriesExportGet } from "@/app/api/accounting/journal-entries/export/route";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
@@ -166,6 +167,82 @@ describe("accounting journal HTTP contracts", () => {
     expect(listResponse.status).toBe(200);
     expect(list.entries).toHaveLength(1);
     expect(list.entries[0]?.number).toBe("2026/000001");
+  });
+
+  it("exports posted journal entries as CSV", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const bankResponse = await accountsPost(
+      jsonRequest(
+        "/api/accounting/accounts",
+        {
+          code: "572000001",
+          name: "Banco operativo",
+          type: "Activo corriente",
+          level: 9,
+          isPostable: true
+        },
+        { csrfToken }
+      )
+    );
+    const revenueResponse = await accountsPost(
+      jsonRequest(
+        "/api/accounting/accounts",
+        {
+          code: "700000001",
+          name: "Ventas servicios",
+          type: "Ingresos",
+          level: 9,
+          isPostable: true
+        },
+        { csrfToken }
+      )
+    );
+    const bank = await bankResponse.json();
+    const revenue = await revenueResponse.json();
+    await journalEntriesPost(
+      jsonRequest(
+        "/api/accounting/journal-entries",
+        {
+          accountingDate: "2026-07-10",
+          concept: "Ingreso exportable",
+          lines: [
+            {
+              accountId: bank.id,
+              concept: "Banco",
+              debit: "121.00",
+              credit: "0.00"
+            },
+            {
+              accountId: revenue.id,
+              concept: "Ingreso",
+              debit: "0.00",
+              credit: "121.00"
+            }
+          ]
+        },
+        { csrfToken }
+      )
+    );
+
+    const exportResponse = await journalEntriesExportGet(
+      apiRequest("/api/accounting/journal-entries/export?year=2026")
+    );
+    const csv = await exportResponse.text();
+    const exportAuditCount = await prisma.auditEvent.count({
+      where: { eventType: "ACCOUNTING_JOURNAL_EXPORTED" }
+    });
+
+    expect(exportResponse.status).toBe(200);
+    expect(exportResponse.headers.get("Content-Type")).toContain("text/csv");
+    expect(exportResponse.headers.get("Content-Disposition")).toContain(
+      "diario-contable-2026.csv"
+    );
+    expect(csv).toContain("numero;ejercicio;fecha_contable");
+    expect(csv).toContain("2026/000001;2026;2026-07-10;POSTED");
+    expect(csv).toContain("572000001;Banco operativo;Banco;121.00;0.00");
+    expect(csv).toContain("700000001;Ventas servicios;Ingreso;0.00;121.00");
+    expect(exportAuditCount).toBe(1);
   });
 
   it("protects accounting mutations with CSRF, idempotency and permissions", async () => {

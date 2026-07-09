@@ -197,6 +197,9 @@ El segundo corte expone una pantalla operativa en `/app/accounting` para crear
 subcuentas imputables activas, registrar un asiento manual simple de dos lineas
 y consultar el plan contable y el diario inicial desde la interfaz.
 
+El diario inicial permite exportar CSV por ejercicio desde la pantalla de
+contabilidad, con una fila por linea contable y auditoria de la descarga.
+
 ### Plantillas
 
 Incluyen:

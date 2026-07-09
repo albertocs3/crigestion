@@ -126,6 +126,9 @@ export default async function AccountingPage({
               <Link className="button button-secondary" href="/app/accounting">
                 Limpiar
               </Link>
+              <Link className="button button-secondary" href={exportHref(params)}>
+                Exportar CSV
+              </Link>
             </div>
           </form>
 
@@ -287,6 +290,15 @@ function entryNextPageHref(
   if (params.search) query.set("search", params.search);
 
   return `/app/accounting?${query.toString()}`;
+}
+
+function exportHref(params: Awaited<AccountingPageProps["searchParams"]>): string {
+  const query = new URLSearchParams();
+  if (params.year) query.set("year", params.year);
+
+  const suffix = query.toString();
+
+  return `/api/accounting/journal-entries/export${suffix ? `?${suffix}` : ""}`;
 }
 
 function formatMoney(value: string): string {

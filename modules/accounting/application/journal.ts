@@ -51,6 +51,11 @@ export const listJournalEntriesSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100).optional()
 });
 
+export const exportJournalEntriesSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(1000).default(1000),
+  year: z.coerce.number().int().min(2000).max(2100).optional()
+});
+
 export const listAccountingAccountsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
@@ -61,6 +66,7 @@ export const listAccountingAccountsSchema = z.object({
 export type CreateAccountingAccountCommand = z.infer<typeof createAccountingAccountSchema>;
 export type CreateManualJournalEntryCommand = z.infer<typeof createManualJournalEntrySchema>;
 export type ListJournalEntriesCommand = z.infer<typeof listJournalEntriesSchema>;
+export type ExportJournalEntriesCommand = z.infer<typeof exportJournalEntriesSchema>;
 export type ListAccountingAccountsCommand = z.infer<typeof listAccountingAccountsSchema>;
 
 export type AccountingAccountDto = {
@@ -106,6 +112,11 @@ export type JournalEntryList = {
 export type AccountingAccountList = {
   accounts: AccountingAccountDto[];
   nextCursor: string | null;
+};
+
+export type AccountingJournalExport = {
+  filename: string;
+  content: string;
 };
 
 export type CreateAccountingAccountResult =
@@ -422,6 +433,70 @@ export async function listAccountingAccounts(
   };
 }
 
+export async function exportJournalEntriesCsv(
+  command: ExportJournalEntriesCommand,
+  actor: SessionUser
+): Promise<AccountingJournalExport> {
+  const entries = await prisma.accountingJournalEntry.findMany({
+    where: {
+      ...(command.year ? { year: command.year } : {}),
+      status: "POSTED"
+    },
+    orderBy: [{ accountingDate: "asc" }, { sequence: "asc" }],
+    take: command.limit,
+    select: journalEntrySelect
+  });
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "ACCOUNTING_JOURNAL_EXPORTED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        year: command.year ?? null,
+        limit: command.limit,
+        entryCount: entries.length,
+        lineCount: entries.reduce((total, entry) => total + entry.lines.length, 0)
+      }
+    }
+  });
+
+  const header = [
+    "numero",
+    "ejercicio",
+    "fecha_contable",
+    "estado",
+    "concepto_asiento",
+    "linea",
+    "cuenta",
+    "nombre_cuenta",
+    "concepto_linea",
+    "debe",
+    "haber"
+  ];
+  const rows = entries.flatMap((entry) =>
+    entry.lines.map((line) => [
+      entry.number,
+      String(entry.year),
+      formatDateOnly(entry.accountingDate),
+      entry.status,
+      entry.concept,
+      String(line.position),
+      line.account.code,
+      line.account.name,
+      line.concept,
+      line.debit.toFixed(2),
+      line.credit.toFixed(2)
+    ])
+  );
+  const yearSegment = command.year ? String(command.year) : "todos";
+
+  return {
+    filename: `diario-contable-${yearSegment}.csv`,
+    content: [header, ...rows].map(formatCsvRow).join("\r\n")
+  };
+}
+
 function mapAccount(account: {
   id: string;
   code: string;
@@ -481,4 +556,16 @@ function parseDateOnly(value: string): Date {
 
 function formatDateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+function formatCsvRow(values: string[]): string {
+  return values.map(escapeCsvValue).join(";");
+}
+
+function escapeCsvValue(value: string): string {
+  if (!/[;"\r\n]/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/"/g, '""')}"`;
 }
