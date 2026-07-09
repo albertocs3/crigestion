@@ -203,6 +203,15 @@ type CustomerSepaMandateReferenceAlreadyUsedResult = {
   };
 };
 
+type CustomerTaxIdLockedByIssuedInvoicesResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES";
+    message: string;
+  };
+};
+
 export type CreateCustomerResult =
   | { ok: true; status: 201; value: CustomerListItem }
   | CustomerTaxIdAlreadyUsedResult
@@ -223,6 +232,7 @@ export type UpdateCustomerResult =
   | { ok: true; status: 200; value: CustomerListItem }
   | CustomerTaxIdAlreadyUsedResult
   | CustomerSepaMandateReferenceAlreadyUsedResult
+  | CustomerTaxIdLockedByIssuedInvoicesResult
   | {
       ok: false;
       status: 404;
@@ -604,6 +614,16 @@ export async function updateCustomer(
         return { kind: "not-found" as const };
       }
 
+      const taxIdChanged =
+        existingCustomer.taxId !== command.taxId ||
+        existingCustomer.normalizedTaxId !== normalizedTaxId;
+      const taxIdLocked =
+        taxIdChanged && (await hasIssuedInvoicesForCustomer(tx, customerId));
+
+      if (taxIdLocked) {
+        return { kind: "tax-id-locked" as const };
+      }
+
       const changedFields = changedCustomerFields(existingCustomer, {
         ...command,
         normalizedTaxId,
@@ -752,6 +772,10 @@ export async function updateCustomer(
       };
     }
 
+    if (result.kind === "tax-id-locked") {
+      return customerTaxIdLockedByIssuedInvoices();
+    }
+
     return {
       ok: true,
       status: 200,
@@ -768,6 +792,22 @@ export async function updateCustomer(
 
     throw error;
   }
+}
+
+async function hasIssuedInvoicesForCustomer(
+  tx: Prisma.TransactionClient,
+  customerId: string
+): Promise<boolean> {
+  const issuedInvoiceCount = await tx.invoice.count({
+    where: {
+      customerId,
+      status: {
+        not: "DRAFT"
+      }
+    }
+  });
+
+  return issuedInvoiceCount > 0;
 }
 
 export function normalizeTaxId(value: string): string {
@@ -1120,6 +1160,17 @@ function customerSepaMandateReferenceAlreadyUsed(): CustomerSepaMandateReference
     error: {
       code: "CUSTOMER_SEPA_MANDATE_REFERENCE_ALREADY_USED",
       message: "La referencia del mandato SEPA ya esta asignada."
+    }
+  };
+}
+
+function customerTaxIdLockedByIssuedInvoices(): CustomerTaxIdLockedByIssuedInvoicesResult {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
+      message: "El NIF del cliente no puede cambiarse cuando existen facturas emitidas."
     }
   };
 }

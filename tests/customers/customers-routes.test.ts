@@ -298,6 +298,43 @@ describe("customers HTTP contracts", () => {
     });
   });
 
+  it("rejects customer tax id changes after issued invoices exist", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const createResponse = await customersPost(
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+    );
+    const created = await createResponse.json();
+    await createIssuedInvoiceForCustomer(created.id);
+
+    const response = await customerPatch(
+      jsonRequest(
+        `/api/customers/${created.id}`,
+        {
+          action: "update",
+          customer: updateCustomerPayload({ taxId: "B11111119" })
+        },
+        { csrfToken, method: "PATCH" }
+      ),
+      { params: Promise.resolve({ customerId: created.id }) }
+    );
+    const body = await response.json();
+    const customer = await prisma.customer.findUniqueOrThrow({
+      where: { id: created.id },
+      select: { taxId: true, normalizedTaxId: true }
+    });
+
+    expect(response.status).toBe(409);
+    expect(body).toEqual({
+      code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
+      message: "El NIF del cliente no puede cambiarse cuando existen facturas emitidas."
+    });
+    expect(customer).toEqual({
+      taxId: "B12345674",
+      normalizedTaxId: "B12345674"
+    });
+  });
+
   it("requires an idempotency key before updating customers", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -447,6 +484,34 @@ function createCustomerPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function updateCustomerPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "COMPANY",
+    legalName: "Cliente Demo SL",
+    tradeName: "Cliente Demo",
+    taxId: "B12345674",
+    fiscalTreatment: "DOMESTIC",
+    email: "cliente@example.test",
+    phone: "+34910000000",
+    fiscalAddressLine: "Calle Mayor 1",
+    fiscalPostalCode: "28001",
+    fiscalCity: "Madrid",
+    fiscalProvince: "Madrid",
+    fiscalCountry: "ES",
+    defaultPaymentMethod: "BANK_TRANSFER",
+    paymentTermsType: "IMMEDIATE",
+    paymentDays: null,
+    paymentFixedDay: null,
+    creditLimit: null,
+    bankIban: "ES9121000418450200051332",
+    sepaMandate: {
+      reference: "SEPA-CLIENTE-1",
+      signedAt: "2026-07-01"
+    },
+    ...overrides
+  };
+}
+
 function jsonRequest(
   path: string,
   payload: unknown,
@@ -528,6 +593,45 @@ async function createLimitedUserWithoutCustomers(): Promise<void> {
       passwordHash: hashPassword(limitedPassword),
       status: "ACTIVE",
       roleId: role.id
+    }
+  });
+}
+
+async function createIssuedInvoiceForCustomer(customerId: string): Promise<void> {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: "admin" },
+    select: { id: true }
+  });
+  const customer = await prisma.customer.findUniqueOrThrow({
+    where: { id: customerId }
+  });
+
+  await prisma.invoice.create({
+    data: {
+      status: "ISSUED",
+      verifactuStatus: "PENDING",
+      series: "F",
+      year: 2026,
+      numberSequence: 1,
+      number: "F2600001",
+      customerId: customer.id,
+      customerCodeSnapshot: customer.code,
+      customerLegalNameSnapshot: customer.legalName,
+      customerTaxIdSnapshot: customer.taxId,
+      customerFiscalTreatmentSnapshot: customer.fiscalTreatment,
+      customerFiscalAddressSnapshot: {
+        line1: customer.fiscalAddressLine,
+        postalCode: customer.fiscalPostalCode,
+        city: customer.fiscalCity,
+        province: customer.fiscalProvince,
+        country: customer.fiscalCountry
+      },
+      issueDate: new Date("2026-07-07T00:00:00.000Z"),
+      operationDate: new Date("2026-07-07T00:00:00.000Z"),
+      issuedAt: new Date("2026-07-07T10:00:00.000Z"),
+      total: "0.00",
+      createdById: admin.id,
+      issuedById: admin.id
     }
   });
 }

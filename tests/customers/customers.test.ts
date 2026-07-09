@@ -295,6 +295,74 @@ describe("customers application service", () => {
     expect(auditPayload).not.toContain("Avenida Nueva");
   });
 
+  it("does not allow changing customer tax id after issued invoices exist", async () => {
+    const actor = await loginAsAdmin();
+    const created = await createCustomer(customerPayload(), actor);
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await createIssuedInvoiceForCustomer(created.value.id, actor.id);
+
+    const result = await updateCustomer(
+      created.value.id,
+      updateCustomerPayload({
+        taxId: "B11111119"
+      }),
+      actor
+    );
+    const customer = await prisma.customer.findUniqueOrThrow({
+      where: { id: created.value.id },
+      select: { taxId: true, normalizedTaxId: true }
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
+        message: "El NIF del cliente no puede cambiarse cuando existen facturas emitidas."
+      }
+    });
+    expect(customer).toEqual({
+      taxId: "B12345674",
+      normalizedTaxId: "B12345674"
+    });
+  });
+
+  it("allows changing non-tax customer fields after issued invoices exist", async () => {
+    const actor = await loginAsAdmin();
+    const created = await createCustomer(customerPayload(), actor);
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await createIssuedInvoiceForCustomer(created.value.id, actor.id);
+
+    const result = await updateCustomer(
+      created.value.id,
+      updateCustomerPayload({
+        legalName: "Cliente Actualizado SL",
+        taxId: "B12345674",
+        email: "nuevo@example.test"
+      }),
+      actor
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 200,
+      value: {
+        id: created.value.id,
+        legalName: "Cliente Actualizado SL",
+        taxId: "B12345674",
+        email: "nuevo@example.test"
+      }
+    });
+  });
+
   it("invalidates the active SEPA mandate when the customer IBAN changes", async () => {
     const actor = await loginAsAdmin();
     const created = await createCustomer(
@@ -528,6 +596,36 @@ function customerPayload(
   };
 }
 
+function updateCustomerPayload(
+  overrides: Partial<Parameters<typeof updateCustomer>[1]> = {}
+): Parameters<typeof updateCustomer>[1] {
+  return {
+    type: "COMPANY",
+    legalName: "Cliente Demo SL",
+    tradeName: "Cliente Demo",
+    taxId: "B12345674",
+    fiscalTreatment: "DOMESTIC",
+    email: "cliente@example.test",
+    phone: "+34910000000",
+    fiscalAddressLine: "Calle Mayor 1",
+    fiscalPostalCode: "28001",
+    fiscalCity: "Madrid",
+    fiscalProvince: "Madrid",
+    fiscalCountry: "ES",
+    defaultPaymentMethod: "BANK_TRANSFER",
+    paymentTermsType: "IMMEDIATE",
+    paymentDays: null,
+    paymentFixedDay: null,
+    creditLimit: null,
+    bankIban: "ES9121000418450200051332",
+    sepaMandate: {
+      reference: "SEPA-CLIENTE-1",
+      signedAt: "2026-07-01"
+    },
+    ...overrides
+  };
+}
+
 async function loginAsAdmin() {
   const result = await login({
     userName: "admin",
@@ -552,6 +650,44 @@ async function initializeForCustomers(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+}
+
+async function createIssuedInvoiceForCustomer(
+  customerId: string,
+  actorUserId: string
+): Promise<void> {
+  const customer = await prisma.customer.findUniqueOrThrow({
+    where: { id: customerId }
+  });
+
+  await prisma.invoice.create({
+    data: {
+      status: "ISSUED",
+      verifactuStatus: "PENDING",
+      series: "F",
+      year: 2026,
+      numberSequence: 1,
+      number: "F2600001",
+      customerId: customer.id,
+      customerCodeSnapshot: customer.code,
+      customerLegalNameSnapshot: customer.legalName,
+      customerTaxIdSnapshot: customer.taxId,
+      customerFiscalTreatmentSnapshot: customer.fiscalTreatment,
+      customerFiscalAddressSnapshot: {
+        line1: customer.fiscalAddressLine,
+        postalCode: customer.fiscalPostalCode,
+        city: customer.fiscalCity,
+        province: customer.fiscalProvince,
+        country: customer.fiscalCountry
+      },
+      issueDate: new Date("2026-07-07T00:00:00.000Z"),
+      operationDate: new Date("2026-07-07T00:00:00.000Z"),
+      issuedAt: new Date("2026-07-07T10:00:00.000Z"),
+      total: "0.00",
+      createdById: actorUserId,
+      issuedById: actorUserId
+    }
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {
