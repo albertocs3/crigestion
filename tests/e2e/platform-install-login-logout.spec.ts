@@ -9,6 +9,8 @@ const userName = "admin-e2e";
 const password = "Cambiar-e2e-2026";
 const limitedUserName = "auditor-e2e";
 const limitedPassword = "Cambiar-auditor-2026";
+const billingViewerUserName = "facturacion-e2e";
+const billingViewerPassword = "Cambiar-facturacion-2026";
 const restoreReason = "Restauracion operativa E2E sin datos sensibles";
 const maintenanceReason = "Ventana de mantenimiento E2E controlada";
 
@@ -411,6 +413,37 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   expect(issuedAuditCount).toBe(1);
 });
 
+test("shows issued invoices read-only for a billing viewer", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-billing-viewer-setup");
+  const invoice = await createIssuedInvoiceForAdmin();
+
+  await createBillingViewerUser(page);
+  await loginBillingViewerUser(page);
+
+  await expect(page).toHaveURL(/\/app$/);
+  await expect(page.getByRole("link", { name: "Facturas" })).toBeVisible();
+  await page.getByRole("link", { name: "Facturas" }).click();
+
+  await expect(page).toHaveURL(/\/app\/invoices$/);
+  await expect(page.getByRole("heading", { name: "Facturas" })).toBeVisible();
+  await expect(page.getByText("F2600001").first()).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "F2600001" })
+  ).toContainText("Cliente Facturacion E2E SL");
+  await expect(page.getByRole("button", { name: "Crear borrador" })).not.toBeVisible();
+  await expect(page.getByText("Nuevo borrador")).not.toBeVisible();
+
+  await page.getByRole("link", { name: "Abrir" }).first().click();
+
+  await expect(page).toHaveURL(new RegExp(`/app/invoices/${invoice.id}$`));
+  await expect(page.getByRole("heading", { name: "F2600001" })).toBeVisible();
+  await expect(page.getByText("Servicio mensual E2E")).toBeVisible();
+  await expect(page.getByText("121.00 EUR").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Descargar PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
   await initializeAndLoginAdmin(page, "e2e-permissions-setup");
 
@@ -425,6 +458,24 @@ async function createLimitedUser(page: import("@playwright/test").Page): Promise
       password: limitedPassword,
       roleCode: "ConsultaAuditoria"
     });
+
+  await page.context().clearCookies();
+}
+
+async function createBillingViewerUser(
+  page: import("@playwright/test").Page
+): Promise<void> {
+  await createAuthenticatedResource(page, "/api/platform/roles", {
+    code: "ConsultaFacturas",
+    name: "Consulta facturas",
+    permissionCodes: ["Billing.View"]
+  });
+  await createAuthenticatedResource(page, "/api/platform/users", {
+    displayName: "Usuario Facturacion E2E",
+    userName: billingViewerUserName,
+    password: billingViewerPassword,
+    roleCode: "ConsultaFacturas"
+  });
 
   await page.context().clearCookies();
 }
@@ -507,6 +558,17 @@ async function loginLimitedUser(page: import("@playwright/test").Page): Promise<
   await expect(page).toHaveURL(/\/app$/);
 }
 
+async function loginBillingViewerUser(
+  page: import("@playwright/test").Page
+): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(billingViewerUserName);
+  await page.getByLabel("Contrasena").fill(billingViewerPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+
+  await expect(page).toHaveURL(/\/app$/);
+}
+
 async function createAuthenticatedResource(
   page: import("@playwright/test").Page,
   path: string,
@@ -535,6 +597,108 @@ async function createAuthenticatedResource(
   );
 
   expect(response.status).toBe(201);
+}
+
+async function createIssuedInvoiceForAdmin() {
+  const admin = await prisma.user.findUniqueOrThrow({
+    where: { normalizedUserName: userName }
+  });
+  const taxRate = await prisma.catalogTaxRate.findFirstOrThrow({
+    where: { code: "IVA_21" }
+  });
+  const customer = await prisma.customer.create({
+    data: {
+      code: "C-E2E-BILL",
+      type: "COMPANY",
+      legalName: "Cliente Facturacion E2E SL",
+      tradeName: "Cliente Facturacion E2E",
+      taxId: "B99887766",
+      normalizedTaxId: "B99887766",
+      fiscalTreatment: "DOMESTIC",
+      email: "cliente-facturacion-e2e@example.test",
+      phone: "+34910000004",
+      fiscalAddressLine: "Calle Facturacion E2E 1",
+      fiscalPostalCode: "28003",
+      fiscalCity: "Madrid",
+      fiscalProvince: "Madrid",
+      fiscalCountry: "ES",
+      defaultPaymentMethod: "BANK_TRANSFER",
+      paymentTermsType: "IMMEDIATE",
+      createdById: admin.id
+    }
+  });
+
+  return prisma.invoice.create({
+    data: {
+      status: "ISSUED",
+      paymentStatus: "PENDING",
+      verifactuStatus: "PENDING",
+      series: "F",
+      year: 2026,
+      numberSequence: 1,
+      number: "F2600001",
+      customerId: customer.id,
+      customerCodeSnapshot: customer.code,
+      customerLegalNameSnapshot: customer.legalName,
+      customerTaxIdSnapshot: customer.taxId,
+      customerFiscalTreatmentSnapshot: customer.fiscalTreatment,
+      customerFiscalAddressSnapshot: {
+        line: customer.fiscalAddressLine,
+        postalCode: customer.fiscalPostalCode,
+        city: customer.fiscalCity,
+        province: customer.fiscalProvince,
+        country: customer.fiscalCountry
+      },
+      issueDate: new Date("2026-07-07T00:00:00.000Z"),
+      operationDate: new Date("2026-07-07T00:00:00.000Z"),
+      issuedAt: new Date("2026-07-07T09:00:00.000Z"),
+      subtotal: "100.00",
+      taxableBase: "100.00",
+      taxAmount: "21.00",
+      total: "121.00",
+      createdById: admin.id,
+      issuedById: admin.id,
+      lines: {
+        create: {
+          position: 1,
+          description: "Servicio mensual E2E",
+          quantity: "1.000",
+          unitPrice: "100.00",
+          taxRateId: taxRate.id,
+          taxRateCodeSnapshot: taxRate.code,
+          taxRateNameSnapshot: taxRate.name,
+          taxRateSnapshot: taxRate.rate,
+          lineSubtotal: "100.00",
+          lineDiscountTotal: "0.00",
+          lineTaxableBase: "100.00",
+          lineTaxAmount: "21.00",
+          lineTotal: "121.00"
+        }
+      },
+      taxSummaries: {
+        create: {
+          taxRateCode: taxRate.code,
+          taxRate: taxRate.rate,
+          taxableBase: "100.00",
+          taxAmount: "21.00",
+          total: "121.00"
+        }
+      },
+      dueDates: {
+        create: {
+          position: 1,
+          dueDate: new Date("2026-07-07T00:00:00.000Z"),
+          amount: "121.00",
+          paymentMethod: "BANK_TRANSFER"
+        }
+      },
+      verifactuRecord: {
+        create: {
+          status: "PENDING"
+        }
+      }
+    }
+  });
 }
 
 async function createVerifiedBackupForAdmin() {
