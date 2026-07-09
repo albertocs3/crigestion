@@ -341,6 +341,76 @@ test("creates a customer and primary store from the UI", async ({ page }) => {
   expect(storeAuditCount).toBe(1);
 });
 
+test("creates and issues a manual invoice from the UI", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-invoice-setup");
+
+  await page.getByRole("link", { name: "Clientes" }).click();
+  await fillCustomerForm(page);
+  await page.getByRole("button", { name: "Crear cliente" }).click();
+  await expect(page.getByText("Cliente creado.")).toBeVisible();
+
+  await page.goto("/app/invoices");
+  await expect(page).toHaveURL(/\/app\/invoices$/);
+  await expect(page.getByRole("heading", { name: "Facturas" })).toBeVisible();
+  await expect(page.getByText("No hay facturas para mostrar.")).toBeVisible();
+
+  await page.getByLabel("Fecha de emision").fill("2026-07-07");
+  await page.getByLabel("Fecha de operacion").fill("2026-07-07");
+  await page.getByRole("button", { name: "Crear borrador" }).click();
+
+  await expect(page).toHaveURL(/\/app\/invoices\/[a-f0-9-]+$/);
+  await expect(page.getByRole("heading", { name: "Borrador de factura" })).toBeVisible();
+  await expect(page.getByText("Todavia no hay lineas.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Emitir factura" })).toBeDisabled();
+
+  await page.getByLabel("Descripcion").fill("Servicio mensual E2E");
+  await page.getByLabel("Cantidad").fill("1.000");
+  await page.getByLabel("Precio unitario sin IVA").fill("100.00");
+  await page.getByRole("button", { name: "Agregar linea" }).click();
+
+  await expect(page.getByText("Linea agregada.")).toBeVisible();
+  await expect(page.getByText("Servicio mensual E2E")).toBeVisible();
+  await expect(page.getByText("121.00 EUR").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Emitir factura" })).toBeEnabled();
+
+  await page.getByLabel("Fecha definitiva de emision").fill("2026-07-07");
+  await page.getByRole("button", { name: "Emitir factura" }).click();
+
+  await expect(page.getByRole("heading", { name: "F2600001" })).toBeVisible();
+  await expect(page.getByText("Emitida").first()).toBeVisible();
+  await expect(page.getByText("Pendiente").first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Descargar PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
+
+  await page.getByRole("link", { name: "Facturas" }).click();
+  await expect(page).toHaveURL(/\/app\/invoices$/);
+  await expect(page.getByText("F2600001").first()).toBeVisible();
+  await expect(page.getByText("VeriFactu: Pendiente").first()).toBeVisible();
+
+  const issuedInvoice = await prisma.invoice.findUniqueOrThrow({
+    where: { number: "F2600001" },
+    include: {
+      verifactuRecord: true,
+      lines: true,
+      taxSummaries: true,
+      dueDates: true
+    }
+  });
+  const issuedAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "INVOICE_ISSUED" }
+  });
+
+  expect(issuedInvoice.status).toBe("ISSUED");
+  expect(issuedInvoice.verifactuStatus).toBe("PENDING");
+  expect(issuedInvoice.total.toFixed(2)).toBe("121.00");
+  expect(issuedInvoice.lines).toHaveLength(1);
+  expect(issuedInvoice.taxSummaries).toHaveLength(1);
+  expect(issuedInvoice.dueDates[0]?.amount.toFixed(2)).toBe("121.00");
+  expect(issuedInvoice.verifactuRecord?.status).toBe("PENDING");
+  expect(issuedAuditCount).toBe(1);
+});
+
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
   await initializeAndLoginAdmin(page, "e2e-permissions-setup");
 
@@ -487,6 +557,12 @@ async function createVerifiedBackupForAdmin() {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.invoiceVerifactuRecord.deleteMany(),
+    prisma.invoiceDueDate.deleteMany(),
+    prisma.invoiceTaxSummary.deleteMany(),
+    prisma.invoiceLine.deleteMany(),
+    prisma.invoice.deleteMany(),
+    prisma.invoiceNumberSequence.deleteMany(),
     prisma.platformMaintenanceState.deleteMany(),
     prisma.restoreOperation.deleteMany(),
     prisma.backupOperation.deleteMany(),

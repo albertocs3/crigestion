@@ -9,6 +9,7 @@ import {
 import { GET as invoiceDetailGet } from "@/app/api/invoices/[invoiceId]/route";
 import { POST as invoiceLinePost } from "@/app/api/invoices/[invoiceId]/lines/route";
 import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/route";
+import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -311,6 +312,80 @@ describe("billing invoice HTTP contracts", () => {
       code: "INVOICE_NOT_FOUND"
     });
   });
+
+  it("rejects unauthenticated invoice PDF downloads", async () => {
+    const response = await invoicePdfGet(
+      apiRequest(`/api/invoices/${randomUUID()}/pdf`),
+      routeContext({ invoiceId: randomUUID() })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body.code).toBe("UNAUTHENTICATED");
+  });
+
+  it("rejects invoice PDF downloads for users without billing view permission", async () => {
+    await createLimitedUserWithoutBilling();
+    await loginWith("auditor", limitedPassword);
+
+    const response = await invoicePdfGet(
+      apiRequest(`/api/invoices/${randomUUID()}/pdf`),
+      routeContext({ invoiceId: randomUUID() })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.code).toBe("FORBIDDEN");
+  });
+
+  it("does not generate PDFs for draft invoices", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const customer = await createCustomer();
+    const createResponse = await invoicesPost(
+      jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+    );
+    const created = await createResponse.json();
+
+    const response = await invoicePdfGet(
+      apiRequest(`/api/invoices/${created.id}/pdf`),
+      routeContext({ invoiceId: created.id })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body).toMatchObject({
+      code: "INVOICE_PDF_NOT_AVAILABLE"
+    });
+  });
+
+  it("downloads issued invoice PDFs and audits the download", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+
+    const response = await invoicePdfGet(
+      apiRequest(`/api/invoices/${issued.id}/pdf`),
+      routeContext({ invoiceId: issued.id })
+    );
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "INVOICE_PDF_DOWNLOADED" }
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("application/pdf");
+    expect(response.headers.get("Content-Disposition")).toBe(
+      'inline; filename="F2600001.pdf"'
+    );
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(Buffer.from(bytes.slice(0, 5)).toString("ascii")).toBe("%PDF-");
+    expect(auditEvent.payload).toMatchObject({
+      invoiceId: issued.id,
+      number: "F2600001"
+    });
+    expect(JSON.stringify(auditEvent.payload)).not.toContain(adminPassword);
+  });
 });
 
 async function createLimitedUserWithoutBilling(): Promise<void> {
@@ -374,6 +449,41 @@ async function defaultTaxRate() {
     where: { code: "IVA_21" },
     select: { id: true }
   });
+}
+
+async function createIssuedInvoice(csrfToken: string): Promise<{ id: string }> {
+  const customer = await createCustomer();
+  const taxRate = await defaultTaxRate();
+  const createResponse = await invoicesPost(
+    jsonRequest("/api/invoices", draftPayload(customer.id), { csrfToken })
+  );
+  const created = (await createResponse.json()) as { id: string };
+
+  await invoiceLinePost(
+    jsonRequest(
+      `/api/invoices/${created.id}/lines`,
+      {
+        description: "Servicio mensual",
+        quantity: "1.000",
+        unitPrice: "100.00",
+        discountPercent: "0.00",
+        discountAmount: "0.00",
+        taxRateId: taxRate.id
+      },
+      { csrfToken }
+    ),
+    routeContext({ invoiceId: created.id })
+  );
+  await invoiceIssuePost(
+    jsonRequest(
+      `/api/invoices/${created.id}/issue`,
+      { issueDate: "2026-07-07" },
+      { csrfToken }
+    ),
+    routeContext({ invoiceId: created.id })
+  );
+
+  return created;
 }
 
 function draftPayload(customerId: string) {
