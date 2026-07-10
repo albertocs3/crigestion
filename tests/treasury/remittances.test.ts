@@ -5,7 +5,9 @@ import {
   cancelCustomerRemittanceDraft,
   closeCustomerRemittance,
   createCustomerRemittanceDraft,
+  generateCustomerRemittanceSepa,
   getCustomerRemittance,
+  getCustomerRemittanceSepaFile,
   listCustomerRemittances,
   processCustomerRemittance
 } from "@/modules/treasury/application/remittances";
@@ -124,6 +126,131 @@ describe("customer remittances", () => {
     });
     expect(missing).toBeNull();
     expect(auditCount).toBe(1);
+  });
+
+  it("generates and downloads a SEPA XML file for a draft remittance", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const generated = await generateCustomerRemittanceSepa(
+      created.value.id,
+      actor,
+      { correlationId: "corr-remittance-sepa" }
+    );
+
+    expect(generated.ok).toBe(true);
+    if (!generated.ok) {
+      throw new Error(generated.error.code);
+    }
+    expect(generated.value).toMatchObject({
+      id: created.value.id,
+      status: "GENERATED",
+      sepaFormat: "pain.008.001.02",
+      sepaFileName: "RC2026-000001.xml"
+    });
+    expect(generated.value.sepaMessageId).toContain("RC2026-000001-");
+    expect(generated.value.sepaFileSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(generated.value.generatedAt).not.toBeNull();
+
+    const sepaFile = await getCustomerRemittanceSepaFile(created.value.id, actor);
+    const auditPayload = JSON.stringify(
+      await prisma.auditEvent.findFirstOrThrow({
+        where: { eventType: "CUSTOMER_REMITTANCE_SEPA_GENERATED" }
+      })
+    );
+
+    expect(sepaFile.ok).toBe(true);
+    if (!sepaFile.ok) {
+      throw new Error(sepaFile.error.code);
+    }
+    expect(sepaFile.value.filename).toBe("RC2026-000001.xml");
+    expect(sepaFile.value.sha256).toBe(generated.value.sepaFileSha256);
+    expect(sepaFile.value.content).toContain("<PmtMtd>DD</PmtMtd>");
+    expect(sepaFile.value.content).toContain("<Cd>SEPA</Cd>");
+    expect(sepaFile.value.content).toContain("<Cd>CORE</Cd>");
+    expect(sepaFile.value.content).toContain("ES7921000813610123456789");
+    expect(sepaFile.value.content).toContain("ES9121000418450200051332");
+    expect(auditPayload).not.toContain("ES7921000813610123456789");
+    expect(auditPayload).not.toContain("ES9121000418450200051332");
+  });
+
+  it("rejects SEPA generation when company SEPA configuration is missing", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const generated = await generateCustomerRemittanceSepa(created.value.id, actor);
+
+    expect(generated).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_GENERATABLE",
+        message:
+          "La remesa requiere estado borrador, configuracion SEPA y lineas domiciliadas completas."
+      }
+    });
+  });
+
+  it("allows processing a generated remittance", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const generated = await generateCustomerRemittanceSepa(created.value.id, actor);
+
+    if (!generated.ok) {
+      throw new Error(generated.error.code);
+    }
+
+    const processed = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor
+    );
+
+    expect(processed.ok).toBe(true);
+    if (!processed.ok) {
+      throw new Error(processed.error.code);
+    }
+    expect(processed.value.status).toBe("PROCESSED");
+    expect(processed.value.paymentAmount).toBe("121.00");
   });
 
   it("rejects non eligible and already included due dates", async () => {
@@ -527,6 +654,16 @@ async function initializeForTreasury(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+}
+
+async function configureCompanySepa(): Promise<void> {
+  await prisma.company.update({
+    where: { taxId: baseCommand.company.taxId },
+    data: {
+      bankIban: "ES7921000813610123456789",
+      sepaCreditorIdentifier: "ES12B12345678"
+    }
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {

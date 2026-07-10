@@ -172,13 +172,25 @@ describe("configuration HTTP contracts", () => {
     const auditPayload = JSON.stringify(auditEvent.payload);
 
     expect(response.status).toBe(200);
-    expect(body).toMatchObject(updatePayload());
+    expect(body).toMatchObject({
+      ...updatePayload(),
+      bankIban: "ES7921000813610123456789",
+      sepaCreditorIdentifier: "ES12B12345678"
+    });
     expect(auditEvent.payload).toMatchObject({
-      changedFields: ["legalName", "taxId", "email"]
+      changedFields: [
+        "legalName",
+        "taxId",
+        "email",
+        "bankIban",
+        "sepaCreditorIdentifier"
+      ]
     });
     expect(auditPayload).not.toContain(updatePayload().legalName);
     expect(auditPayload).not.toContain(updatePayload().taxId);
     expect(auditPayload).not.toContain(updatePayload().email);
+    expect(auditPayload).not.toContain("ES7921000813610123456789");
+    expect(auditPayload).not.toContain("ES12B12345678");
   });
 
   it("rejects company tax id changes after issued invoices exist", async () => {
@@ -264,7 +276,9 @@ function updatePayload() {
   return {
     legalName: "CriGestion Actualizada SL",
     taxId: "B87654321",
-    email: "contabilidad@example.test"
+    email: "contabilidad@example.test",
+    bankIban: "ES79 2100 0813 6101 2345 6789",
+    sepaCreditorIdentifier: "es12b12345678"
   };
 }
 

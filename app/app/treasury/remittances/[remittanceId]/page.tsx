@@ -6,6 +6,7 @@ import {
 } from "@/modules/treasury/application/remittances";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
+import { CustomerRemittanceGenerateSepaButton } from "@/modules/treasury/presentation/CustomerRemittanceGenerateSepaButton";
 import { CustomerRemittancePaymentReturnForm } from "@/modules/treasury/presentation/CustomerRemittancePaymentReturnForm";
 import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -97,15 +98,37 @@ export default async function TreasuryRemittanceDetailPage({
               <span className="data-label">Neto</span>
               <strong>{formatMoney(remittance.netAmount)}</strong>
             </div>
+            <div>
+              <span className="data-label">Fichero SEPA</span>
+              <strong>{remittance.sepaFileName ?? "Pendiente"}</strong>
+            </div>
           </div>
 
           {remittance.status === "DRAFT" ? (
             <div className="button-row">
+              <CustomerRemittanceGenerateSepaButton remittanceId={remittance.id} />
               <CustomerRemittanceProcessForm
                 remittanceId={remittance.id}
                 defaultPaymentDate={remittance.chargeDate}
               />
               <CustomerRemittanceCancelButton remittanceId={remittance.id} />
+            </div>
+          ) : null}
+
+          {remittance.status === "GENERATED" ? (
+            <div className="button-row">
+              {remittance.sepaFileName ? (
+                <Link
+                  className="button button-secondary button-small"
+                  href={`/api/treasury/customer-remittances/${remittance.id}/sepa-file`}
+                >
+                  Descargar XML
+                </Link>
+              ) : null}
+              <CustomerRemittanceProcessForm
+                remittanceId={remittance.id}
+                defaultPaymentDate={remittance.chargeDate}
+              />
             </div>
           ) : null}
 

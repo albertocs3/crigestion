@@ -8,7 +8,9 @@ import {
 } from "@/app/api/treasury/customer-remittances/route";
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
 import { POST as remittanceClosePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/close/route";
+import { POST as remittanceGenerateSepaPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/generate-sepa/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
+import { GET as remittanceSepaFileGet } from "@/app/api/treasury/customer-remittances/[remittanceId]/sepa-file/route";
 import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
 import { prisma } from "@/lib/prisma";
 import {
@@ -346,6 +348,67 @@ describe("customer remittance HTTP contracts", () => {
     expect(csv).not.toContain("ES9121000418450200051332");
     expect(auditCount).toBe(1);
   });
+
+  it("generates and downloads SEPA XML through treasury contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    const generateResponse = await remittanceGenerateSepaPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/generate-sepa`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const generated = await generateResponse.json();
+    const missingIdempotencyResponse = await remittanceGenerateSepaPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/generate-sepa`, {
+        csrfToken,
+        idempotencyKey: null
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const downloadResponse = await remittanceSepaFileGet(
+      apiRequest(`/api/treasury/customer-remittances/${created.id}/sepa-file`),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const xml = await downloadResponse.text();
+
+    expect(generateResponse.status).toBe(200);
+    expect(generated).toMatchObject({
+      id: created.id,
+      status: "GENERATED",
+      sepaFormat: "pain.008.001.02",
+      sepaFileName: "RC2026-000001.xml"
+    });
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(downloadResponse.status).toBe(200);
+    expect(downloadResponse.headers.get("Content-Type")).toContain("application/xml");
+    expect(downloadResponse.headers.get("Content-Disposition")).toContain(
+      "RC2026-000001.xml"
+    );
+    expect(downloadResponse.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(downloadResponse.headers.get("X-Remittance-SEPA-SHA256")).toMatch(
+      /^[a-f0-9]{64}$/
+    );
+    expect(xml).toContain("<PmtMtd>DD</PmtMtd>");
+    expect(xml).toContain("ES7921000813610123456789");
+  });
 });
 
 async function loginAsAdmin(): Promise<void> {
@@ -451,6 +514,16 @@ async function createIssuedDirectDebitDueDate(
   });
 
   return invoice.dueDates[0]!;
+}
+
+async function configureCompanySepa(): Promise<void> {
+  await prisma.company.update({
+    where: { taxId: baseCommand.company.taxId },
+    data: {
+      bankIban: "ES7921000813610123456789",
+      sepaCreditorIdentifier: "ES12B12345678"
+    }
+  });
 }
 
 function apiRequest(path: string, init: RequestInit = {}): Request {

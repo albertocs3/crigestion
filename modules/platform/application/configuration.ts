@@ -3,12 +3,34 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { isValidIban, normalizeIban } from "@/modules/customers/application/customers";
 import type { SessionUser } from "@/modules/platform/application/auth";
+
+const bankIbanSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(40)
+  .transform(normalizeIban)
+  .refine(isValidIban, "El IBAN no es valido.");
+
+const sepaCreditorIdentifierSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(35)
+  .transform((value) => value.toUpperCase())
+  .refine(
+    (value) => /^[A-Z]{2}[0-9A-Z]{3,33}$/.test(value),
+    "El identificador acreedor SEPA no tiene un formato valido."
+  );
 
 export const updateCompanyConfigurationSchema = z.object({
   legalName: z.string().trim().min(2).max(200),
   taxId: z.string().trim().min(3).max(32),
-  email: z.string().trim().email().max(254).optional()
+  email: z.string().trim().email().max(254).optional(),
+  bankIban: bankIbanSchema.optional(),
+  sepaCreditorIdentifier: sepaCreditorIdentifierSchema.optional()
 });
 
 export type UpdateCompanyConfigurationCommand = z.infer<
@@ -21,6 +43,8 @@ export type PlatformConfiguration = {
     legalName: string;
     taxId: string;
     email: string | null;
+    bankIban: string | null;
+    sepaCreditorIdentifier: string | null;
     updatedAt: string;
   };
   installation: {
@@ -61,6 +85,8 @@ export async function getPlatformConfiguration(): Promise<PlatformConfiguration 
           legalName: true,
           taxId: true,
           email: true,
+          bankIban: true,
+          sepaCreditorIdentifier: true,
           updatedAt: true
         }
       }
@@ -96,7 +122,9 @@ export async function updateCompanyConfiguration(
           id: true,
           legalName: true,
           taxId: true,
-          email: true
+          email: true,
+          bankIban: true,
+          sepaCreditorIdentifier: true
         }
       }
     }
@@ -107,7 +135,8 @@ export async function updateCompanyConfiguration(
   }
 
   const previousCompany = installation.company;
-  const changedFields = changedCompanyFields(previousCompany, command);
+  const normalizedCommand = normalizeCompanyConfigurationCommand(command);
+  const changedFields = changedCompanyFields(previousCompany, normalizedCommand);
   const taxIdChanged = previousCompany.taxId !== command.taxId;
 
   const taxIdLocked = taxIdChanged && (await hasIssuedInvoices());
@@ -130,13 +159,17 @@ export async function updateCompanyConfiguration(
         data: {
           legalName: command.legalName,
           taxId: command.taxId,
-          email: command.email ?? null
+          email: normalizedCommand.email ?? null,
+          bankIban: normalizedCommand.bankIban ?? null,
+          sepaCreditorIdentifier: normalizedCommand.sepaCreditorIdentifier ?? null
         },
         select: {
           id: true,
           legalName: true,
           taxId: true,
           email: true,
+          bankIban: true,
+          sepaCreditorIdentifier: true,
           updatedAt: true
         }
       });
@@ -189,18 +222,37 @@ async function hasIssuedInvoices(): Promise<boolean> {
   return issuedInvoiceCount > 0;
 }
 
+function normalizeCompanyConfigurationCommand(
+  command: UpdateCompanyConfigurationCommand
+): UpdateCompanyConfigurationCommand {
+  return {
+    ...command,
+    email: command.email ?? undefined,
+    bankIban: command.bankIban ? normalizeIban(command.bankIban) : undefined,
+    sepaCreditorIdentifier: command.sepaCreditorIdentifier
+      ? command.sepaCreditorIdentifier.toUpperCase()
+      : undefined
+  };
+}
+
 function changedCompanyFields(
   previousCompany: {
     legalName: string;
     taxId: string;
     email: string | null;
+    bankIban: string | null;
+    sepaCreditorIdentifier: string | null;
   },
   command: UpdateCompanyConfigurationCommand
 ): string[] {
   return [
     previousCompany.legalName !== command.legalName ? "legalName" : null,
     previousCompany.taxId !== command.taxId ? "taxId" : null,
-    previousCompany.email !== (command.email ?? null) ? "email" : null
+    previousCompany.email !== (command.email ?? null) ? "email" : null,
+    previousCompany.bankIban !== (command.bankIban ?? null) ? "bankIban" : null,
+    previousCompany.sepaCreditorIdentifier !== (command.sepaCreditorIdentifier ?? null)
+      ? "sepaCreditorIdentifier"
+      : null
   ].filter((field): field is string => field !== null);
 }
 
@@ -209,6 +261,8 @@ function mapCompany(company: {
   legalName: string;
   taxId: string;
   email: string | null;
+  bankIban: string | null;
+  sepaCreditorIdentifier: string | null;
   updatedAt: Date;
 }): PlatformConfiguration["company"] {
   return {
@@ -216,6 +270,8 @@ function mapCompany(company: {
     legalName: company.legalName,
     taxId: company.taxId,
     email: company.email,
+    bankIban: company.bankIban,
+    sepaCreditorIdentifier: company.sepaCreditorIdentifier,
     updatedAt: company.updatedAt.toISOString()
   };
 }

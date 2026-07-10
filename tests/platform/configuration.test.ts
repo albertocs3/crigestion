@@ -60,7 +60,9 @@ describe("platform configuration", () => {
       {
         legalName: "CriGestion Actualizada SL",
         taxId: "B87654321",
-        email: "contabilidad@example.test"
+        email: "contabilidad@example.test",
+        bankIban: "ES79 2100 0813 6101 2345 6789",
+        sepaCreditorIdentifier: "es12b12345678"
       },
       actor
     );
@@ -75,16 +77,26 @@ describe("platform configuration", () => {
       value: {
         legalName: "CriGestion Actualizada SL",
         taxId: "B87654321",
-        email: "contabilidad@example.test"
+        email: "contabilidad@example.test",
+        bankIban: "ES7921000813610123456789",
+        sepaCreditorIdentifier: "ES12B12345678"
       }
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
-      changedFields: ["legalName", "taxId", "email"]
+      changedFields: [
+        "legalName",
+        "taxId",
+        "email",
+        "bankIban",
+        "sepaCreditorIdentifier"
+      ]
     });
     expect(auditPayload).not.toContain("CriGestion Actualizada SL");
     expect(auditPayload).not.toContain("B87654321");
     expect(auditPayload).not.toContain("contabilidad@example.test");
+    expect(auditPayload).not.toContain("ES7921000813610123456789");
+    expect(auditPayload).not.toContain("ES12B12345678");
   });
 
   it("does not allow changing company tax id after issued invoices exist", async () => {
@@ -95,7 +107,9 @@ describe("platform configuration", () => {
       {
         legalName: "CriGestion Actualizada SL",
         taxId: "B87654321",
-        email: "contabilidad@example.test"
+        email: "contabilidad@example.test",
+        bankIban: "ES7921000813610123456789",
+        sepaCreditorIdentifier: "ES12B12345678"
       },
       actor
     );
@@ -120,7 +134,9 @@ describe("platform configuration", () => {
       {
         legalName: "CriGestion Actualizada SL",
         taxId: "B12345678",
-        email: "contabilidad@example.test"
+        email: "contabilidad@example.test",
+        bankIban: "ES7921000813610123456789",
+        sepaCreditorIdentifier: "ES12B12345678"
       },
       actor
     );
@@ -131,7 +147,9 @@ describe("platform configuration", () => {
       value: {
         legalName: "CriGestion Actualizada SL",
         taxId: "B12345678",
-        email: "contabilidad@example.test"
+        email: "contabilidad@example.test",
+        bankIban: "ES7921000813610123456789",
+        sepaCreditorIdentifier: "ES12B12345678"
       }
     });
   });

@@ -83,9 +83,14 @@ El IBAN configurado será la única cuenta utilizada por:
 - Contabilidad.
 - Remesas SEPA.
 
+El ciclo basico de remesas SEPA requiere tambien el identificador acreedor
+SEPA de la empresa. Este identificador se conserva junto al IBAN empresarial y
+se utiliza al generar el XML de adeudos.
+
 ### Reglas
 
 - El IBAN debe validarse.
+- El identificador acreedor SEPA debe informarse antes de generar remesas.
 - El BIC es opcional.
 - No puede existir una cuenta diferente en cada módulo.
 - Los cambios requieren revisar configuración contable y bancaria.

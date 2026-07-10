@@ -241,17 +241,24 @@ CSV respetando los mismos filtros y dejando auditoria de la descarga.
 El primer corte de remesas permite crear borradores de remesa de cobro desde
 vencimientos domiciliados pendientes, con cliente activo, IBAN y mandato SEPA
 activo. Este corte conserva la composicion y bloquea duplicidades de
-vencimiento en lineas activas, pero no genera XML, no marca envio al banco y no
-registra cobros automaticamente. La pantalla operativa inicial queda disponible
+vencimiento en lineas activas. La pantalla operativa inicial queda disponible
 en `/app/treasury/remittances`. Los borradores pueden cancelarse para liberar
-sus vencimientos antes de generar XML o registrar cobros. Tambien pueden
-procesarse manualmente para registrar cobros de origen `SEPA_REMITTANCE` y
-actualizar vencimientos y facturas; la generacion XML SEPA y los asientos
-automaticos quedan para un corte posterior. El listado de remesas puede
-exportarse a CSV con sus lineas, sin IBAN ni datos bancarios completos, y deja
-auditoria de la descarga. Cada remesa dispone de una vista de detalle para
-revisar cabecera, estado, lineas, vencimientos, importes remesados, cobros,
-devoluciones y netos antes de procesarla o cerrarla.
+sus vencimientos antes de generar XML o registrar cobros.
+
+El corte actual genera y conserva un XML SEPA CORE basico `pain.008.001.02`
+con nombre de fichero, identificador de mensaje, fecha de generacion y hash
+SHA-256. La remesa pasa de `DRAFT` a `GENERATED` y el fichero puede descargarse
+desde el detalle de remesa. Esta generacion requiere que Configuracion tenga
+IBAN de cobro de la empresa e identificador acreedor SEPA. No marca envio al
+banco, no importa respuestas bancarias y no crea conciliaciones automaticas.
+
+Las remesas en `DRAFT` o `GENERATED` pueden procesarse manualmente para
+registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y
+facturas; los asientos automaticos quedan para un corte posterior. El listado
+de remesas puede exportarse a CSV con sus lineas, sin IBAN ni datos bancarios
+completos, y deja auditoria de la descarga. Cada remesa dispone de una vista de
+detalle para revisar cabecera, estado, lineas, vencimientos, importes
+remesados, cobros, devoluciones y netos antes de procesarla o cerrarla.
 Una remesa procesada puede cerrarse manualmente para indicar que su ciclo
 operativo queda finalizado. Si se registra una devolucion manual sobre un cobro
 creado por remesa SEPA, la remesa pasa a `Parcialmente devuelta` y queda

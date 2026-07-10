@@ -8,6 +8,8 @@ type CompanyConfiguration = {
   legalName: string;
   taxId: string;
   email: string | null;
+  bankIban: string | null;
+  sepaCreditorIdentifier: string | null;
 };
 
 type SubmissionState =
@@ -40,7 +42,9 @@ export function CompanyConfigurationForm({
       body: JSON.stringify({
         legalName: String(formData.get("legalName") ?? ""),
         taxId: String(formData.get("taxId") ?? ""),
-        email: optionalString(formData.get("email"))
+        email: optionalString(formData.get("email")),
+        bankIban: optionalString(formData.get("bankIban")),
+        sepaCreditorIdentifier: optionalString(formData.get("sepaCreditorIdentifier"))
       })
     });
 
@@ -94,6 +98,26 @@ export function CompanyConfigurationForm({
             type="email"
             maxLength={254}
             defaultValue={company.email ?? ""}
+          />
+        </label>
+        <label>
+          IBAN de cobro
+          <input
+            name="bankIban"
+            inputMode="text"
+            maxLength={40}
+            autoComplete="off"
+            defaultValue={company.bankIban ?? ""}
+          />
+        </label>
+        <label>
+          Identificador acreedor SEPA
+          <input
+            name="sepaCreditorIdentifier"
+            inputMode="text"
+            maxLength={35}
+            autoComplete="off"
+            defaultValue={company.sepaCreditorIdentifier ?? ""}
           />
         </label>
       </fieldset>

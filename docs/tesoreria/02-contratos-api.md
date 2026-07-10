@@ -2,8 +2,9 @@
 
 ## 1. Primer Corte
 
-El primer corte de Tesoreria implementa registro manual de cobros de clientes
-y devoluciones manuales sobre cobros registrados de facturas emitidas.
+El primer corte de Tesoreria implementa registro manual de cobros de clientes,
+devoluciones manuales sobre cobros registrados de facturas emitidas y el ciclo
+basico de remesas de cobro.
 
 Incluye:
 
@@ -11,11 +12,13 @@ Incluye:
 - Registrar devoluciones parciales o completas de cobros.
 - Actualizar el estado del vencimiento.
 - Recalcular el estado de cobro de la factura.
+- Crear borradores de remesa, generar XML SEPA CORE basico y descargarlo.
+- Procesar manualmente remesas para registrar cobros `SEPA_REMITTANCE`.
 - Auditar la operacion sin datos sensibles.
 
 Fuera del primer corte:
 
-- Generacion XML SEPA y procesamiento completo de remesas.
+- Envio bancario, importacion de respuestas bancarias y conciliacion de remesas.
 - Conciliacion bancaria.
 - Asientos contables automaticos.
 - Previsiones de tesoreria.
@@ -30,6 +33,8 @@ Fuera del primer corte:
 - Exportacion de prevision: `/api/treasury/customer-collection-forecast/export`.
 - Base inicial de remesas: `/api/treasury/customer-remittances`.
 - Exportacion de remesas: `/api/treasury/customer-remittances/export`.
+- Generacion XML SEPA: `/api/treasury/customer-remittances/{remittanceId}/generate-sepa`.
+- Descarga XML SEPA: `/api/treasury/customer-remittances/{remittanceId}/sepa-file`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -400,7 +405,54 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_DRAFT_CANCELLED`.
 
-## 12. `POST /api/treasury/customer-remittances/{remittanceId}/process`
+## 12. `POST /api/treasury/customer-remittances/{remittanceId}/generate-sepa`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Reglas:
+
+- Solo genera desde remesas `DRAFT`.
+- Requiere lineas activas completas, IBAN deudor y mandato SEPA por linea.
+- Requiere IBAN de cobro de empresa e identificador acreedor SEPA en Configuracion.
+- Genera XML SEPA CORE basico `pain.008.001.02`.
+- Guarda `sepaMessageId`, `sepaFileName`, `sepaFileSha256`, `sepaFormat`,
+  `generatedAt` y el XML.
+- La remesa queda `GENERATED`.
+- La auditoria no incluye IBAN completo.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_NOT_GENERATABLE` | Remesa o configuracion incompleta. |
+
+Audita `CUSTOMER_REMITTANCE_SEPA_GENERATED`.
+
+## 13. `GET /api/treasury/customer-remittances/{remittanceId}/sepa-file`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Reglas:
+
+- Devuelve `application/xml; charset=utf-8`.
+- Usa `Content-Disposition: attachment`.
+- Incluye `Cache-Control: private, no-store`.
+- Incluye `X-Content-Type-Options: nosniff`.
+- Incluye `X-Remittance-SEPA-SHA256` con el hash guardado.
+- No permite descargar remesas sin fichero generado.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_SEPA_FILE_NOT_FOUND` | Remesa sin fichero SEPA generado. |
+
+Audita `CUSTOMER_REMITTANCE_SEPA_DOWNLOADED`.
+
+## 14. `POST /api/treasury/customer-remittances/{remittanceId}/process`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -416,7 +468,7 @@ Body:
 
 Reglas:
 
-- Procesa remesas en estado `DRAFT`.
+- Procesa remesas en estado `DRAFT` o `GENERATED`.
 - Registra un cobro `SEPA_REMITTANCE` por cada linea activa.
 - Actualiza los estados del vencimiento y de la factura.
 - La remesa queda `PROCESSED`.
@@ -433,7 +485,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
-## 13. `POST /api/treasury/customer-remittances/{remittanceId}/close`
+## 15. `POST /api/treasury/customer-remittances/{remittanceId}/close`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -454,7 +506,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_CLOSED`.
 
-## 14. `POST /api/invoices/{invoiceId}/payments`
+## 16. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -500,7 +552,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 15. `POST /api/invoices/{invoiceId}/payment-returns`
+## 17. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -550,7 +602,7 @@ remesa SEPA, incluye `remittanceId`, `remittanceNumber` y
 `previousRemittanceStatus`, y audita el cambio de remesa con
 `CUSTOMER_REMITTANCE_PARTIALLY_RETURNED`.
 
-## 16. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 18. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

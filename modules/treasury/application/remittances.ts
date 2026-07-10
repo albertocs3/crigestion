@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -84,6 +85,11 @@ export type CustomerRemittanceDto = {
   returnedAmount: string;
   netAmount: string;
   lineCount: number;
+  sepaFormat: string | null;
+  sepaMessageId: string | null;
+  sepaFileName: string | null;
+  sepaFileSha256: string | null;
+  generatedAt: string | null;
   lines: CustomerRemittanceLineDto[];
 };
 
@@ -165,6 +171,44 @@ export type ProcessCustomerRemittanceResult =
       };
     };
 
+export type GenerateCustomerRemittanceSepaResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_GENERATABLE";
+        message: string;
+      };
+    };
+
+export type CustomerRemittanceSepaFileResult =
+  | {
+      ok: true;
+      status: 200;
+      value: {
+        filename: string;
+        content: string;
+        sha256: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_SEPA_FILE_NOT_FOUND";
+        message: string;
+      };
+    };
+
 export type CloseCustomerRemittanceResult =
   | { ok: true; status: 200; value: CustomerRemittanceDto }
   | {
@@ -194,6 +238,11 @@ const remittanceSelect = {
   concept: true,
   totalAmount: true,
   lineCount: true,
+  sepaFormat: true,
+  sepaMessageId: true,
+  sepaFileName: true,
+  sepaFileSha256: true,
+  generatedAt: true,
   lines: {
     orderBy: { position: "asc" },
     select: {
@@ -524,6 +573,218 @@ export async function exportCustomerRemittancesCsv(
   };
 }
 
+export async function generateCustomerRemittanceSepa(
+  remittanceId: string,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<GenerateCustomerRemittanceSepaResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const installation = await tx.installation.findFirst({
+      where: { status: "INITIALIZED" },
+      select: {
+        company: {
+          select: {
+            legalName: true,
+            bankIban: true,
+            sepaCreditorIdentifier: true
+          }
+        }
+      }
+    });
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        chargeDate: true,
+        concept: true,
+        totalAmount: true,
+        lineCount: true,
+        lines: {
+          where: { status: "ACTIVE" },
+          orderBy: { position: "asc" },
+          select: {
+            position: true,
+            amount: true,
+            concept: true,
+            mandateReference: true,
+            invoiceNumberSnapshot: true,
+            customerNameSnapshot: true,
+            customer: {
+              select: {
+                bankIban: true
+              }
+            },
+            mandate: {
+              select: {
+                signedAt: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (
+      remittance.status !== "DRAFT" ||
+      remittance.lines.length === 0 ||
+      remittance.lines.length !== remittance.lineCount ||
+      !installation?.company?.bankIban ||
+      !installation.company.sepaCreditorIdentifier ||
+      remittance.lines.some((line) => !line.customer.bankIban || !line.mandate)
+    ) {
+      return { kind: "not-generatable" as const };
+    }
+
+    const generatedAt = new Date();
+    const sepaMessageId = sepaMessageIdFor(remittance.number, generatedAt);
+    const sepaFormat = "pain.008.001.02";
+    const sepaFileName = `${safeFileSegment(remittance.number)}.xml`;
+    const sepaXml = buildSepaDirectDebitXml({
+      format: sepaFormat,
+      messageId: sepaMessageId,
+      generatedAt,
+      company: {
+        legalName: installation.company.legalName,
+        bankIban: installation.company.bankIban,
+        sepaCreditorIdentifier: installation.company.sepaCreditorIdentifier
+      },
+      remittance: {
+        number: remittance.number,
+        chargeDate: remittance.chargeDate,
+        totalAmount: remittance.totalAmount,
+        lineCount: remittance.lineCount,
+        lines: remittance.lines.map((line) => ({
+          position: line.position,
+          amount: line.amount,
+          concept: line.concept,
+          mandateReference: line.mandateReference,
+          mandateSignedAt: line.mandate!.signedAt,
+          customerName: line.customerNameSnapshot,
+          customerIban: line.customer.bankIban!,
+          invoiceNumber: line.invoiceNumberSnapshot
+        }))
+      }
+    });
+    const sepaFileSha256 = createHash("sha256").update(sepaXml).digest("hex");
+    const updated = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "GENERATED",
+        sepaFormat,
+        sepaMessageId,
+        sepaFileName,
+        sepaFileSha256,
+        sepaXml,
+        generatedAt,
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_SEPA_GENERATED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          sepaFormat,
+          sepaMessageId,
+          sepaFileName,
+          sepaFileSha256,
+          lineCount: remittance.lineCount,
+          totalAmount: remittance.totalAmount.toFixed(2),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "generated" as const, remittance: updated };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-generatable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_GENERATABLE",
+        message: "La remesa requiere estado borrador, configuracion SEPA y lineas domiciliadas completas."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
+export async function getCustomerRemittanceSepaFile(
+  remittanceId: string,
+  actor: SessionUser
+): Promise<CustomerRemittanceSepaFileResult> {
+  const remittance = await prisma.customerRemittance.findUnique({
+    where: { id: remittanceId },
+    select: {
+      id: true,
+      number: true,
+      sepaFileName: true,
+      sepaFileSha256: true,
+      sepaXml: true
+    }
+  });
+
+  if (!remittance?.sepaFileName || !remittance.sepaFileSha256 || !remittance.sepaXml) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_SEPA_FILE_NOT_FOUND",
+        message: "La remesa no tiene fichero SEPA generado."
+      }
+    };
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_REMITTANCE_SEPA_DOWNLOADED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        remittanceId: remittance.id,
+        number: remittance.number,
+        sepaFileName: remittance.sepaFileName,
+        sepaFileSha256: remittance.sepaFileSha256
+      }
+    }
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    value: {
+      filename: remittance.sepaFileName,
+      content: remittance.sepaXml,
+      sha256: remittance.sepaFileSha256
+    }
+  };
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -656,7 +917,10 @@ export async function processCustomerRemittance(
       return { kind: "not-found" as const };
     }
 
-    if (remittance.status !== "DRAFT" || remittance.lines.length === 0) {
+    if (
+      (remittance.status !== "DRAFT" && remittance.status !== "GENERATED") ||
+      remittance.lines.length === 0
+    ) {
       return { kind: "not-processable" as const };
     }
 
@@ -904,6 +1168,108 @@ function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
+type SepaDirectDebitXmlInput = {
+  format: string;
+  messageId: string;
+  generatedAt: Date;
+  company: {
+    legalName: string;
+    bankIban: string;
+    sepaCreditorIdentifier: string;
+  };
+  remittance: {
+    number: string;
+    chargeDate: Date;
+    totalAmount: Prisma.Decimal;
+    lineCount: number;
+    lines: Array<{
+      position: number;
+      amount: Prisma.Decimal;
+      concept: string;
+      mandateReference: string;
+      mandateSignedAt: Date;
+      customerName: string;
+      customerIban: string;
+      invoiceNumber: string | null;
+    }>;
+  };
+};
+
+function buildSepaDirectDebitXml(input: SepaDirectDebitXmlInput): string {
+  const transactions = input.remittance.lines
+    .map((line) => {
+      const endToEndId = `${input.remittance.number}-${line.position}`;
+      const remittanceInformation = line.invoiceNumber
+        ? `${line.concept} ${line.invoiceNumber}`.slice(0, 140)
+        : line.concept;
+
+      return [
+        "      <DrctDbtTxInf>",
+        "        <PmtId>",
+        `          <EndToEndId>${xmlEscape(endToEndId)}</EndToEndId>`,
+        "        </PmtId>",
+        `        <InstdAmt Ccy="EUR">${line.amount.toFixed(2)}</InstdAmt>`,
+        "        <DrctDbtTx>",
+        "          <MndtRltdInf>",
+        `            <MndtId>${xmlEscape(line.mandateReference)}</MndtId>`,
+        `            <DtOfSgntr>${formatDateOnly(line.mandateSignedAt)}</DtOfSgntr>`,
+        "          </MndtRltdInf>",
+        "        </DrctDbtTx>",
+        "        <DbtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></DbtrAgt>",
+        `        <Dbtr><Nm>${xmlEscape(line.customerName)}</Nm></Dbtr>`,
+        "        <DbtrAcct>",
+        `          <Id><IBAN>${xmlEscape(line.customerIban)}</IBAN></Id>`,
+        "        </DbtrAcct>",
+        "        <RmtInf>",
+        `          <Ustrd>${xmlEscape(remittanceInformation)}</Ustrd>`,
+        "        </RmtInf>",
+        "      </DrctDbtTxInf>"
+      ].join("\n");
+    })
+    .join("\n");
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pain.008.001.02">',
+    "  <CstmrDrctDbtInitn>",
+    "    <GrpHdr>",
+    `      <MsgId>${xmlEscape(input.messageId)}</MsgId>`,
+    `      <CreDtTm>${input.generatedAt.toISOString()}</CreDtTm>`,
+    `      <NbOfTxs>${input.remittance.lineCount}</NbOfTxs>`,
+    `      <CtrlSum>${input.remittance.totalAmount.toFixed(2)}</CtrlSum>`,
+    `      <InitgPty><Nm>${xmlEscape(input.company.legalName)}</Nm></InitgPty>`,
+    "    </GrpHdr>",
+    "    <PmtInf>",
+    `      <PmtInfId>${xmlEscape(input.remittance.number)}</PmtInfId>`,
+    "      <PmtMtd>DD</PmtMtd>",
+    `      <NbOfTxs>${input.remittance.lineCount}</NbOfTxs>`,
+    `      <CtrlSum>${input.remittance.totalAmount.toFixed(2)}</CtrlSum>`,
+    "      <PmtTpInf>",
+    "        <SvcLvl><Cd>SEPA</Cd></SvcLvl>",
+    "        <LclInstrm><Cd>CORE</Cd></LclInstrm>",
+    "        <SeqTp>RCUR</SeqTp>",
+    "      </PmtTpInf>",
+    `      <ReqdColltnDt>${formatDateOnly(input.remittance.chargeDate)}</ReqdColltnDt>`,
+    `      <Cdtr><Nm>${xmlEscape(input.company.legalName)}</Nm></Cdtr>`,
+    "      <CdtrAcct>",
+    `        <Id><IBAN>${xmlEscape(input.company.bankIban)}</IBAN></Id>`,
+    "      </CdtrAcct>",
+    "      <CdtrAgt><FinInstnId><Othr><Id>NOTPROVIDED</Id></Othr></FinInstnId></CdtrAgt>",
+    "      <ChrgBr>SLEV</ChrgBr>",
+    "      <CdtrSchmeId>",
+    "        <Id><PrvtId><Othr>",
+    `          <Id>${xmlEscape(input.company.sepaCreditorIdentifier)}</Id>`,
+    "          <SchmeNm><Prtry>SEPA</Prtry></SchmeNm>",
+    "        </Othr></PrvtId></Id>",
+    "      </CdtrSchmeId>",
+    transactions,
+    "    </PmtInf>",
+    "  </CstmrDrctDbtInitn>",
+    "</Document>",
+    ""
+  ].join("\n");
+}
+
 function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto {
   const lines = record.lines.map((line) => {
     const remittancePayments = line.dueDate.payments.filter(
@@ -960,6 +1326,11 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
     returnedAmount: returnedAmount.toFixed(2),
     netAmount: paymentAmount.minus(returnedAmount).toFixed(2),
     lineCount: record.lineCount,
+    sepaFormat: record.sepaFormat,
+    sepaMessageId: record.sepaMessageId,
+    sepaFileName: record.sepaFileName,
+    sepaFileSha256: record.sepaFileSha256,
+    generatedAt: record.generatedAt?.toISOString() ?? null,
     lines
   };
 }
@@ -1060,6 +1431,26 @@ function csvCell(value: string): string {
   const safeValue = spreadsheetSafeText(value);
 
   return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+function sepaMessageIdFor(number: string, generatedAt: Date): string {
+  return `${safeFileSegment(number)}-${generatedAt.toISOString().replace(/[-:.TZ]/g, "")}`.slice(
+    0,
+    80
+  );
+}
+
+function safeFileSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function spreadsheetSafeText(value: string): string {
