@@ -260,6 +260,12 @@ procesa el fichero antes de que exista cobro. En ese caso la remesa queda
 lineas se cancelan para permitir preparar una nueva remesa con los mismos
 vencimientos pendientes. Este rechazo no crea cobros ni se considera devolucion.
 
+Tambien puede registrarse una respuesta bancaria manual por lineas sobre una
+remesa `SENT`. Cada linea activa debe marcarse como cobrada o rechazada. Las
+lineas cobradas crean cobros `SEPA_REMITTANCE`; las rechazadas se cancelan para
+liberar los vencimientos. Si hay mezcla de lineas cobradas y rechazadas, la
+remesa queda `PARTIALLY_PROCESSED`.
+
 Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y
 facturas; los asientos automaticos quedan para un corte posterior. El listado

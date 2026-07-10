@@ -1,0 +1,1 @@
+ALTER TYPE "CustomerRemittanceStatus" ADD VALUE 'PARTIALLY_PROCESSED';

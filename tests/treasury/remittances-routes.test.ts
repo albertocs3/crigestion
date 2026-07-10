@@ -12,6 +12,7 @@ import { POST as remittanceGenerateSepaPost } from "@/app/api/treasury/customer-
 import { POST as remittanceMarkSentPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/mark-sent/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
 import { POST as remittanceRejectPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/reject/route";
+import { POST as remittanceSettleBankResponsePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/settle-bank-response/route";
 import { GET as remittanceSepaFileGet } from "@/app/api/treasury/customer-remittances/[remittanceId]/sepa-file/route";
 import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
 import { prisma } from "@/lib/prisma";
@@ -572,6 +573,116 @@ describe("customer remittance HTTP contracts", () => {
       status: "DRAFT"
     });
   });
+
+  it("settles mixed bank responses through treasury contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    await configureCompanySepa();
+    const paidDueDate = await createIssuedDirectDebitDueDate();
+    const rejectedDueDate = await createIssuedDirectDebitDueDate({
+      customerCode: "C-REMIT-ROUTE-2",
+      legalName: "Cliente Remesa Route 2 SL",
+      mandateReference: "MANDATO-ROUTE-002",
+      invoiceNumber: "F2600002",
+      dueDatePosition: 2
+    });
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [paidDueDate.id, rejectedDueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    await remittanceGenerateSepaPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/generate-sepa`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    await remittanceMarkSentPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/mark-sent`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const paidLine = created.lines.find(
+      (line: { dueDateId: string }) => line.dueDateId === paidDueDate.id
+    );
+    const rejectedLine = created.lines.find(
+      (line: { dueDateId: string }) => line.dueDateId === rejectedDueDate.id
+    );
+
+    if (!paidLine || !rejectedLine) {
+      throw new Error("Expected remittance lines.");
+    }
+
+    const settleResponse = await remittanceSettleBankResponsePost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/settle-bank-response`,
+        {
+          paymentDate: "2026-07-16",
+          paidLineIds: [paidLine.id],
+          rejectedLineIds: [rejectedLine.id],
+          rejectionReason: "Banco rechaza una linea"
+        },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const settled = await settleResponse.json();
+    const missingIdempotencyResponse = await remittanceSettleBankResponsePost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/settle-bank-response`,
+        {
+          paymentDate: "2026-07-16",
+          paidLineIds: [paidLine.id],
+          rejectedLineIds: [rejectedLine.id],
+          rejectionReason: "Banco rechaza una linea"
+        },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const retryResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-18",
+          concept: "Reintento linea rechazada",
+          dueDateIds: [rejectedDueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const retry = await retryResponse.json();
+
+    expect(settleResponse.status).toBe(200);
+    expect(settled).toMatchObject({
+      id: created.id,
+      status: "PARTIALLY_PROCESSED",
+      paymentAmount: "121.00"
+    });
+    expect(settled.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: paidLine.id, status: "ACTIVE" }),
+        expect.objectContaining({ id: rejectedLine.id, status: "CANCELLED" })
+      ])
+    );
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(retryResponse.status).toBe(201);
+    expect(retry).toMatchObject({
+      number: "RC2026/000002",
+      status: "DRAFT"
+    });
+  });
 });
 
 async function loginAsAdmin(): Promise<void> {
@@ -597,6 +708,8 @@ async function createIssuedDirectDebitDueDate(
     customerCode?: string;
     legalName?: string;
     mandateReference?: string;
+    invoiceNumber?: string;
+    dueDatePosition?: number;
   } = {}
 ) {
   const admin = await prisma.user.findUniqueOrThrow({
@@ -605,13 +718,15 @@ async function createIssuedDirectDebitDueDate(
   const customerCode = overrides.customerCode ?? "C-REMIT-ROUTE";
   const legalName = overrides.legalName ?? "Cliente Remesa Route SL";
   const mandateReference = overrides.mandateReference ?? "MANDATO-ROUTE-001";
+  const invoiceNumber = overrides.invoiceNumber ?? "F2600001";
+  const taxId = `B${invoiceNumber.slice(-7)}`;
   const customer = await prisma.customer.create({
     data: {
       code: customerCode,
       type: "COMPANY",
       legalName,
-      taxId: "B12345001",
-      normalizedTaxId: "B12345001",
+      taxId,
+      normalizedTaxId: taxId,
       fiscalTreatment: "DOMESTIC",
       fiscalAddressLine: "Calle Prueba 1",
       fiscalPostalCode: "28001",
@@ -639,8 +754,8 @@ async function createIssuedDirectDebitDueDate(
       verifactuStatus: "PENDING",
       series: "F",
       year: 2026,
-      numberSequence: 1,
-      number: "F2600001",
+      numberSequence: overrides.dueDatePosition ?? 1,
+      number: invoiceNumber,
       customerId: customer.id,
       customerCodeSnapshot: customer.code,
       customerLegalNameSnapshot: customer.legalName,
@@ -664,7 +779,7 @@ async function createIssuedDirectDebitDueDate(
       issuedById: admin.id,
       dueDates: {
         create: {
-          position: 1,
+          position: overrides.dueDatePosition ?? 1,
           dueDate: new Date("2026-07-15T00:00:00.000Z"),
           amount: "121.00",
           paymentMethod: "DIRECT_DEBIT"

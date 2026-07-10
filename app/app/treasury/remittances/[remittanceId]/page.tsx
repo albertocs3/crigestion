@@ -4,6 +4,7 @@ import {
   getCustomerRemittance,
   type CustomerRemittanceDto
 } from "@/modules/treasury/application/remittances";
+import { CustomerRemittanceBankResponseForm } from "@/modules/treasury/presentation/CustomerRemittanceBankResponseForm";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
 import { CustomerRemittanceGenerateSepaButton } from "@/modules/treasury/presentation/CustomerRemittanceGenerateSepaButton";
@@ -47,6 +48,8 @@ export default async function TreasuryRemittanceDetailPage({
   if (!remittance) {
     return shellMessage("Remesa", "La remesa no existe.");
   }
+
+  const activeLines = remittance.lines.filter((line) => line.status === "ACTIVE");
 
   return (
     <main className="shell">
@@ -146,7 +149,6 @@ export default async function TreasuryRemittanceDetailPage({
                 remittanceId={remittance.id}
                 defaultPaymentDate={remittance.chargeDate}
               />
-              <CustomerRemittanceRejectForm remittanceId={remittance.id} />
             </div>
           ) : null}
 
@@ -164,10 +166,26 @@ export default async function TreasuryRemittanceDetailPage({
                 remittanceId={remittance.id}
                 defaultPaymentDate={remittance.chargeDate}
               />
+              <CustomerRemittanceRejectForm remittanceId={remittance.id} />
             </div>
           ) : null}
 
+          {remittance.status === "SENT" && activeLines.length > 0 ? (
+            <CustomerRemittanceBankResponseForm
+              remittanceId={remittance.id}
+              defaultPaymentDate={remittance.chargeDate}
+              lines={activeLines.map((line) => ({
+                id: line.id,
+                position: line.position,
+                invoiceNumber: line.invoiceNumber,
+                customerName: line.customer.legalName,
+                amount: line.amount
+              }))}
+            />
+          ) : null}
+
           {remittance.status === "PROCESSED" ||
+          remittance.status === "PARTIALLY_PROCESSED" ||
           remittance.status === "PARTIALLY_RETURNED" ? (
             <div className="button-row">
               <CustomerRemittanceCloseButton remittanceId={remittance.id} />
@@ -203,6 +221,9 @@ export default async function TreasuryRemittanceDetailPage({
                     <td>
                       <strong>{line.customer.legalName}</strong>
                       <span className="cell-detail">{line.customer.code}</span>
+                      {line.status === "CANCELLED" ? (
+                        <span className="cell-detail">Linea liberada</span>
+                      ) : null}
                     </td>
                     <td>{line.invoiceNumber ?? "Sin numero"}</td>
                     <td>{formatDate(line.dueDate)}</td>
@@ -292,6 +313,8 @@ function remittanceStatusLabel(status: CustomerRemittanceDto["status"]): string 
       return "Enviada";
     case "REJECTED":
       return "Rechazada";
+    case "PARTIALLY_PROCESSED":
+      return "Parcialmente procesada";
     case "PROCESSED":
       return "Procesada";
     case "PARTIALLY_RETURNED":

@@ -11,7 +11,8 @@ import {
   listCustomerRemittances,
   markCustomerRemittanceSent,
   processCustomerRemittance,
-  rejectCustomerRemittance
+  rejectCustomerRemittance,
+  settleCustomerRemittanceBankResponse
 } from "@/modules/treasury/application/remittances";
 import { registerCustomerPaymentReturn } from "@/modules/treasury/application/payments";
 import {
@@ -320,6 +321,110 @@ describe("customer remittances", () => {
       number: "RC2026/000001",
       correlationId: "corr-remittance-sent"
     });
+  });
+
+  it("settles sent remittances with mixed paid and rejected lines", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const paidDueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const rejectedDueDate = await createIssuedDirectDebitDueDate(actor.id, {
+      invoiceNumber: "F2600002",
+      dueDatePosition: 2
+    });
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [paidDueDate.id, rejectedDueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await generateCustomerRemittanceSepa(created.value.id, actor);
+    await markCustomerRemittanceSent(created.value.id, actor);
+
+    const paidLine = created.value.lines.find(
+      (line) => line.dueDateId === paidDueDate.id
+    );
+    const rejectedLine = created.value.lines.find(
+      (line) => line.dueDateId === rejectedDueDate.id
+    );
+
+    if (!paidLine || !rejectedLine) {
+      throw new Error("Expected remittance lines.");
+    }
+
+    const settled = await settleCustomerRemittanceBankResponse(
+      created.value.id,
+      {
+        paymentDate: "2026-07-16",
+        paidLineIds: [paidLine.id],
+        rejectedLineIds: [rejectedLine.id],
+        rejectionReason: "Banco rechaza una linea"
+      },
+      actor,
+      { correlationId: "corr-remittance-bank-response" }
+    );
+    const payment = await prisma.customerPayment.findFirstOrThrow({
+      where: {
+        dueDateId: paidDueDate.id,
+        source: "SEPA_REMITTANCE"
+      }
+    });
+    const rejectedLineRecord = await prisma.customerRemittanceLine.findUniqueOrThrow({
+      where: { id: rejectedLine.id }
+    });
+    const retry = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-18",
+        concept: "Reintento linea rechazada",
+        dueDateIds: [rejectedDueDate.id]
+      },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED" }
+    });
+    const auditPayload = JSON.stringify(auditEvent.payload);
+
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) {
+      throw new Error(settled.error.code);
+    }
+    expect(settled.value.status).toBe("PARTIALLY_PROCESSED");
+    expect(settled.value.paymentAmount).toBe("121.00");
+    expect(settled.value.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: paidLine.id,
+          status: "ACTIVE",
+          paymentAmount: "121.00"
+        }),
+        expect.objectContaining({
+          id: rejectedLine.id,
+          status: "CANCELLED",
+          paymentAmount: "0.00"
+        })
+      ])
+    );
+    expect(payment.amount.toFixed(2)).toBe("121.00");
+    expect(rejectedLineRecord.status).toBe("CANCELLED");
+    expect(retry.ok).toBe(true);
+    expect(auditEvent.payload).toMatchObject({
+      remittanceId: created.value.id,
+      previousStatus: "SENT",
+      nextStatus: "PARTIALLY_PROCESSED",
+      paidLineCount: 1,
+      rejectedLineCount: 1,
+      paidAmount: "121.00",
+      rejectedAmount: "121.00",
+      correlationId: "corr-remittance-bank-response"
+    });
+    expect(auditPayload).not.toContain("Banco rechaza una linea");
   });
 
   it("rejects sent remittances before collection and frees their due dates", async () => {

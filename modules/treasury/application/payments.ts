@@ -665,7 +665,11 @@ async function markRemittancePartiallyReturnedForPayment(
 ): Promise<{
   remittanceId: string;
   number: string;
-  previousStatus: "PROCESSED" | "PARTIALLY_RETURNED" | "CLOSED";
+  previousStatus:
+    | "PROCESSED"
+    | "PARTIALLY_PROCESSED"
+    | "PARTIALLY_RETURNED"
+    | "CLOSED";
   changed: boolean;
 } | null> {
   if (payment.source !== "SEPA_REMITTANCE") {
@@ -677,7 +681,9 @@ async function markRemittancePartiallyReturnedForPayment(
       dueDateId: payment.dueDateId,
       status: "ACTIVE",
       remittance: {
-        status: { in: ["PROCESSED", "PARTIALLY_RETURNED", "CLOSED"] }
+        status: {
+          in: ["PROCESSED", "PARTIALLY_PROCESSED", "PARTIALLY_RETURNED", "CLOSED"]
+        }
       }
     },
     select: {
@@ -721,9 +727,10 @@ async function markRemittancePartiallyReturnedForPayment(
 
 function isReturnedRemittanceStatus(
   status: string
-): status is "PROCESSED" | "PARTIALLY_RETURNED" | "CLOSED" {
+): status is "PROCESSED" | "PARTIALLY_PROCESSED" | "PARTIALLY_RETURNED" | "CLOSED" {
   return (
     status === "PROCESSED" ||
+    status === "PARTIALLY_PROCESSED" ||
     status === "PARTIALLY_RETURNED" ||
     status === "CLOSED"
   );

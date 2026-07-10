@@ -34,6 +34,7 @@ export const listCustomerRemittancesSchema = z.object({
       "GENERATED",
       "SENT",
       "REJECTED",
+      "PARTIALLY_PROCESSED",
       "PROCESSED",
       "PARTIALLY_RETURNED",
       "CLOSED",
@@ -57,6 +58,62 @@ export const rejectCustomerRemittanceSchema = z.object({
   reason: z.string().trim().min(3).max(500)
 }).strict();
 
+export const settleCustomerRemittanceBankResponseSchema = z
+  .object({
+    paymentDate: dateOnlySchema,
+    paidLineIds: z.array(z.string().uuid()).default([]),
+    rejectedLineIds: z.array(z.string().uuid()).default([]),
+    rejectionReason: z.string().trim().min(3).max(500).optional()
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const paidLineIds = new Set(value.paidLineIds);
+    const rejectedLineIds = new Set(value.rejectedLineIds);
+
+    if (paidLineIds.size !== value.paidLineIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["paidLineIds"],
+        message: "Las lineas cobradas no pueden repetirse."
+      });
+    }
+
+    if (rejectedLineIds.size !== value.rejectedLineIds.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rejectedLineIds"],
+        message: "Las lineas rechazadas no pueden repetirse."
+      });
+    }
+
+    if (value.paidLineIds.length === 0 && value.rejectedLineIds.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["paidLineIds"],
+        message: "La respuesta bancaria debe indicar al menos una linea."
+      });
+    }
+
+    for (const lineId of paidLineIds) {
+      if (rejectedLineIds.has(lineId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rejectedLineIds"],
+          message: "Una linea no puede estar cobrada y rechazada a la vez."
+        });
+        break;
+      }
+    }
+
+    if (value.rejectedLineIds.length > 0 && !value.rejectionReason) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["rejectionReason"],
+        message: "Las lineas rechazadas requieren motivo."
+      });
+    }
+  });
+
 export type CreateCustomerRemittanceDraftCommand = z.infer<
   typeof createCustomerRemittanceDraftSchema
 >;
@@ -72,6 +129,9 @@ export type ProcessCustomerRemittanceCommand = z.infer<
 export type RejectCustomerRemittanceCommand = z.infer<
   typeof rejectCustomerRemittanceSchema
 >;
+export type SettleCustomerRemittanceBankResponseCommand = z.infer<
+  typeof settleCustomerRemittanceBankResponseSchema
+>;
 
 export type CustomerRemittanceDto = {
   id: string;
@@ -83,6 +143,7 @@ export type CustomerRemittanceDto = {
     | "GENERATED"
     | "SENT"
     | "REJECTED"
+    | "PARTIALLY_PROCESSED"
     | "PROCESSED"
     | "PARTIALLY_RETURNED"
     | "CLOSED"
@@ -107,6 +168,7 @@ export type CustomerRemittanceDto = {
 
 export type CustomerRemittanceLineDto = {
   id: string;
+  status: "ACTIVE" | "CANCELLED";
   position: number;
   dueDateId: string;
   invoiceId: string;
@@ -240,6 +302,25 @@ export type RejectCustomerRemittanceResult =
       };
     };
 
+export type SettleCustomerRemittanceBankResponseResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE";
+        message: string;
+      };
+    };
+
 export type CustomerRemittanceSepaFileResult =
   | {
       ok: true;
@@ -300,6 +381,7 @@ const remittanceSelect = {
     orderBy: { position: "asc" },
     select: {
       id: true,
+      status: true,
       position: true,
       dueDateId: true,
       invoiceId: true,
@@ -1025,6 +1107,221 @@ export async function rejectCustomerRemittance(
   return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
+export async function settleCustomerRemittanceBankResponse(
+  remittanceId: string,
+  command: SettleCustomerRemittanceBankResponseCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<SettleCustomerRemittanceBankResponseResult> {
+  const paidLineIds = new Set(command.paidLineIds);
+  const rejectedLineIds = new Set(command.rejectedLineIds);
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        lineCount: true,
+        totalAmount: true,
+        lines: {
+          where: { status: "ACTIVE" },
+          orderBy: { position: "asc" },
+          select: {
+            id: true,
+            invoiceId: true,
+            dueDateId: true,
+            amount: true,
+            dueDate: {
+              select: {
+                id: true,
+                amount: true,
+                status: true,
+                invoice: {
+                  select: {
+                    id: true,
+                    status: true,
+                    total: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    const activeLineIds = new Set(remittance.lines.map((line) => line.id));
+    const selectedLineIds = new Set([...paidLineIds, ...rejectedLineIds]);
+
+    if (
+      remittance.status !== "SENT" ||
+      remittance.lines.length === 0 ||
+      selectedLineIds.size !== remittance.lines.length ||
+      [...selectedLineIds].some((lineId) => !activeLineIds.has(lineId))
+    ) {
+      return { kind: "not-settleable" as const };
+    }
+
+    const paidLines = remittance.lines.filter((line) => paidLineIds.has(line.id));
+    const rejectedLines = remittance.lines.filter((line) =>
+      rejectedLineIds.has(line.id)
+    );
+
+    for (const line of paidLines) {
+      if (
+        line.dueDate.status !== "PENDING" ||
+        line.dueDate.invoice.status !== "ISSUED"
+      ) {
+        return { kind: "not-settleable" as const };
+      }
+
+      const paidAmount = await sumNetPaymentsForDueDate(tx, line.dueDateId);
+      const pending = line.dueDate.amount.minus(paidAmount);
+
+      if (line.amount.gt(pending)) {
+        return { kind: "not-settleable" as const };
+      }
+    }
+
+    const paymentDate = parseDateOnly(command.paymentDate);
+
+    for (const line of paidLines) {
+      await tx.customerPayment.create({
+        data: {
+          invoiceId: line.invoiceId,
+          dueDateId: line.dueDateId,
+          source: "SEPA_REMITTANCE",
+          paymentDate,
+          amount: line.amount,
+          reference: remittance.number,
+          notes: null,
+          createdById: actor.id
+        }
+      });
+
+      const dueDatePaid = await sumNetPaymentsForDueDate(tx, line.dueDateId);
+      const dueDateStatus = dueDatePaid.equals(line.dueDate.amount)
+        ? "PAID"
+        : "PENDING";
+
+      await tx.invoiceDueDate.update({
+        where: { id: line.dueDateId },
+        data: { status: dueDateStatus }
+      });
+    }
+
+    if (rejectedLines.length > 0) {
+      await tx.customerRemittanceLine.updateMany({
+        where: {
+          id: { in: rejectedLines.map((line) => line.id) },
+          status: "ACTIVE"
+        },
+        data: {
+          status: "CANCELLED"
+        }
+      });
+    }
+
+    const invoiceIds = [...new Set(paidLines.map((line) => line.invoiceId))];
+
+    for (const invoiceId of invoiceIds) {
+      const invoice = await tx.invoice.findUniqueOrThrow({
+        where: { id: invoiceId },
+        select: { total: true }
+      });
+      const invoicePaid = await sumNetPaymentsForInvoice(tx, invoiceId);
+
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          paymentStatus: invoicePaymentStatus(invoicePaid, invoice.total),
+          updatedById: actor.id
+        }
+      });
+    }
+
+    const rejectedAt = rejectedLines.length > 0 ? new Date() : null;
+    const nextStatus =
+      rejectedLines.length === 0
+        ? "PROCESSED"
+        : paidLines.length === 0
+          ? "REJECTED"
+          : "PARTIALLY_PROCESSED";
+    const settled = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: nextStatus,
+        rejectedAt,
+        rejectionReason: rejectedLines.length > 0 ? command.rejectionReason : null,
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+    const paidAmount = paidLines.reduce(
+      (total, line) => total.plus(line.amount),
+      new Prisma.Decimal(0)
+    );
+    const rejectedAmount = rejectedLines.reduce(
+      (total, line) => total.plus(line.amount),
+      new Prisma.Decimal(0)
+    );
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          previousStatus: remittance.status,
+          nextStatus,
+          paymentDate: command.paymentDate,
+          paidLineCount: paidLines.length,
+          rejectedLineCount: rejectedLines.length,
+          paidAmount: paidAmount.toFixed(2),
+          rejectedAmount: rejectedAmount.toFixed(2),
+          ...(command.rejectionReason
+            ? { rejectionReasonLength: command.rejectionReason.length }
+            : {}),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "settled" as const, remittance: settled };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-settleable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE",
+        message: "La respuesta bancaria no cubre las lineas activas de una remesa enviada."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -1303,6 +1600,7 @@ export async function closeCustomerRemittance(
 
     if (
       remittance.status !== "PROCESSED" &&
+      remittance.status !== "PARTIALLY_PROCESSED" &&
       remittance.status !== "PARTIALLY_RETURNED"
     ) {
       return { kind: "not-closable" as const };
@@ -1353,7 +1651,7 @@ export async function closeCustomerRemittance(
       status: 409,
       error: {
         code: "REMITTANCE_NOT_CLOSABLE",
-        message: "Solo se pueden cerrar remesas procesadas o parcialmente devueltas."
+        message: "Solo se pueden cerrar remesas procesadas o con incidencias ya registradas."
       }
     };
   }
@@ -1526,6 +1824,7 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
 
     return {
       id: line.id,
+      status: line.status,
       position: line.position,
       dueDateId: line.dueDateId,
       invoiceId: line.invoiceId,

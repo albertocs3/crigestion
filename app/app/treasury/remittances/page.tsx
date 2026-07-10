@@ -130,6 +130,7 @@ export default async function TreasuryRemittancesPage({
                 <option value="GENERATED">Generada</option>
                 <option value="SENT">Enviada</option>
                 <option value="REJECTED">Rechazada</option>
+                <option value="PARTIALLY_PROCESSED">Parcialmente procesada</option>
                 <option value="PROCESSED">Procesada</option>
                 <option value="PARTIALLY_RETURNED">Parcialmente devuelta</option>
                 <option value="CLOSED">Cerrada</option>
@@ -291,6 +292,7 @@ function remittanceStatusLabel(status: string): string {
     GENERATED: "Generada",
     SENT: "Enviada",
     REJECTED: "Rechazada",
+    PARTIALLY_PROCESSED: "Parcialmente procesada",
     PROCESSED: "Procesada",
     PARTIALLY_RETURNED: "Parcialmente devuelta",
     CLOSED: "Cerrada",
