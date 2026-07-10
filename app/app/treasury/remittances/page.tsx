@@ -9,6 +9,7 @@ import {
 } from "@/modules/treasury/application/remittances";
 import { CustomerRemittanceDraftCreateForm } from "@/modules/treasury/presentation/CustomerRemittanceDraftCreateForm";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
+import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
@@ -202,9 +203,15 @@ export default async function TreasuryRemittancesPage({
                       </td>
                       <td>
                         {remittance.status === "DRAFT" ? (
-                          <CustomerRemittanceCancelButton
-                            remittanceId={remittance.id}
-                          />
+                          <div className="compact-stack">
+                            <CustomerRemittanceProcessForm
+                              remittanceId={remittance.id}
+                              defaultPaymentDate={remittance.chargeDate}
+                            />
+                            <CustomerRemittanceCancelButton
+                              remittanceId={remittance.id}
+                            />
+                          </div>
                         ) : (
                           <span className="cell-detail">Sin acciones</span>
                         )}

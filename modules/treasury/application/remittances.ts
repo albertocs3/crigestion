@@ -41,11 +41,18 @@ export const listCustomerRemittancesSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100).optional()
 });
 
+export const processCustomerRemittanceSchema = z.object({
+  paymentDate: dateOnlySchema
+}).strict();
+
 export type CreateCustomerRemittanceDraftCommand = z.infer<
   typeof createCustomerRemittanceDraftSchema
 >;
 export type ListCustomerRemittancesCommand = z.infer<
   typeof listCustomerRemittancesSchema
+>;
+export type ProcessCustomerRemittanceCommand = z.infer<
+  typeof processCustomerRemittanceSchema
 >;
 
 export type CustomerRemittanceDto = {
@@ -118,6 +125,25 @@ export type CancelCustomerRemittanceDraftResult =
       status: 409;
       error: {
         code: "REMITTANCE_NOT_CANCELLABLE";
+        message: string;
+      };
+    };
+
+export type ProcessCustomerRemittanceResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_PROCESSABLE";
         message: string;
       };
     };
@@ -459,6 +485,171 @@ export async function cancelCustomerRemittanceDraft(
   return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
+export async function processCustomerRemittance(
+  remittanceId: string,
+  command: ProcessCustomerRemittanceCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<ProcessCustomerRemittanceResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        totalAmount: true,
+        lineCount: true,
+        lines: {
+          where: { status: "ACTIVE" },
+          orderBy: { position: "asc" },
+          select: {
+            id: true,
+            invoiceId: true,
+            dueDateId: true,
+            customerId: true,
+            amount: true,
+            dueDate: {
+              select: {
+                id: true,
+                amount: true,
+                status: true,
+                invoice: {
+                  select: {
+                    id: true,
+                    status: true,
+                    total: true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (remittance.status !== "DRAFT" || remittance.lines.length === 0) {
+      return { kind: "not-processable" as const };
+    }
+
+    for (const line of remittance.lines) {
+      if (
+        line.dueDate.status !== "PENDING" ||
+        line.dueDate.invoice.status !== "ISSUED"
+      ) {
+        return { kind: "not-processable" as const };
+      }
+
+      const paidAmount = await sumNetPaymentsForDueDate(tx, line.dueDateId);
+      const pending = line.dueDate.amount.minus(paidAmount);
+
+      if (line.amount.gt(pending)) {
+        return { kind: "not-processable" as const };
+      }
+    }
+
+    const paymentDate = parseDateOnly(command.paymentDate);
+
+    for (const line of remittance.lines) {
+      await tx.customerPayment.create({
+        data: {
+          invoiceId: line.invoiceId,
+          dueDateId: line.dueDateId,
+          source: "SEPA_REMITTANCE",
+          paymentDate,
+          amount: line.amount,
+          reference: remittance.number,
+          notes: null,
+          createdById: actor.id
+        }
+      });
+
+      const dueDatePaid = await sumNetPaymentsForDueDate(tx, line.dueDateId);
+      const dueDateStatus = dueDatePaid.equals(line.dueDate.amount)
+        ? "PAID"
+        : "PENDING";
+
+      await tx.invoiceDueDate.update({
+        where: { id: line.dueDateId },
+        data: { status: dueDateStatus }
+      });
+    }
+
+    const invoiceIds = [...new Set(remittance.lines.map((line) => line.invoiceId))];
+
+    for (const invoiceId of invoiceIds) {
+      const invoice = await tx.invoice.findUniqueOrThrow({
+        where: { id: invoiceId },
+        select: { total: true }
+      });
+      const invoicePaid = await sumNetPaymentsForInvoice(tx, invoiceId);
+
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          paymentStatus: invoicePaymentStatus(invoicePaid, invoice.total),
+          updatedById: actor.id
+        }
+      });
+    }
+
+    const processed = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "PROCESSED",
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_PROCESSED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          paymentDate: command.paymentDate,
+          lineCount: remittance.lineCount,
+          totalAmount: remittance.totalAmount.toFixed(2),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "processed" as const, remittance: processed };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-processable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_PROCESSABLE",
+        message: "La remesa no se puede procesar con sus vencimientos actuales."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
 function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto {
   return {
     id: record.id,
@@ -515,6 +706,61 @@ function sumAmounts(items: Array<{ amount: Prisma.Decimal }>): Prisma.Decimal {
     (total, item) => total.plus(item.amount),
     new Prisma.Decimal(0)
   );
+}
+
+async function sumNetPaymentsForDueDate(
+  tx: Prisma.TransactionClient,
+  dueDateId: string
+): Promise<Prisma.Decimal> {
+  const payments = await tx.customerPayment.findMany({
+    where: { dueDateId },
+    select: {
+      amount: true,
+      returns: {
+        select: {
+          amount: true
+        }
+      }
+    }
+  });
+
+  return payments.reduce(
+    (total, payment) => total.plus(payment.amount).minus(sumAmounts(payment.returns)),
+    new Prisma.Decimal(0)
+  );
+}
+
+async function sumNetPaymentsForInvoice(
+  tx: Prisma.TransactionClient,
+  invoiceId: string
+): Promise<Prisma.Decimal> {
+  const payments = await tx.customerPayment.findMany({
+    where: { invoiceId },
+    select: {
+      amount: true,
+      returns: {
+        select: {
+          amount: true
+        }
+      }
+    }
+  });
+
+  return payments.reduce(
+    (total, payment) => total.plus(payment.amount).minus(sumAmounts(payment.returns)),
+    new Prisma.Decimal(0)
+  );
+}
+
+function invoicePaymentStatus(
+  paidAmount: Prisma.Decimal,
+  invoiceTotal: Prisma.Decimal
+): "PENDING" | "PARTIALLY_PAID" | "PAID" {
+  if (paidAmount.equals(0)) {
+    return "PENDING";
+  }
+
+  return paidAmount.equals(invoiceTotal) ? "PAID" : "PARTIALLY_PAID";
 }
 
 function lineConcept(

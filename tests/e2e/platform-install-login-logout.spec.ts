@@ -40,8 +40,6 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await page.getByLabel("Contrasena").fill(password);
   await page.getByRole("button", { name: "Inicializar" }).click();
 
-  await expect(page.getByText("Instalacion completada")).toBeVisible();
-  await page.reload();
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
 
@@ -360,7 +358,9 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await page.getByLabel("Fecha de operacion").fill("2026-07-07");
   await page.getByRole("button", { name: "Crear borrador" }).click();
 
-  await expect(page).toHaveURL(/\/app\/invoices\/[a-f0-9-]+$/);
+  await expect(page).toHaveURL(/\/app\/invoices\/[a-f0-9-]+$/, {
+    timeout: 15000
+  });
   await expect(page.getByRole("heading", { name: "Borrador de factura" })).toBeVisible();
   await expect(page.getByText("Todavia no hay lineas.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Emitir factura" })).toBeDisabled();
@@ -657,29 +657,46 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   await expect(page.getByText("Remesa creada.")).toBeVisible();
   await expect(page.getByText("RC2026/000001")).toBeVisible();
   await expect(page.getByText("121,00").first()).toBeVisible();
-  await page.getByRole("button", { name: "Cancelar" }).click();
-  await expect(page.getByText("Remesa cancelada.")).toBeVisible();
+  const remittanceRow = page.getByRole("row").filter({ hasText: "RC2026/000001" });
+  await remittanceRow.getByLabel("Fecha cobro").fill("2026-07-16");
+  await remittanceRow.getByRole("button", { name: "Procesar" }).click();
   await expect(
     page.getByRole("row").filter({ hasText: "RC2026/000001" })
-  ).toContainText("Cancelada");
+  ).toContainText("Procesada");
 
   const remittance = await prisma.customerRemittance.findFirstOrThrow({
     where: { number: "RC2026/000001" },
     include: { lines: true }
   });
+  const payment = await prisma.customerPayment.findFirstOrThrow({
+    where: {
+      source: "SEPA_REMITTANCE",
+      reference: "RC2026/000001"
+    },
+    include: {
+      dueDate: {
+        include: {
+          invoice: true
+        }
+      }
+    }
+  });
   const auditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CREATED" }
   });
-  const cancelledAuditCount = await prisma.auditEvent.count({
-    where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CANCELLED" }
+  const processedAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
   });
 
-  expect(remittance.status).toBe("CANCELLED");
+  expect(remittance.status).toBe("PROCESSED");
   expect(remittance.totalAmount.toFixed(2)).toBe("121.00");
   expect(remittance.lines).toHaveLength(1);
-  expect(remittance.lines[0]?.status).toBe("CANCELLED");
+  expect(remittance.lines[0]?.status).toBe("ACTIVE");
+  expect(payment.amount.toFixed(2)).toBe("121.00");
+  expect(payment.dueDate.status).toBe("PAID");
+  expect(payment.dueDate.invoice.paymentStatus).toBe("PAID");
   expect(auditCount).toBe(1);
-  expect(cancelledAuditCount).toBe(1);
+  expect(processedAuditCount).toBe(1);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {

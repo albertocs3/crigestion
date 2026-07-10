@@ -341,7 +341,40 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_DRAFT_CANCELLED`.
 
-## 11. `POST /api/invoices/{invoiceId}/payments`
+## 11. `POST /api/treasury/customer-remittances/{remittanceId}/process`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Body:
+
+```json
+{
+  "paymentDate": "2026-07-16"
+}
+```
+
+Reglas:
+
+- Procesa remesas en estado `DRAFT`.
+- Registra un cobro `SEPA_REMITTANCE` por cada linea activa.
+- Actualiza los estados del vencimiento y de la factura.
+- La remesa queda `PROCESSED`.
+- Si algun vencimiento ya no esta pendiente, la factura no esta emitida o el
+  saldo pendiente no cubre la linea, la operacion se rechaza completa.
+- No genera asientos contables automaticos en este corte.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_NOT_PROCESSABLE` | Remesa o vencimientos no procesables. |
+
+Audita `CUSTOMER_REMITTANCE_PROCESSED`.
+
+## 12. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -387,7 +420,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 12. `POST /api/invoices/{invoiceId}/payment-returns`
+## 13. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -432,7 +465,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 13. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 14. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

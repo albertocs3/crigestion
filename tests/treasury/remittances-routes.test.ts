@@ -7,6 +7,7 @@ import {
   POST as remittancesPost
 } from "@/app/api/treasury/customer-remittances/route";
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
+import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
 import { prisma } from "@/lib/prisma";
 import {
   hashRequestBody,
@@ -182,6 +183,62 @@ describe("customer remittance HTTP contracts", () => {
       id: created.id,
       status: "CANCELLED"
     });
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(auditCount).toBe(1);
+  });
+
+  it("processes draft remittances through the action contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    const processResponse = await remittanceProcessPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/process`,
+        { paymentDate: "2026-07-16" },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const processed = await processResponse.json();
+    const payment = await prisma.customerPayment.findFirstOrThrow({
+      where: {
+        dueDateId: dueDate.id,
+        source: "SEPA_REMITTANCE"
+      }
+    });
+    const missingIdempotencyResponse = await remittanceProcessPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/process`,
+        { paymentDate: "2026-07-16" },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
+    });
+
+    expect(processResponse.status).toBe(200);
+    expect(processed).toMatchObject({
+      id: created.id,
+      status: "PROCESSED"
+    });
+    expect(payment.amount.toFixed(2)).toBe("121.00");
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"

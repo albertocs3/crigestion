@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import {
   cancelCustomerRemittanceDraft,
   createCustomerRemittanceDraft,
-  listCustomerRemittances
+  listCustomerRemittances,
+  processCustomerRemittance
 } from "@/modules/treasury/application/remittances";
 import {
   hashRequestBody,
@@ -169,6 +170,54 @@ describe("customer remittances", () => {
     expect(cancelled.value.status).toBe("CANCELLED");
     expect(cancelledLineCount).toBe(1);
     expect(recreated.ok).toBe(true);
+    expect(auditCount).toBe(1);
+  });
+
+  it("processes draft remittances into customer payments", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const processed = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor,
+      { correlationId: "corr-remittance-process" }
+    );
+    const payment = await prisma.customerPayment.findFirstOrThrow({
+      where: {
+        dueDateId: dueDate.id,
+        source: "SEPA_REMITTANCE"
+      }
+    });
+    const storedDueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
+      where: { id: dueDate.id },
+      include: { invoice: true }
+    });
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
+    });
+
+    expect(processed.ok).toBe(true);
+    if (!processed.ok) {
+      throw new Error(processed.error.code);
+    }
+    expect(processed.value.status).toBe("PROCESSED");
+    expect(payment.amount.toFixed(2)).toBe("121.00");
+    expect(payment.reference).toBe("RC2026/000001");
+    expect(storedDueDate.status).toBe("PAID");
+    expect(storedDueDate.invoice.paymentStatus).toBe("PAID");
     expect(auditCount).toBe(1);
   });
 });

@@ -244,7 +244,10 @@ activo. Este corte conserva la composicion y bloquea duplicidades de
 vencimiento en lineas activas, pero no genera XML, no marca envio al banco y no
 registra cobros automaticamente. La pantalla operativa inicial queda disponible
 en `/app/treasury/remittances`. Los borradores pueden cancelarse para liberar
-sus vencimientos antes de generar XML o registrar cobros.
+sus vencimientos antes de generar XML o registrar cobros. Tambien pueden
+procesarse manualmente para registrar cobros de origen `SEPA_REMITTANCE` y
+actualizar vencimientos y facturas; la generacion XML SEPA y los asientos
+automaticos quedan para un corte posterior.
 
 También se podrá procesar cada vencimiento como:
 
