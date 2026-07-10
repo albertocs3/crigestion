@@ -41,6 +41,12 @@ export const listCustomerRemittancesSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100).optional()
 });
 
+export const exportCustomerRemittancesSchema = listCustomerRemittancesSchema
+  .omit({ cursor: true, limit: true })
+  .extend({
+    limit: z.coerce.number().int().min(1).max(1000).default(1000)
+  });
+
 export const processCustomerRemittanceSchema = z.object({
   paymentDate: dateOnlySchema
 }).strict();
@@ -50,6 +56,9 @@ export type CreateCustomerRemittanceDraftCommand = z.infer<
 >;
 export type ListCustomerRemittancesCommand = z.infer<
   typeof listCustomerRemittancesSchema
+>;
+export type ExportCustomerRemittancesCommand = z.infer<
+  typeof exportCustomerRemittancesSchema
 >;
 export type ProcessCustomerRemittanceCommand = z.infer<
   typeof processCustomerRemittanceSchema
@@ -400,6 +409,46 @@ export async function listCustomerRemittances(
   };
 }
 
+export async function exportCustomerRemittancesCsv(
+  command: ExportCustomerRemittancesCommand,
+  actor: SessionUser
+): Promise<{ filename: string; content: string }> {
+  const records = await prisma.customerRemittance.findMany({
+    where: {
+      ...(command.status ? { status: command.status } : {}),
+      ...(command.year ? { year: command.year } : {})
+    },
+    orderBy: [{ chargeDate: "desc" }, { sequence: "desc" }],
+    take: command.limit,
+    select: remittanceSelect
+  });
+  const remittances = records.map(mapRemittance);
+  const lineCount = remittances.reduce(
+    (total, remittance) => total + remittance.lines.length,
+    0
+  );
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_REMITTANCES_EXPORTED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        status: command.status ?? null,
+        year: command.year ?? null,
+        limit: command.limit,
+        resultCount: remittances.length,
+        lineCount
+      }
+    }
+  });
+
+  return {
+    filename: `remesas-clientes-${formatDateOnly(new Date())}.csv`,
+    content: customerRemittancesCsv(remittances)
+  };
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -650,6 +699,49 @@ export async function processCustomerRemittance(
   return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
+function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
+  const header = [
+    "remesa",
+    "ejercicio",
+    "secuencia",
+    "estado",
+    "fecha_cargo",
+    "concepto_remesa",
+    "total_remesa",
+    "lineas_remesa",
+    "linea",
+    "factura",
+    "cliente_codigo",
+    "cliente_nombre",
+    "vencimiento",
+    "importe_linea",
+    "concepto_linea",
+    "mandato"
+  ];
+  const rows = remittances.flatMap((remittance) =>
+    remittance.lines.map((line) => [
+      remittance.number,
+      remittance.year.toString(),
+      remittance.sequence.toString(),
+      remittance.status,
+      remittance.chargeDate,
+      remittance.concept,
+      remittance.totalAmount,
+      remittance.lineCount.toString(),
+      line.position.toString(),
+      line.invoiceNumber ?? "",
+      line.customer.code,
+      line.customer.legalName,
+      line.dueDate,
+      line.amount,
+      line.concept,
+      line.mandateReference
+    ])
+  );
+
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
 function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto {
   return {
     id: record.id,
@@ -770,6 +862,16 @@ function lineConcept(
   const invoiceNumber = dueDate.invoice.number ?? "sin numero";
 
   return `${remittanceConcept} ${invoiceNumber}`.slice(0, 140);
+}
+
+function csvCell(value: string): string {
+  const safeValue = spreadsheetSafeText(value);
+
+  return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+function spreadsheetSafeText(value: string): string {
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
 }
 
 function isValidDateOnly(value: string): boolean {

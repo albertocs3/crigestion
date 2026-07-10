@@ -29,6 +29,7 @@ Fuera del primer corte:
 - Prevision mensual de cobros: `/api/treasury/customer-collection-forecast`.
 - Exportacion de prevision: `/api/treasury/customer-collection-forecast/export`.
 - Base inicial de remesas: `/api/treasury/customer-remittances`.
+- Exportacion de remesas: `/api/treasury/customer-remittances/export`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
@@ -283,7 +284,60 @@ ni datos bancarios completos.
 
 Audita `CUSTOMER_REMITTANCES_VIEWED`.
 
-## 9. `POST /api/treasury/customer-remittances`
+## 9. `GET /api/treasury/customer-remittances/export`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Query params:
+
+| Parametro | Uso |
+|---|---|
+| `limit` | Maximo `1000`. Por defecto `1000`. |
+| `status` | Estado opcional de remesa. |
+| `year` | Ejercicio opcional. |
+
+Respuesta `200`: `text/csv; charset=utf-8` con `Content-Disposition`
+`attachment`.
+
+Columnas:
+
+- `remesa`.
+- `ejercicio`.
+- `secuencia`.
+- `estado`.
+- `fecha_cargo`.
+- `concepto_remesa`.
+- `total_remesa`.
+- `lineas_remesa`.
+- `linea`.
+- `factura`.
+- `cliente_codigo`.
+- `cliente_nombre`.
+- `vencimiento`.
+- `importe_linea`.
+- `concepto_linea`.
+- `mandato`.
+
+Reglas:
+
+- Respeta filtros por estado y ejercicio.
+- No exporta IBAN ni datos bancarios completos.
+- Protege celdas de texto que podrian interpretarse como formulas al abrir el
+  CSV en una hoja de calculo.
+- Devuelve `Cache-Control: private, no-store`.
+
+Errores:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
+| `403` | `FORBIDDEN` | La sesion no tiene permiso. |
+| `422` | `VALIDATION_ERROR` | Filtros invalidos. |
+
+Audita `CUSTOMER_REMITTANCES_EXPORTED` con filtros, limite, `resultCount`,
+`lineCount` y `actorUserId`.
+
+## 10. `POST /api/treasury/customer-remittances`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -318,7 +372,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_DRAFT_CREATED`.
 
-## 10. `POST /api/treasury/customer-remittances/{remittanceId}/cancel`
+## 11. `POST /api/treasury/customer-remittances/{remittanceId}/cancel`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -341,7 +395,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_DRAFT_CANCELLED`.
 
-## 11. `POST /api/treasury/customer-remittances/{remittanceId}/process`
+## 12. `POST /api/treasury/customer-remittances/{remittanceId}/process`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -374,7 +428,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
-## 12. `POST /api/invoices/{invoiceId}/payments`
+## 13. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -420,7 +474,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 13. `POST /api/invoices/{invoiceId}/payment-returns`
+## 14. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -465,7 +519,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 14. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 15. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

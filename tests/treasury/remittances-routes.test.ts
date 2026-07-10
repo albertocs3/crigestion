@@ -8,6 +8,7 @@ import {
 } from "@/app/api/treasury/customer-remittances/route";
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
+import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
 import { prisma } from "@/lib/prisma";
 import {
   hashRequestBody,
@@ -245,6 +246,50 @@ describe("customer remittance HTTP contracts", () => {
     });
     expect(auditCount).toBe(1);
   });
+
+  it("exports remittances as audited spreadsheet-safe CSV", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const dueDate = await createIssuedDirectDebitDueDate({
+      customerCode: "=C-CSV",
+      legalName: "+Cliente CSV SL",
+      mandateReference: "MANDATO-CSV-001"
+    });
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const exportResponse = await remittancesExportGet(
+      apiRequest("/api/treasury/customer-remittances/export?year=2026")
+    );
+    const csv = await exportResponse.text();
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCES_EXPORTED" }
+    });
+
+    expect(createResponse.status).toBe(201);
+    expect(exportResponse.status).toBe(200);
+    expect(exportResponse.headers.get("Content-Type")).toContain("text/csv");
+    expect(exportResponse.headers.get("Content-Disposition")).toContain(
+      "remesas-clientes-"
+    );
+    expect(exportResponse.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(csv).toContain('"remesa","ejercicio","secuencia"');
+    expect(csv).toContain("RC2026/000001");
+    expect(csv).toContain("F2600001");
+    expect(csv).toContain("121.00");
+    expect(csv).toContain("\"'=C-CSV\"");
+    expect(csv).toContain("\"'+Cliente CSV SL\"");
+    expect(csv).not.toContain("ES9121000418450200051332");
+    expect(auditCount).toBe(1);
+  });
 });
 
 async function loginAsAdmin(): Promise<void> {
@@ -265,15 +310,24 @@ async function getCsrfToken(): Promise<string> {
   return body.csrfToken;
 }
 
-async function createIssuedDirectDebitDueDate() {
+async function createIssuedDirectDebitDueDate(
+  overrides: {
+    customerCode?: string;
+    legalName?: string;
+    mandateReference?: string;
+  } = {}
+) {
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: "admin" }
   });
+  const customerCode = overrides.customerCode ?? "C-REMIT-ROUTE";
+  const legalName = overrides.legalName ?? "Cliente Remesa Route SL";
+  const mandateReference = overrides.mandateReference ?? "MANDATO-ROUTE-001";
   const customer = await prisma.customer.create({
     data: {
-      code: "C-REMIT-ROUTE",
+      code: customerCode,
       type: "COMPANY",
-      legalName: "Cliente Remesa Route SL",
+      legalName,
       taxId: "B12345001",
       normalizedTaxId: "B12345001",
       fiscalTreatment: "DOMESTIC",
@@ -288,8 +342,8 @@ async function createIssuedDirectDebitDueDate() {
       createdById: admin.id,
       sepaMandates: {
         create: {
-          reference: "MANDATO-ROUTE-001",
-          referenceNormalized: "MANDATO-ROUTE-001",
+          reference: mandateReference,
+          referenceNormalized: mandateReference,
           signedAt: new Date("2026-01-01T00:00:00.000Z"),
           createdById: admin.id
         }

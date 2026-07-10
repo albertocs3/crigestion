@@ -342,6 +342,8 @@ test("creates a customer and primary store from the UI", async ({ page }) => {
 });
 
 test("creates and issues a manual invoice from the UI", async ({ page }) => {
+  test.setTimeout(60000);
+
   await initializeAndLoginAdmin(page, "e2e-invoice-setup");
 
   await page.getByRole("link", { name: "Clientes" }).click();

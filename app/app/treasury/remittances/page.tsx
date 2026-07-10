@@ -143,6 +143,12 @@ export default async function TreasuryRemittancesPage({
               <button className="button" type="submit">
                 Filtrar
               </button>
+              <Link
+                className="button button-secondary"
+                href={exportRemittancesHref(params)}
+              >
+                Exportar CSV
+              </Link>
               <Link className="button button-secondary" href="/app/treasury/remittances">
                 Limpiar
               </Link>
@@ -236,6 +242,19 @@ export default async function TreasuryRemittancesPage({
       </section>
     </main>
   );
+}
+
+function exportRemittancesHref(
+  params: Awaited<TreasuryRemittancesPageProps["searchParams"]>
+): string {
+  const query = new URLSearchParams();
+  if (params.status) query.set("status", params.status);
+  if (params.year) query.set("year", params.year);
+  const queryString = query.toString();
+
+  return `/api/treasury/customer-remittances/export${
+    queryString ? `?${queryString}` : ""
+  }`;
 }
 
 function nextPageHref(

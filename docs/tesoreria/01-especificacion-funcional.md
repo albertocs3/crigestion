@@ -247,7 +247,9 @@ en `/app/treasury/remittances`. Los borradores pueden cancelarse para liberar
 sus vencimientos antes de generar XML o registrar cobros. Tambien pueden
 procesarse manualmente para registrar cobros de origen `SEPA_REMITTANCE` y
 actualizar vencimientos y facturas; la generacion XML SEPA y los asientos
-automaticos quedan para un corte posterior.
+automaticos quedan para un corte posterior. El listado de remesas puede
+exportarse a CSV con sus lineas, sin IBAN ni datos bancarios completos, y deja
+auditoria de la descarga.
 
 También se podrá procesar cada vencimiento como:
 
