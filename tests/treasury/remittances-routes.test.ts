@@ -6,6 +6,7 @@ import {
   GET as remittancesGet,
   POST as remittancesPost
 } from "@/app/api/treasury/customer-remittances/route";
+import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
 import { prisma } from "@/lib/prisma";
 import {
   hashRequestBody,
@@ -141,6 +142,52 @@ describe("customer remittance HTTP contracts", () => {
       code: "UNAUTHENTICATED"
     });
   });
+
+  it("cancels draft remittances through the action contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    const cancelResponse = await remittanceCancelPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/cancel`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const cancelled = await cancelResponse.json();
+    const missingIdempotencyResponse = await remittanceCancelPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/cancel`, {
+        csrfToken,
+        idempotencyKey: null
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CANCELLED" }
+    });
+
+    expect(cancelResponse.status).toBe(200);
+    expect(cancelled).toMatchObject({
+      id: created.id,
+      status: "CANCELLED"
+    });
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(auditCount).toBe(1);
+  });
 });
 
 async function loginAsAdmin(): Promise<void> {
@@ -274,6 +321,31 @@ function jsonRequest(
     method: "POST",
     headers,
     body: JSON.stringify(body)
+  });
+}
+
+function actionRequest(
+  path: string,
+  options: {
+    csrfToken?: string | null;
+    idempotencyKey?: string | null;
+  } = {}
+): Request {
+  const headers: Record<string, string> = {
+    Origin: appBaseUrl
+  };
+
+  if (options.csrfToken !== null && options.csrfToken) {
+    headers["X-CSRF-Token"] = options.csrfToken;
+  }
+
+  if (options.idempotencyKey !== null) {
+    headers["Idempotency-Key"] = options.idempotencyKey ?? randomUUID();
+  }
+
+  return new Request(`${appBaseUrl}${path}`, {
+    method: "POST",
+    headers
   });
 }
 

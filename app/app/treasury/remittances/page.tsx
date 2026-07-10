@@ -8,6 +8,7 @@ import {
   listCustomerRemittancesSchema
 } from "@/modules/treasury/application/remittances";
 import { CustomerRemittanceDraftCreateForm } from "@/modules/treasury/presentation/CustomerRemittanceDraftCreateForm";
+import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
@@ -171,12 +172,13 @@ export default async function TreasuryRemittancesPage({
                   <th>Concepto</th>
                   <th>Total</th>
                   <th>Lineas</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {remittances.remittances.length === 0 ? (
                   <tr>
-                    <td colSpan={6}>No hay remesas para mostrar.</td>
+                    <td colSpan={7}>No hay remesas para mostrar.</td>
                   </tr>
                 ) : (
                   remittances.remittances.map((remittance) => (
@@ -197,6 +199,15 @@ export default async function TreasuryRemittancesPage({
                             </span>
                           ))}
                         </div>
+                      </td>
+                      <td>
+                        {remittance.status === "DRAFT" ? (
+                          <CustomerRemittanceCancelButton
+                            remittanceId={remittance.id}
+                          />
+                        ) : (
+                          <span className="cell-detail">Sin acciones</span>
+                        )}
                       </td>
                     </tr>
                   ))

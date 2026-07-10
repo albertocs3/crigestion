@@ -657,6 +657,11 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   await expect(page.getByText("Remesa creada.")).toBeVisible();
   await expect(page.getByText("RC2026/000001")).toBeVisible();
   await expect(page.getByText("121,00").first()).toBeVisible();
+  await page.getByRole("button", { name: "Cancelar" }).click();
+  await expect(page.getByText("Remesa cancelada.")).toBeVisible();
+  await expect(
+    page.getByRole("row").filter({ hasText: "RC2026/000001" })
+  ).toContainText("Cancelada");
 
   const remittance = await prisma.customerRemittance.findFirstOrThrow({
     where: { number: "RC2026/000001" },
@@ -665,11 +670,16 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   const auditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CREATED" }
   });
+  const cancelledAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CANCELLED" }
+  });
 
-  expect(remittance.status).toBe("DRAFT");
+  expect(remittance.status).toBe("CANCELLED");
   expect(remittance.totalAmount.toFixed(2)).toBe("121.00");
   expect(remittance.lines).toHaveLength(1);
+  expect(remittance.lines[0]?.status).toBe("CANCELLED");
   expect(auditCount).toBe(1);
+  expect(cancelledAuditCount).toBe(1);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {

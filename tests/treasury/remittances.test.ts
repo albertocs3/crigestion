@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
+  cancelCustomerRemittanceDraft,
   createCustomerRemittanceDraft,
   listCustomerRemittances
 } from "@/modules/treasury/application/remittances";
@@ -120,6 +121,55 @@ describe("customer remittances", () => {
       ok: false,
       error: { code: "REMITTANCE_DUE_DATE_NOT_ELIGIBLE" }
     });
+  });
+
+  it("cancels draft remittances and releases their due dates", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const cancelled = await cancelCustomerRemittanceDraft(
+      created.value.id,
+      actor,
+      { correlationId: "corr-remittance-cancel" }
+    );
+    const recreated = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-16",
+        concept: "Remesa julio corregida",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+    const cancelledLineCount = await prisma.customerRemittanceLine.count({
+      where: {
+        remittanceId: created.value.id,
+        status: "CANCELLED"
+      }
+    });
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_DRAFT_CANCELLED" }
+    });
+
+    expect(cancelled.ok).toBe(true);
+    if (!cancelled.ok) {
+      throw new Error(cancelled.error.code);
+    }
+    expect(cancelled.value.status).toBe("CANCELLED");
+    expect(cancelledLineCount).toBe(1);
+    expect(recreated.ok).toBe(true);
+    expect(auditCount).toBe(1);
   });
 });
 

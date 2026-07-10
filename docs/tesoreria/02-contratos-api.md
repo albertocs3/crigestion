@@ -318,7 +318,30 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_DRAFT_CREATED`.
 
-## 10. `POST /api/invoices/{invoiceId}/payments`
+## 10. `POST /api/treasury/customer-remittances/{remittanceId}/cancel`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Reglas:
+
+- Solo cancela remesas en estado `DRAFT`.
+- La remesa queda `CANCELLED`.
+- Sus lineas activas quedan `CANCELLED`, liberando los vencimientos para otra
+  remesa.
+- No registra cobros ni modifica vencimientos o facturas.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_NOT_CANCELLABLE` | Remesa fuera de borrador. |
+
+Audita `CUSTOMER_REMITTANCE_DRAFT_CANCELLED`.
+
+## 11. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -364,7 +387,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 11. `POST /api/invoices/{invoiceId}/payment-returns`
+## 12. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -409,7 +432,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 12. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 13. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

@@ -103,6 +103,25 @@ export type CreateCustomerRemittanceDraftResult =
       };
     };
 
+export type CancelCustomerRemittanceDraftResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_CANCELLABLE";
+        message: string;
+      };
+    };
+
 const remittanceSelect = {
   id: true,
   year: true,
@@ -353,6 +372,91 @@ export async function listCustomerRemittances(
     remittances: page.map(mapRemittance),
     nextCursor: records.length > command.limit ? page.at(-1)?.id ?? null : null
   };
+}
+
+export async function cancelCustomerRemittanceDraft(
+  remittanceId: string,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<CancelCustomerRemittanceDraftResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        lineCount: true
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (remittance.status !== "DRAFT") {
+      return { kind: "not-cancellable" as const };
+    }
+
+    await tx.customerRemittanceLine.updateMany({
+      where: {
+        remittanceId,
+        status: "ACTIVE"
+      },
+      data: {
+        status: "CANCELLED"
+      }
+    });
+
+    const cancelled = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "CANCELLED",
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_DRAFT_CANCELLED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          lineCount: remittance.lineCount,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "cancelled" as const, remittance: cancelled };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-cancellable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_CANCELLABLE",
+        message: "Solo se pueden cancelar remesas en borrador."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
 function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto {

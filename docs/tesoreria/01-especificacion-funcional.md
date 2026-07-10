@@ -243,7 +243,8 @@ vencimientos domiciliados pendientes, con cliente activo, IBAN y mandato SEPA
 activo. Este corte conserva la composicion y bloquea duplicidades de
 vencimiento en lineas activas, pero no genera XML, no marca envio al banco y no
 registra cobros automaticamente. La pantalla operativa inicial queda disponible
-en `/app/treasury/remittances`.
+en `/app/treasury/remittances`. Los borradores pueden cancelarse para liberar
+sus vencimientos antes de generar XML o registrar cobros.
 
 También se podrá procesar cada vencimiento como:
 
