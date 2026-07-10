@@ -97,6 +97,9 @@ export type CustomerRemittanceLineDto = {
   };
   dueDate: string;
   amount: string;
+  paymentAmount: string;
+  returnedAmount: string;
+  netAmount: string;
   concept: string;
   mandateReference: string;
 };
@@ -200,7 +203,23 @@ const remittanceSelect = {
       dueDateSnapshot: true,
       amount: true,
       concept: true,
-      mandateReference: true
+      mandateReference: true,
+      dueDate: {
+        select: {
+          payments: {
+            where: { source: "SEPA_REMITTANCE" },
+            select: {
+              amount: true,
+              reference: true,
+              returns: {
+                select: {
+                  amount: true
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 } satisfies Prisma.CustomerRemittanceSelect;
@@ -845,6 +864,9 @@ function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
     "cliente_nombre",
     "vencimiento",
     "importe_linea",
+    "cobrado_linea",
+    "devuelto_linea",
+    "neto_linea",
     "concepto_linea",
     "mandato"
   ];
@@ -864,6 +886,9 @@ function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
       line.customer.legalName,
       line.dueDate,
       line.amount,
+      line.paymentAmount,
+      line.returnedAmount,
+      line.netAmount,
       line.concept,
       line.mandateReference
     ])
@@ -883,22 +908,36 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
     concept: record.concept,
     totalAmount: record.totalAmount.toFixed(2),
     lineCount: record.lineCount,
-    lines: record.lines.map((line) => ({
-      id: line.id,
-      position: line.position,
-      dueDateId: line.dueDateId,
-      invoiceId: line.invoiceId,
-      invoiceNumber: line.invoiceNumberSnapshot,
-      customer: {
-        id: line.customerId,
-        code: line.customerCodeSnapshot,
-        legalName: line.customerNameSnapshot
-      },
-      dueDate: formatDateOnly(line.dueDateSnapshot),
-      amount: line.amount.toFixed(2),
-      concept: line.concept,
-      mandateReference: line.mandateReference
-    }))
+    lines: record.lines.map((line) => {
+      const remittancePayments = line.dueDate.payments.filter(
+        (payment) => payment.reference === record.number
+      );
+      const paymentAmount = sumAmounts(remittancePayments);
+      const returnedAmount = remittancePayments.reduce(
+        (total, payment) => total.plus(sumAmounts(payment.returns)),
+        new Prisma.Decimal(0)
+      );
+
+      return {
+        id: line.id,
+        position: line.position,
+        dueDateId: line.dueDateId,
+        invoiceId: line.invoiceId,
+        invoiceNumber: line.invoiceNumberSnapshot,
+        customer: {
+          id: line.customerId,
+          code: line.customerCodeSnapshot,
+          legalName: line.customerNameSnapshot
+        },
+        dueDate: formatDateOnly(line.dueDateSnapshot),
+        amount: line.amount.toFixed(2),
+        paymentAmount: paymentAmount.toFixed(2),
+        returnedAmount: returnedAmount.toFixed(2),
+        netAmount: paymentAmount.minus(returnedAmount).toFixed(2),
+        concept: line.concept,
+        mandateReference: line.mandateReference
+      };
+    })
   };
 }
 

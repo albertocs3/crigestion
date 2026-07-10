@@ -119,7 +119,7 @@ export default async function TreasuryRemittanceDetailPage({
                   <th>Cliente</th>
                   <th>Factura</th>
                   <th>Vencimiento</th>
-                  <th>Importe</th>
+                  <th>Importes</th>
                   <th>Concepto</th>
                   <th>Mandato</th>
                   <th>Acciones</th>
@@ -135,7 +135,20 @@ export default async function TreasuryRemittanceDetailPage({
                     </td>
                     <td>{line.invoiceNumber ?? "Sin numero"}</td>
                     <td>{formatDate(line.dueDate)}</td>
-                    <td>{formatMoney(line.amount)}</td>
+                    <td>
+                      <strong>{formatMoney(line.netAmount)}</strong>
+                      <span className="cell-detail">
+                        Remesado {formatMoney(line.amount)}
+                      </span>
+                      <span className="cell-detail">
+                        Cobrado {formatMoney(line.paymentAmount)}
+                      </span>
+                      {Number(line.returnedAmount) > 0 ? (
+                        <span className="cell-detail">
+                          Devuelto {formatMoney(line.returnedAmount)}
+                        </span>
+                      ) : null}
+                    </td>
                     <td>{line.concept}</td>
                     <td>{line.mandateReference}</td>
                     <td>

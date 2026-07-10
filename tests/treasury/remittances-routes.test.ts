@@ -337,6 +337,7 @@ describe("customer remittance HTTP contracts", () => {
     );
     expect(exportResponse.headers.get("Cache-Control")).toBe("private, no-store");
     expect(csv).toContain('"remesa","ejercicio","secuencia"');
+    expect(csv).toContain('"cobrado_linea","devuelto_linea","neto_linea"');
     expect(csv).toContain("RC2026/000001");
     expect(csv).toContain("F2600001");
     expect(csv).toContain("121.00");

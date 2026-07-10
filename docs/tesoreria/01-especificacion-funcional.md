@@ -250,7 +250,8 @@ actualizar vencimientos y facturas; la generacion XML SEPA y los asientos
 automaticos quedan para un corte posterior. El listado de remesas puede
 exportarse a CSV con sus lineas, sin IBAN ni datos bancarios completos, y deja
 auditoria de la descarga. Cada remesa dispone de una vista de detalle para
-revisar cabecera, estado, lineas, vencimientos e importes antes de procesarla.
+revisar cabecera, estado, lineas, vencimientos, importes remesados, cobros,
+devoluciones y netos antes de procesarla o cerrarla.
 Una remesa procesada puede cerrarse manualmente para indicar que su ciclo
 operativo queda finalizado. Si se registra una devolucion manual sobre un cobro
 creado por remesa SEPA, la remesa pasa a `Parcialmente devuelta` y queda

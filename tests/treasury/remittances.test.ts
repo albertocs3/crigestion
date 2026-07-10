@@ -363,6 +363,7 @@ describe("customer remittances", () => {
     const remittance = await prisma.customerRemittance.findUniqueOrThrow({
       where: { id: created.value.id }
     });
+    const detail = await getCustomerRemittance(created.value.id, actor);
     const paymentReturnAudit = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "CUSTOMER_PAYMENT_RETURNED" },
       orderBy: { createdAt: "desc" }
@@ -373,6 +374,12 @@ describe("customer remittances", () => {
 
     expect(returned.ok).toBe(true);
     expect(remittance.status).toBe("PARTIALLY_RETURNED");
+    expect(detail?.lines[0]).toMatchObject({
+      amount: "121.00",
+      paymentAmount: "121.00",
+      returnedAmount: "21.00",
+      netAmount: "100.00"
+    });
     expect(paymentReturnAudit.payload).toMatchObject({
       remittanceId: created.value.id,
       remittanceNumber: "RC2026/000001",

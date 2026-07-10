@@ -315,6 +315,9 @@ Columnas:
 - `cliente_nombre`.
 - `vencimiento`.
 - `importe_linea`.
+- `cobrado_linea`.
+- `devuelto_linea`.
+- `neto_linea`.
 - `concepto_linea`.
 - `mandato`.
 
@@ -322,6 +325,8 @@ Reglas:
 
 - Respeta filtros por estado y ejercicio.
 - No exporta IBAN ni datos bancarios completos.
+- Los importes cobrados, devueltos y netos se calculan desde cobros de origen
+  `SEPA_REMITTANCE` vinculados a la referencia de la remesa.
 - Protege celdas de texto que podrian interpretarse como formulas al abrir el
   CSV en una hoja de calculo.
 - Devuelve `Cache-Control: private, no-store`.
