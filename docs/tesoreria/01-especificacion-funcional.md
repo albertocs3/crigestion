@@ -265,6 +265,9 @@ remesa `SENT`. Cada linea activa debe marcarse como cobrada o rechazada. Las
 lineas cobradas crean cobros `SEPA_REMITTANCE`; las rechazadas se cancelan para
 liberar los vencimientos. Si hay mezcla de lineas cobradas y rechazadas, la
 remesa queda `PARTIALLY_PROCESSED`.
+La misma operacion puede ejecutarse mediante una importacion CSV controlada con
+las columnas `linea`, `resultado` y `motivo`; este CSV operativo no equivale a
+una importacion Norma 19 ni Norma 43.
 
 Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y

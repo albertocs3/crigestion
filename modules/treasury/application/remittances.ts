@@ -114,6 +114,13 @@ export const settleCustomerRemittanceBankResponseSchema = z
     }
   });
 
+export const importCustomerRemittanceBankResponseCsvSchema = z
+  .object({
+    paymentDate: dateOnlySchema,
+    csv: z.string().trim().min(1).max(50_000)
+  })
+  .strict();
+
 export type CreateCustomerRemittanceDraftCommand = z.infer<
   typeof createCustomerRemittanceDraftSchema
 >;
@@ -131,6 +138,9 @@ export type RejectCustomerRemittanceCommand = z.infer<
 >;
 export type SettleCustomerRemittanceBankResponseCommand = z.infer<
   typeof settleCustomerRemittanceBankResponseSchema
+>;
+export type ImportCustomerRemittanceBankResponseCsvCommand = z.infer<
+  typeof importCustomerRemittanceBankResponseCsvSchema
 >;
 
 export type CustomerRemittanceDto = {
@@ -318,6 +328,34 @@ export type SettleCustomerRemittanceBankResponseResult =
       error: {
         code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE";
         message: string;
+      };
+    };
+
+export type ImportCustomerRemittanceBankResponseCsvResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 422;
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_CSV_INVALID";
+        message: string;
+        issues: string[];
       };
     };
 
@@ -1322,6 +1360,64 @@ export async function settleCustomerRemittanceBankResponse(
   return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
+export async function importCustomerRemittanceBankResponseCsv(
+  remittanceId: string,
+  command: ImportCustomerRemittanceBankResponseCsvCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<ImportCustomerRemittanceBankResponseCsvResult> {
+  const remittance = await prisma.customerRemittance.findUnique({
+    where: { id: remittanceId },
+    select: {
+      id: true,
+      lines: {
+        where: { status: "ACTIVE" },
+        select: {
+          id: true,
+          position: true
+        }
+      }
+    }
+  });
+
+  if (!remittance) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  const parsed = parseBankResponseCsv(command.csv, remittance.lines);
+
+  if (!parsed.ok) {
+    return {
+      ok: false,
+      status: 422,
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_CSV_INVALID",
+        message: "El CSV de respuesta bancaria no es valido.",
+        issues: parsed.issues
+      }
+    };
+  }
+
+  return settleCustomerRemittanceBankResponse(
+    remittanceId,
+    {
+      paymentDate: command.paymentDate,
+      paidLineIds: parsed.paidLineIds,
+      rejectedLineIds: parsed.rejectedLineIds,
+      rejectionReason: parsed.rejectionReason
+    },
+    actor,
+    context
+  );
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -1706,6 +1802,144 @@ function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
   );
 
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function parseBankResponseCsv(
+  csv: string,
+  lines: Array<{ id: string; position: number }>
+):
+  | {
+      ok: true;
+      paidLineIds: string[];
+      rejectedLineIds: string[];
+      rejectionReason?: string;
+    }
+  | { ok: false; issues: string[] } {
+  const issues: string[] = [];
+  const rows = csv
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((row) => row.trim().length > 0);
+
+  if (rows.length < 2) {
+    return { ok: false, issues: ["El CSV debe incluir cabecera y al menos una linea."] };
+  }
+
+  const delimiter = rows[0]!.includes(";") ? ";" : ",";
+  const header = parseCsvRow(rows[0]!, delimiter).map((cell) =>
+    cell.trim().toLocaleLowerCase("es-ES")
+  );
+  const lineIndex = header.indexOf("linea");
+  const resultIndex = header.indexOf("resultado");
+  const reasonIndex = header.indexOf("motivo");
+
+  if (lineIndex < 0 || resultIndex < 0) {
+    return {
+      ok: false,
+      issues: ["La cabecera debe incluir las columnas linea y resultado."]
+    };
+  }
+
+  const lineByPosition = new Map(lines.map((line) => [line.position, line]));
+  const paidLineIds: string[] = [];
+  const rejectedLineIds: string[] = [];
+  const reasons: string[] = [];
+  const seenPositions = new Set<number>();
+
+  rows.slice(1).forEach((row, index) => {
+    const rowNumber = index + 2;
+    const cells = parseCsvRow(row, delimiter);
+    const position = Number(cells[lineIndex]?.trim() ?? "");
+    const result = (cells[resultIndex]?.trim() ?? "").toLocaleUpperCase("es-ES");
+    const reason = reasonIndex >= 0 ? cells[reasonIndex]?.trim() ?? "" : "";
+
+    if (!Number.isInteger(position) || position <= 0) {
+      issues.push(`Fila ${rowNumber}: linea debe ser un numero positivo.`);
+      return;
+    }
+
+    const line = lineByPosition.get(position);
+
+    if (!line) {
+      issues.push(`Fila ${rowNumber}: linea ${position} no pertenece a la remesa activa.`);
+      return;
+    }
+
+    if (seenPositions.has(position)) {
+      issues.push(`Fila ${rowNumber}: linea ${position} repetida.`);
+      return;
+    }
+
+    seenPositions.add(position);
+
+    if (result === "COBRADA") {
+      paidLineIds.push(line.id);
+      return;
+    }
+
+    if (result === "RECHAZADA") {
+      rejectedLineIds.push(line.id);
+
+      if (reason.length === 0) {
+        issues.push(`Fila ${rowNumber}: las lineas rechazadas requieren motivo.`);
+      } else {
+        reasons.push(reason);
+      }
+
+      return;
+    }
+
+    issues.push(`Fila ${rowNumber}: resultado debe ser COBRADA o RECHAZADA.`);
+  });
+
+  if (seenPositions.size !== lines.length) {
+    issues.push("El CSV debe cubrir todas las lineas activas de la remesa.");
+  }
+
+  if (issues.length > 0) {
+    return { ok: false, issues };
+  }
+
+  return {
+    ok: true,
+    paidLineIds,
+    rejectedLineIds,
+    rejectionReason: reasons.length > 0 ? reasons.join(" | ").slice(0, 500) : undefined
+  };
+}
+
+function parseCsvRow(row: string, delimiter: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index]!;
+    const next = row[index + 1];
+
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      quoted = !quoted;
+      continue;
+    }
+
+    if (char === delimiter && !quoted) {
+      cells.push(current);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current);
+
+  return cells;
 }
 
 type SepaDirectDebitXmlInput = {

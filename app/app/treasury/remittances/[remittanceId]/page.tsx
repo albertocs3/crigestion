@@ -4,6 +4,7 @@ import {
   getCustomerRemittance,
   type CustomerRemittanceDto
 } from "@/modules/treasury/application/remittances";
+import { CustomerRemittanceBankResponseCsvForm } from "@/modules/treasury/presentation/CustomerRemittanceBankResponseCsvForm";
 import { CustomerRemittanceBankResponseForm } from "@/modules/treasury/presentation/CustomerRemittanceBankResponseForm";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
@@ -171,17 +172,23 @@ export default async function TreasuryRemittanceDetailPage({
           ) : null}
 
           {remittance.status === "SENT" && activeLines.length > 0 ? (
-            <CustomerRemittanceBankResponseForm
-              remittanceId={remittance.id}
-              defaultPaymentDate={remittance.chargeDate}
-              lines={activeLines.map((line) => ({
-                id: line.id,
-                position: line.position,
-                invoiceNumber: line.invoiceNumber,
-                customerName: line.customer.legalName,
-                amount: line.amount
-              }))}
-            />
+            <>
+              <CustomerRemittanceBankResponseCsvForm
+                remittanceId={remittance.id}
+                defaultPaymentDate={remittance.chargeDate}
+              />
+              <CustomerRemittanceBankResponseForm
+                remittanceId={remittance.id}
+                defaultPaymentDate={remittance.chargeDate}
+                lines={activeLines.map((line) => ({
+                  id: line.id,
+                  position: line.position,
+                  invoiceNumber: line.invoiceNumber,
+                  customerName: line.customer.legalName,
+                  amount: line.amount
+                }))}
+              />
+            </>
           ) : null}
 
           {remittance.status === "PROCESSED" ||

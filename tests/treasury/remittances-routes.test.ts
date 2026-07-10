@@ -9,6 +9,7 @@ import {
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
 import { POST as remittanceClosePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/close/route";
 import { POST as remittanceGenerateSepaPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/generate-sepa/route";
+import { POST as remittanceImportBankResponseCsvPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/import-bank-response-csv/route";
 import { POST as remittanceMarkSentPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/mark-sent/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
 import { POST as remittanceRejectPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/reject/route";
@@ -681,6 +682,79 @@ describe("customer remittance HTTP contracts", () => {
     expect(retry).toMatchObject({
       number: "RC2026/000002",
       status: "DRAFT"
+    });
+  });
+
+  it("imports controlled CSV bank responses through treasury contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    await configureCompanySepa();
+    const paidDueDate = await createIssuedDirectDebitDueDate();
+    const rejectedDueDate = await createIssuedDirectDebitDueDate({
+      customerCode: "C-REMIT-CSV-2",
+      legalName: "Cliente Remesa CSV 2 SL",
+      mandateReference: "MANDATO-CSV-002",
+      invoiceNumber: "F2600002",
+      dueDatePosition: 2
+    });
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [paidDueDate.id, rejectedDueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    await remittanceGenerateSepaPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/generate-sepa`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    await remittanceMarkSentPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/mark-sent`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+
+    const importResponse = await remittanceImportBankResponseCsvPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
+        {
+          paymentDate: "2026-07-16",
+          csv: "linea,resultado,motivo\n1,COBRADA,\n2,RECHAZADA,Banco rechaza una linea"
+        },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const imported = await importResponse.json();
+    const missingIdempotencyResponse = await remittanceImportBankResponseCsvPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
+        {
+          paymentDate: "2026-07-16",
+          csv: "linea,resultado,motivo\n1,COBRADA,\n2,RECHAZADA,Banco rechaza una linea"
+        },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+
+    expect(importResponse.status).toBe(200);
+    expect(imported).toMatchObject({
+      id: created.id,
+      status: "PARTIALLY_PROCESSED",
+      paymentAmount: "121.00"
+    });
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
     });
   });
 });

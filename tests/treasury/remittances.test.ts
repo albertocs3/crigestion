@@ -8,6 +8,7 @@ import {
   generateCustomerRemittanceSepa,
   getCustomerRemittance,
   getCustomerRemittanceSepaFile,
+  importCustomerRemittanceBankResponseCsv,
   listCustomerRemittances,
   markCustomerRemittanceSent,
   processCustomerRemittance,
@@ -425,6 +426,127 @@ describe("customer remittances", () => {
       correlationId: "corr-remittance-bank-response"
     });
     expect(auditPayload).not.toContain("Banco rechaza una linea");
+  });
+
+  it("imports controlled CSV bank responses for sent remittances", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const paidDueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const rejectedDueDate = await createIssuedDirectDebitDueDate(actor.id, {
+      invoiceNumber: "F2600002",
+      dueDatePosition: 2
+    });
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [paidDueDate.id, rejectedDueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await generateCustomerRemittanceSepa(created.value.id, actor);
+    await markCustomerRemittanceSent(created.value.id, actor);
+
+    const imported = await importCustomerRemittanceBankResponseCsv(
+      created.value.id,
+      {
+        paymentDate: "2026-07-16",
+        csv: 'linea,resultado,motivo\n1,COBRADA,\n2,RECHAZADA,"Banco rechaza, fecha"'
+      },
+      actor,
+      { correlationId: "corr-remittance-bank-response-csv" }
+    );
+    const payment = await prisma.customerPayment.findFirstOrThrow({
+      where: {
+        dueDateId: paidDueDate.id,
+        source: "SEPA_REMITTANCE"
+      }
+    });
+    const rejectedLine = await prisma.customerRemittanceLine.findFirstOrThrow({
+      where: {
+        remittanceId: created.value.id,
+        dueDateId: rejectedDueDate.id
+      }
+    });
+    const retry = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-18",
+        concept: "Reintento CSV",
+        dueDateIds: [rejectedDueDate.id]
+      },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED" }
+    });
+    const auditPayload = JSON.stringify(auditEvent.payload);
+
+    expect(imported.ok).toBe(true);
+    if (!imported.ok) {
+      throw new Error(imported.error.code);
+    }
+    expect(imported.value.status).toBe("PARTIALLY_PROCESSED");
+    expect(imported.value.paymentAmount).toBe("121.00");
+    expect(payment.amount.toFixed(2)).toBe("121.00");
+    expect(rejectedLine.status).toBe("CANCELLED");
+    expect(retry.ok).toBe(true);
+    expect(auditEvent.payload).toMatchObject({
+      remittanceId: created.value.id,
+      previousStatus: "SENT",
+      nextStatus: "PARTIALLY_PROCESSED",
+      paidLineCount: 1,
+      rejectedLineCount: 1,
+      correlationId: "corr-remittance-bank-response-csv"
+    });
+    expect(auditPayload).not.toContain("Banco rechaza, fecha");
+  });
+
+  it("rejects incomplete controlled CSV bank responses", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const firstDueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const secondDueDate = await createIssuedDirectDebitDueDate(actor.id, {
+      invoiceNumber: "F2600002",
+      dueDatePosition: 2
+    });
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [firstDueDate.id, secondDueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await generateCustomerRemittanceSepa(created.value.id, actor);
+    await markCustomerRemittanceSent(created.value.id, actor);
+
+    const imported = await importCustomerRemittanceBankResponseCsv(
+      created.value.id,
+      {
+        paymentDate: "2026-07-16",
+        csv: "linea,resultado,motivo\n1,COBRADA,"
+      },
+      actor
+    );
+
+    expect(imported).toMatchObject({
+      ok: false,
+      status: 422,
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_CSV_INVALID",
+        issues: ["El CSV debe cubrir todas las lineas activas de la remesa."]
+      }
+    });
   });
 
   it("rejects sent remittances before collection and frees their due dates", async () => {

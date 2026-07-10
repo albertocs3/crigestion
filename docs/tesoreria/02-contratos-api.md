@@ -37,6 +37,7 @@ Fuera del primer corte:
 - Marcado de remesa enviada: `/api/treasury/customer-remittances/{remittanceId}/mark-sent`.
 - Rechazo manual de remesa enviada: `/api/treasury/customer-remittances/{remittanceId}/reject`.
 - Respuesta bancaria manual por lineas: `/api/treasury/customer-remittances/{remittanceId}/settle-bank-response`.
+- Importacion CSV controlada de respuesta bancaria: `/api/treasury/customer-remittances/{remittanceId}/import-bank-response-csv`.
 - Descarga XML SEPA: `/api/treasury/customer-remittances/{remittanceId}/sepa-file`.
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
@@ -550,7 +551,43 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED`.
 
-## 17. `POST /api/treasury/customer-remittances/{remittanceId}/process`
+## 17. `POST /api/treasury/customer-remittances/{remittanceId}/import-bank-response-csv`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Body:
+
+```json
+{
+  "paymentDate": "2026-07-16",
+  "csv": "linea,resultado,motivo\n1,COBRADA,\n2,RECHAZADA,Banco rechaza una linea"
+}
+```
+
+Reglas:
+
+- Solo importa respuestas para remesas `SENT`.
+- Es un formato CSV controlado, no una importacion Norma 19 ni Norma 43.
+- La cabecera debe incluir `linea` y `resultado`; `motivo` es opcional.
+- `resultado` admite `COBRADA` o `RECHAZADA`.
+- El CSV debe cubrir todas las lineas activas de la remesa.
+- Las lineas rechazadas requieren `motivo`.
+- La importacion delega en la misma liquidacion que la respuesta manual por lineas.
+- La auditoria no incluye el texto completo de motivos.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE` | Respuesta fuera de estado o no cubre lineas activas. |
+| `422` | `REMITTANCE_BANK_RESPONSE_CSV_INVALID` | CSV sin cabecera valida, incompleto, duplicado o con resultados no admitidos. |
+
+Audita `CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED`.
+
+## 18. `POST /api/treasury/customer-remittances/{remittanceId}/process`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -583,7 +620,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
-## 18. `POST /api/treasury/customer-remittances/{remittanceId}/close`
+## 19. `POST /api/treasury/customer-remittances/{remittanceId}/close`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -604,7 +641,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_CLOSED`.
 
-## 19. `POST /api/invoices/{invoiceId}/payments`
+## 20. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -650,7 +687,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 20. `POST /api/invoices/{invoiceId}/payment-returns`
+## 21. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -700,7 +737,7 @@ remesa SEPA, incluye `remittanceId`, `remittanceNumber` y
 `previousRemittanceStatus`, y audita el cambio de remesa con
 `CUSTOMER_REMITTANCE_PARTIALLY_RETURNED`.
 
-## 21. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 22. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
