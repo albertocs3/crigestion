@@ -659,12 +659,16 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   await expect(page.getByText("Remesa creada.")).toBeVisible();
   await expect(page.getByText("RC2026/000001")).toBeVisible();
   await expect(page.getByText("121,00").first()).toBeVisible();
-  const remittanceRow = page.getByRole("row").filter({ hasText: "RC2026/000001" });
-  await remittanceRow.getByLabel("Fecha cobro").fill("2026-07-16");
-  await remittanceRow.getByRole("button", { name: "Procesar" }).click();
-  await expect(
-    page.getByRole("row").filter({ hasText: "RC2026/000001" })
-  ).toContainText("Procesada");
+  await page.getByRole("link", { name: "RC2026/000001" }).click();
+
+  await expect(page).toHaveURL(/\/app\/treasury\/remittances\/[a-f0-9-]+$/);
+  await expect(page.getByRole("heading", { name: "RC2026/000001" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Lineas de remesa" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "F2600003", exact: true })).toBeVisible();
+  await expect(page.getByText("Cliente Remesa E2E SL")).toBeVisible();
+  await page.getByLabel("Fecha cobro").fill("2026-07-16");
+  await page.getByRole("button", { name: "Procesar" }).click();
+  await expect(page.getByText("Procesada").first()).toBeVisible();
 
   const remittance = await prisma.customerRemittance.findFirstOrThrow({
     where: { number: "RC2026/000001" },
@@ -689,6 +693,9 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   const processedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
   });
+  const viewedAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_VIEWED" }
+  });
 
   expect(remittance.status).toBe("PROCESSED");
   expect(remittance.totalAmount.toFixed(2)).toBe("121.00");
@@ -699,6 +706,7 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   expect(payment.dueDate.invoice.paymentStatus).toBe("PAID");
   expect(auditCount).toBe(1);
   expect(processedAuditCount).toBe(1);
+  expect(viewedAuditCount).toBeGreaterThanOrEqual(1);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {

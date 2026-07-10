@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import {
   cancelCustomerRemittanceDraft,
   createCustomerRemittanceDraft,
+  getCustomerRemittance,
   listCustomerRemittances,
   processCustomerRemittance
 } from "@/modules/treasury/application/remittances";
@@ -77,6 +78,46 @@ describe("customer remittances", () => {
     });
     expect(list.remittances).toHaveLength(1);
     expect(list.remittances[0]?.number).toBe("RC2026/000001");
+    expect(auditCount).toBe(1);
+  });
+
+  it("gets a remittance detail by id and audits the read", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const detail = await getCustomerRemittance(created.value.id, actor);
+    const missing = await getCustomerRemittance(randomUUID(), actor);
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_VIEWED" }
+    });
+
+    expect(detail).toMatchObject({
+      id: created.value.id,
+      number: "RC2026/000001",
+      lines: [
+        {
+          dueDateId: dueDate.id,
+          invoiceNumber: "F2600001",
+          customer: {
+            code: "C-F2600001",
+            legalName: "Cliente F2600001 SL"
+          }
+        }
+      ]
+    });
+    expect(missing).toBeNull();
     expect(auditCount).toBe(1);
   });
 

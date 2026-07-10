@@ -191,7 +191,11 @@ export default async function TreasuryRemittancesPage({
                   remittances.remittances.map((remittance) => (
                     <tr key={remittance.id}>
                       <td>
-                        <strong>{remittance.number}</strong>
+                        <strong>
+                          <Link href={`/app/treasury/remittances/${remittance.id}`}>
+                            {remittance.number}
+                          </Link>
+                        </strong>
                       </td>
                       <td>{remittanceStatusLabel(remittance.status)}</td>
                       <td>{formatDate(remittance.chargeDate)}</td>
@@ -210,6 +214,12 @@ export default async function TreasuryRemittancesPage({
                       <td>
                         {remittance.status === "DRAFT" ? (
                           <div className="compact-stack">
+                            <Link
+                              className="button button-secondary button-small"
+                              href={`/app/treasury/remittances/${remittance.id}`}
+                            >
+                              Abrir
+                            </Link>
                             <CustomerRemittanceProcessForm
                               remittanceId={remittance.id}
                               defaultPaymentDate={remittance.chargeDate}
@@ -219,7 +229,12 @@ export default async function TreasuryRemittancesPage({
                             />
                           </div>
                         ) : (
-                          <span className="cell-detail">Sin acciones</span>
+                          <Link
+                            className="button button-secondary button-small"
+                            href={`/app/treasury/remittances/${remittance.id}`}
+                          >
+                            Abrir
+                          </Link>
                         )}
                       </td>
                     </tr>

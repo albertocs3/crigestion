@@ -409,6 +409,36 @@ export async function listCustomerRemittances(
   };
 }
 
+export async function getCustomerRemittance(
+  remittanceId: string,
+  actor: SessionUser
+): Promise<CustomerRemittanceDto | null> {
+  const record = await prisma.customerRemittance.findUnique({
+    where: { id: remittanceId },
+    select: remittanceSelect
+  });
+
+  if (!record) {
+    return null;
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_REMITTANCE_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        remittanceId: record.id,
+        number: record.number,
+        status: record.status,
+        lineCount: record.lineCount
+      }
+    }
+  });
+
+  return mapRemittance(record);
+}
+
 export async function exportCustomerRemittancesCsv(
   command: ExportCustomerRemittancesCommand,
   actor: SessionUser

@@ -249,7 +249,8 @@ procesarse manualmente para registrar cobros de origen `SEPA_REMITTANCE` y
 actualizar vencimientos y facturas; la generacion XML SEPA y los asientos
 automaticos quedan para un corte posterior. El listado de remesas puede
 exportarse a CSV con sus lineas, sin IBAN ni datos bancarios completos, y deja
-auditoria de la descarga.
+auditoria de la descarga. Cada remesa dispone de una vista de detalle para
+revisar cabecera, estado, lineas, vencimientos e importes antes de procesarla.
 
 También se podrá procesar cada vencimiento como:
 
