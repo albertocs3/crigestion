@@ -452,7 +452,30 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_SEPA_DOWNLOADED`.
 
-## 14. `POST /api/treasury/customer-remittances/{remittanceId}/process`
+## 14. `POST /api/treasury/customer-remittances/{remittanceId}/mark-sent`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Reglas:
+
+- Solo marca como enviadas remesas `GENERATED` con fichero SEPA.
+- La remesa queda `SENT`.
+- Guarda `sentAt`.
+- No crea cobros ni cambia vencimientos.
+- La auditoria no incluye IBAN completo.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_NOT_SENDABLE` | Remesa sin fichero generado o fuera de estado. |
+
+Audita `CUSTOMER_REMITTANCE_SENT`.
+
+## 15. `POST /api/treasury/customer-remittances/{remittanceId}/process`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -468,7 +491,7 @@ Body:
 
 Reglas:
 
-- Procesa remesas en estado `DRAFT` o `GENERATED`.
+- Procesa remesas en estado `DRAFT`, `GENERATED` o `SENT`.
 - Registra un cobro `SEPA_REMITTANCE` por cada linea activa.
 - Actualiza los estados del vencimiento y de la factura.
 - La remesa queda `PROCESSED`.
@@ -485,7 +508,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
-## 15. `POST /api/treasury/customer-remittances/{remittanceId}/close`
+## 16. `POST /api/treasury/customer-remittances/{remittanceId}/close`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -506,7 +529,7 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_CLOSED`.
 
-## 16. `POST /api/invoices/{invoiceId}/payments`
+## 17. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -552,7 +575,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 17. `POST /api/invoices/{invoiceId}/payment-returns`
+## 18. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -602,7 +625,7 @@ remesa SEPA, incluye `remittanceId`, `remittanceNumber` y
 `previousRemittanceStatus`, y audita el cambio de remesa con
 `CUSTOMER_REMITTANCE_PARTIALLY_RETURNED`.
 
-## 18. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 19. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

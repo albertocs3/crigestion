@@ -9,6 +9,7 @@ import {
   getCustomerRemittance,
   getCustomerRemittanceSepaFile,
   listCustomerRemittances,
+  markCustomerRemittanceSent,
   processCustomerRemittance
 } from "@/modules/treasury/application/remittances";
 import { registerCustomerPaymentReturn } from "@/modules/treasury/application/payments";
@@ -251,6 +252,73 @@ describe("customer remittances", () => {
     }
     expect(processed.value.status).toBe("PROCESSED");
     expect(processed.value.paymentAmount).toBe("121.00");
+  });
+
+  it("marks generated remittances as sent and then processes them", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const notSendable = await markCustomerRemittanceSent(created.value.id, actor);
+    const generated = await generateCustomerRemittanceSepa(created.value.id, actor);
+
+    if (!generated.ok) {
+      throw new Error(generated.error.code);
+    }
+
+    const sent = await markCustomerRemittanceSent(
+      created.value.id,
+      actor,
+      { correlationId: "corr-remittance-sent" }
+    );
+
+    expect(notSendable).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_SENDABLE",
+        message: "Solo se pueden marcar como enviadas remesas generadas con fichero SEPA."
+      }
+    });
+    expect(sent.ok).toBe(true);
+    if (!sent.ok) {
+      throw new Error(sent.error.code);
+    }
+    expect(sent.value.status).toBe("SENT");
+    expect(sent.value.sentAt).not.toBeNull();
+
+    const processed = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_REMITTANCE_SENT" }
+    });
+
+    expect(processed.ok).toBe(true);
+    if (!processed.ok) {
+      throw new Error(processed.error.code);
+    }
+    expect(processed.value.status).toBe("PROCESSED");
+    expect(processed.value.paymentAmount).toBe("121.00");
+    expect(auditEvent.payload).toMatchObject({
+      remittanceId: created.value.id,
+      number: "RC2026/000001",
+      correlationId: "corr-remittance-sent"
+    });
   });
 
   it("rejects non eligible and already included due dates", async () => {

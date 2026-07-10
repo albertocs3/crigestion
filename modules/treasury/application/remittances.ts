@@ -90,6 +90,7 @@ export type CustomerRemittanceDto = {
   sepaFileName: string | null;
   sepaFileSha256: string | null;
   generatedAt: string | null;
+  sentAt: string | null;
   lines: CustomerRemittanceLineDto[];
 };
 
@@ -190,6 +191,25 @@ export type GenerateCustomerRemittanceSepaResult =
       };
     };
 
+export type MarkCustomerRemittanceSentResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_SENDABLE";
+        message: string;
+      };
+    };
+
 export type CustomerRemittanceSepaFileResult =
   | {
       ok: true;
@@ -243,6 +263,7 @@ const remittanceSelect = {
   sepaFileName: true,
   sepaFileSha256: true,
   generatedAt: true,
+  sentAt: true,
   lines: {
     orderBy: { position: "asc" },
     select: {
@@ -785,6 +806,94 @@ export async function getCustomerRemittanceSepaFile(
   };
 }
 
+export async function markCustomerRemittanceSent(
+  remittanceId: string,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<MarkCustomerRemittanceSentResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        lineCount: true,
+        totalAmount: true,
+        sepaFileName: true,
+        sepaFileSha256: true
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (
+      remittance.status !== "GENERATED" ||
+      !remittance.sepaFileName ||
+      !remittance.sepaFileSha256
+    ) {
+      return { kind: "not-sendable" as const };
+    }
+
+    const sentAt = new Date();
+    const sent = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "SENT",
+        sentAt,
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_SENT",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          sepaFileName: remittance.sepaFileName,
+          sepaFileSha256: remittance.sepaFileSha256,
+          lineCount: remittance.lineCount,
+          totalAmount: remittance.totalAmount.toFixed(2),
+          sentAt: sentAt.toISOString(),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "sent" as const, remittance: sent };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-sendable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_SENDABLE",
+        message: "Solo se pueden marcar como enviadas remesas generadas con fichero SEPA."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -918,7 +1027,9 @@ export async function processCustomerRemittance(
     }
 
     if (
-      (remittance.status !== "DRAFT" && remittance.status !== "GENERATED") ||
+      (remittance.status !== "DRAFT" &&
+        remittance.status !== "GENERATED" &&
+        remittance.status !== "SENT") ||
       remittance.lines.length === 0
     ) {
       return { kind: "not-processable" as const };
@@ -1331,6 +1442,7 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
     sepaFileName: record.sepaFileName,
     sepaFileSha256: record.sepaFileSha256,
     generatedAt: record.generatedAt?.toISOString() ?? null,
+    sentAt: record.sentAt?.toISOString() ?? null,
     lines
   };
 }

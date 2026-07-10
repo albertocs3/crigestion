@@ -249,10 +249,12 @@ El corte actual genera y conserva un XML SEPA CORE basico `pain.008.001.02`
 con nombre de fichero, identificador de mensaje, fecha de generacion y hash
 SHA-256. La remesa pasa de `DRAFT` a `GENERATED` y el fichero puede descargarse
 desde el detalle de remesa. Esta generacion requiere que Configuracion tenga
-IBAN de cobro de la empresa e identificador acreedor SEPA. No marca envio al
-banco, no importa respuestas bancarias y no crea conciliaciones automaticas.
+IBAN de cobro de la empresa e identificador acreedor SEPA. Una vez descargado o
+remitido por los canales bancarios externos, la remesa puede marcarse como
+`SENT`, guardando fecha de envio y auditoria. No importa respuestas bancarias y
+no crea conciliaciones automaticas.
 
-Las remesas en `DRAFT` o `GENERATED` pueden procesarse manualmente para
+Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y
 facturas; los asientos automaticos quedan para un corte posterior. El listado
 de remesas puede exportarse a CSV con sus lineas, sin IBAN ni datos bancarios

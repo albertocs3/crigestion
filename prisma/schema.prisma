@@ -663,6 +663,7 @@ model CustomerRemittance {
   sepaFileSha256 String?                  @db.Char(64)
   sepaXml        String?                  @db.Text
   generatedAt    DateTime?                @db.Timestamptz(3)
+  sentAt         DateTime?                @db.Timestamptz(3)
   createdById    String                   @db.Uuid
   updatedById    String?                  @db.Uuid
   createdAt      DateTime                 @default(now()) @db.Timestamptz(3)

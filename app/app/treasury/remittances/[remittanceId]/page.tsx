@@ -7,6 +7,7 @@ import {
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
 import { CustomerRemittanceGenerateSepaButton } from "@/modules/treasury/presentation/CustomerRemittanceGenerateSepaButton";
+import { CustomerRemittanceMarkSentButton } from "@/modules/treasury/presentation/CustomerRemittanceMarkSentButton";
 import { CustomerRemittancePaymentReturnForm } from "@/modules/treasury/presentation/CustomerRemittancePaymentReturnForm";
 import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -102,6 +103,10 @@ export default async function TreasuryRemittanceDetailPage({
               <span className="data-label">Fichero SEPA</span>
               <strong>{remittance.sepaFileName ?? "Pendiente"}</strong>
             </div>
+            <div>
+              <span className="data-label">Enviada</span>
+              <strong>{remittance.sentAt ? formatDateTime(remittance.sentAt) : "No"}</strong>
+            </div>
           </div>
 
           {remittance.status === "DRAFT" ? (
@@ -116,6 +121,24 @@ export default async function TreasuryRemittanceDetailPage({
           ) : null}
 
           {remittance.status === "GENERATED" ? (
+            <div className="button-row">
+              {remittance.sepaFileName ? (
+                <Link
+                  className="button button-secondary button-small"
+                  href={`/api/treasury/customer-remittances/${remittance.id}/sepa-file`}
+                >
+                  Descargar XML
+                </Link>
+              ) : null}
+              <CustomerRemittanceMarkSentButton remittanceId={remittance.id} />
+              <CustomerRemittanceProcessForm
+                remittanceId={remittance.id}
+                defaultPaymentDate={remittance.chargeDate}
+              />
+            </div>
+          ) : null}
+
+          {remittance.status === "SENT" ? (
             <div className="button-row">
               {remittance.sepaFileName ? (
                 <Link
@@ -275,4 +298,11 @@ function formatMoney(value: string): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("es-ES").format(new Date(`${value}T00:00:00.000Z`));
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("es-ES", {
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date(value));
 }
