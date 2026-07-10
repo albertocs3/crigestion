@@ -108,6 +108,9 @@ describe("customer remittances", () => {
     expect(detail).toMatchObject({
       id: created.value.id,
       number: "RC2026/000001",
+      paymentAmount: "0.00",
+      returnedAmount: "0.00",
+      netAmount: "0.00",
       lines: [
         {
           dueDateId: dueDate.id,
@@ -374,6 +377,11 @@ describe("customer remittances", () => {
 
     expect(returned.ok).toBe(true);
     expect(remittance.status).toBe("PARTIALLY_RETURNED");
+    expect(detail).toMatchObject({
+      paymentAmount: "121.00",
+      returnedAmount: "21.00",
+      netAmount: "100.00"
+    });
     expect(detail?.lines[0]).toMatchObject({
       amount: "121.00",
       paymentAmount: "121.00",

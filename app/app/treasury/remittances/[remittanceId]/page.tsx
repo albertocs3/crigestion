@@ -84,6 +84,18 @@ export default async function TreasuryRemittanceDetailPage({
               <span className="data-label">Total</span>
               <strong>{formatMoney(remittance.totalAmount)}</strong>
             </div>
+            <div>
+              <span className="data-label">Cobrado</span>
+              <strong>{formatMoney(remittance.paymentAmount)}</strong>
+            </div>
+            <div>
+              <span className="data-label">Devuelto</span>
+              <strong>{formatMoney(remittance.returnedAmount)}</strong>
+            </div>
+            <div>
+              <span className="data-label">Neto</span>
+              <strong>{formatMoney(remittance.netAmount)}</strong>
+            </div>
           </div>
 
           {remittance.status === "DRAFT" ? (
