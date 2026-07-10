@@ -524,6 +524,8 @@ Reglas:
 - Una devolucion parcial deja el vencimiento `PENDING`.
 - Una devolucion completa de todo el saldo cobrado deja el vencimiento
   `RETURNED` y la factura vuelve a `PENDING` si no queda importe neto cobrado.
+- Si el cobro devuelto procede de una remesa SEPA, la remesa relacionada queda
+  `PARTIALLY_RETURNED`. Si ya estaba parcialmente devuelta, conserva ese estado.
 
 Respuesta `201`: DTO de detalle de factura actualizado.
 
@@ -538,7 +540,10 @@ Errores:
 
 Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
-`resultingPaymentStatus`, `actorUserId` y `correlationId`.
+`resultingPaymentStatus`, `actorUserId` y `correlationId`. Cuando aplica a una
+remesa SEPA, incluye `remittanceId`, `remittanceNumber` y
+`previousRemittanceStatus`, y audita el cambio de remesa con
+`CUSTOMER_REMITTANCE_PARTIALLY_RETURNED`.
 
 ## 16. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 

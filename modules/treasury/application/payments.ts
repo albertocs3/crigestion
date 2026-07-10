@@ -348,6 +348,7 @@ export async function registerCustomerPaymentReturn(
       select: {
         id: true,
         dueDateId: true,
+        source: true,
         amount: true,
         dueDate: {
           select: {
@@ -403,6 +404,12 @@ export async function registerCustomerPaymentReturn(
       }
     });
 
+    const remittanceReturn = await markRemittancePartiallyReturnedForPayment(
+      tx,
+      payment,
+      actor.id
+    );
+
     await tx.auditEvent.create({
       data: {
         eventType: "CUSTOMER_PAYMENT_RETURNED",
@@ -418,10 +425,38 @@ export async function registerCustomerPaymentReturn(
           amount: returnAmount.toFixed(2),
           returnDate: command.returnDate,
           resultingPaymentStatus: paymentStatus,
+          ...(remittanceReturn
+            ? {
+                remittanceId: remittanceReturn.remittanceId,
+                remittanceNumber: remittanceReturn.number,
+                previousRemittanceStatus: remittanceReturn.previousStatus
+              }
+            : {}),
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
     });
+
+    if (remittanceReturn?.changed) {
+      await tx.auditEvent.create({
+        data: {
+          eventType: "CUSTOMER_REMITTANCE_PARTIALLY_RETURNED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            remittanceId: remittanceReturn.remittanceId,
+            number: remittanceReturn.number,
+            previousStatus: remittanceReturn.previousStatus,
+            paymentReturnId: paymentReturn.id,
+            paymentId: payment.id,
+            dueDateId: payment.dueDateId,
+            amount: returnAmount.toFixed(2),
+            returnDate: command.returnDate,
+            ...(context.correlationId ? { correlationId: context.correlationId } : {})
+          }
+        }
+      });
+    }
 
     return {
       kind: "returned" as const,
@@ -618,6 +653,80 @@ export async function markCustomerDueDateUnpaid(
     status: 201,
     value: mapInvoiceDetailForTreasury(result.invoice)
   };
+}
+
+async function markRemittancePartiallyReturnedForPayment(
+  tx: Prisma.TransactionClient,
+  payment: {
+    dueDateId: string;
+    source: "MANUAL" | "SEPA_REMITTANCE";
+  },
+  actorUserId: string
+): Promise<{
+  remittanceId: string;
+  number: string;
+  previousStatus: "PROCESSED" | "PARTIALLY_RETURNED" | "CLOSED";
+  changed: boolean;
+} | null> {
+  if (payment.source !== "SEPA_REMITTANCE") {
+    return null;
+  }
+
+  const line = await tx.customerRemittanceLine.findFirst({
+    where: {
+      dueDateId: payment.dueDateId,
+      status: "ACTIVE",
+      remittance: {
+        status: { in: ["PROCESSED", "PARTIALLY_RETURNED", "CLOSED"] }
+      }
+    },
+    select: {
+      remittance: {
+        select: {
+          id: true,
+          number: true,
+          status: true
+        }
+      }
+    }
+  });
+
+  if (!line) {
+    return null;
+  }
+
+  const previousStatus = line.remittance.status;
+
+  if (!isReturnedRemittanceStatus(previousStatus)) {
+    return null;
+  }
+
+  if (previousStatus !== "PARTIALLY_RETURNED") {
+    await tx.customerRemittance.update({
+      where: { id: line.remittance.id },
+      data: {
+        status: "PARTIALLY_RETURNED",
+        updatedById: actorUserId
+      }
+    });
+  }
+
+  return {
+    remittanceId: line.remittance.id,
+    number: line.remittance.number,
+    previousStatus,
+    changed: previousStatus !== "PARTIALLY_RETURNED"
+  };
+}
+
+function isReturnedRemittanceStatus(
+  status: string
+): status is "PROCESSED" | "PARTIALLY_RETURNED" | "CLOSED" {
+  return (
+    status === "PROCESSED" ||
+    status === "PARTIALLY_RETURNED" ||
+    status === "CLOSED"
+  );
 }
 
 async function sumNetPaymentsForDueDate(

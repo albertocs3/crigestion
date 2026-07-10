@@ -9,6 +9,7 @@ import {
   listCustomerRemittances,
   processCustomerRemittance
 } from "@/modules/treasury/application/remittances";
+import { registerCustomerPaymentReturn } from "@/modules/treasury/application/payments";
 import {
   hashRequestBody,
   initializePlatform,
@@ -313,6 +314,71 @@ describe("customer remittances", () => {
     });
     expect(paymentCount).toBe(1);
     expect(auditCount).toBe(1);
+  });
+
+  it("marks processed remittances as partially returned when a SEPA payment is returned", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const processed = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor
+    );
+
+    if (!processed.ok) {
+      throw new Error(processed.error.code);
+    }
+
+    const payment = await prisma.customerPayment.findFirstOrThrow({
+      where: {
+        dueDateId: dueDate.id,
+        source: "SEPA_REMITTANCE"
+      }
+    });
+    const returned = await registerCustomerPaymentReturn(
+      payment.invoiceId,
+      {
+        paymentId: payment.id,
+        returnDate: "2026-07-20",
+        amount: "21.00",
+        reasonCode: "BANK_RETURN",
+        notes: null
+      },
+      actor,
+      { correlationId: "corr-remittance-return" }
+    );
+    const remittance = await prisma.customerRemittance.findUniqueOrThrow({
+      where: { id: created.value.id }
+    });
+    const paymentReturnAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_PAYMENT_RETURNED" },
+      orderBy: { createdAt: "desc" }
+    });
+    const remittanceReturnAuditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_PARTIALLY_RETURNED" }
+    });
+
+    expect(returned.ok).toBe(true);
+    expect(remittance.status).toBe("PARTIALLY_RETURNED");
+    expect(paymentReturnAudit.payload).toMatchObject({
+      remittanceId: created.value.id,
+      remittanceNumber: "RC2026/000001",
+      previousRemittanceStatus: "PROCESSED"
+    });
+    expect(remittanceReturnAuditCount).toBe(1);
   });
 });
 
