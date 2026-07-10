@@ -255,7 +255,8 @@ devoluciones y netos antes de procesarla o cerrarla.
 Una remesa procesada puede cerrarse manualmente para indicar que su ciclo
 operativo queda finalizado. Si se registra una devolucion manual sobre un cobro
 creado por remesa SEPA, la remesa pasa a `Parcialmente devuelta` y queda
-trazado el cambio.
+trazado el cambio. La devolucion puede registrarse desde el detalle de la
+remesa para evitar saltar manualmente a la factura asociada.
 
 También se podrá procesar cada vencimiento como:
 

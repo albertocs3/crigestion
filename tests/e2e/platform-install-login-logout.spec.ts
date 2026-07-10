@@ -669,6 +669,11 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   await page.getByLabel("Fecha cobro").fill("2026-07-16");
   await page.getByRole("button", { name: "Procesar" }).click();
   await expect(page.getByText("Procesada").first()).toBeVisible();
+  await page.getByLabel("Fecha devolucion").fill("2026-07-20");
+  await page.getByLabel("Importe").fill("21.00");
+  await page.getByRole("button", { name: "Registrar devolucion" }).click();
+  await expect(page.getByText("Devolucion registrada.")).toBeVisible();
+  await expect(page.getByText("Parcialmente devuelta").first()).toBeVisible();
   await page.getByRole("button", { name: "Cerrar remesa" }).click();
   await expect(page.getByText("Cerrada").first()).toBeVisible();
 
@@ -682,6 +687,7 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
       reference: "RC2026/000001"
     },
     include: {
+      returns: true,
       dueDate: {
         include: {
           invoice: true
@@ -698,6 +704,9 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   const closedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_CLOSED" }
   });
+  const returnedAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_PARTIALLY_RETURNED" }
+  });
   const viewedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_VIEWED" }
   });
@@ -707,11 +716,13 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   expect(remittance.lines).toHaveLength(1);
   expect(remittance.lines[0]?.status).toBe("ACTIVE");
   expect(payment.amount.toFixed(2)).toBe("121.00");
-  expect(payment.dueDate.status).toBe("PAID");
-  expect(payment.dueDate.invoice.paymentStatus).toBe("PAID");
+  expect(payment.returns[0]?.amount.toFixed(2)).toBe("21.00");
+  expect(payment.dueDate.status).toBe("PENDING");
+  expect(payment.dueDate.invoice.paymentStatus).toBe("PARTIALLY_PAID");
   expect(auditCount).toBe(1);
   expect(processedAuditCount).toBe(1);
   expect(closedAuditCount).toBe(1);
+  expect(returnedAuditCount).toBe(1);
   expect(viewedAuditCount).toBeGreaterThanOrEqual(1);
 });
 

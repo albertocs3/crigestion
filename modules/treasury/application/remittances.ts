@@ -100,6 +100,8 @@ export type CustomerRemittanceLineDto = {
   };
   dueDate: string;
   amount: string;
+  paymentId: string | null;
+  paymentDate: string | null;
   paymentAmount: string;
   returnedAmount: string;
   netAmount: string;
@@ -212,6 +214,8 @@ const remittanceSelect = {
           payments: {
             where: { source: "SEPA_REMITTANCE" },
             select: {
+              id: true,
+              paymentDate: true,
               amount: true,
               reference: true,
               returns: {
@@ -910,6 +914,7 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
       (total, payment) => total.plus(sumAmounts(payment.returns)),
       new Prisma.Decimal(0)
     );
+    const firstPayment = remittancePayments[0] ?? null;
 
     return {
       id: line.id,
@@ -924,6 +929,8 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
       },
       dueDate: formatDateOnly(line.dueDateSnapshot),
       amount: line.amount.toFixed(2),
+      paymentId: firstPayment?.id ?? null,
+      paymentDate: firstPayment ? formatDateOnly(firstPayment.paymentDate) : null,
       paymentAmount: paymentAmount.toFixed(2),
       returnedAmount: returnedAmount.toFixed(2),
       netAmount: paymentAmount.minus(returnedAmount).toFixed(2),

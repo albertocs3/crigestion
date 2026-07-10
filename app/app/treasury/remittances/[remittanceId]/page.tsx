@@ -6,6 +6,7 @@ import {
 } from "@/modules/treasury/application/remittances";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
 import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
+import { CustomerRemittancePaymentReturnForm } from "@/modules/treasury/presentation/CustomerRemittancePaymentReturnForm";
 import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -164,12 +165,25 @@ export default async function TreasuryRemittanceDetailPage({
                     <td>{line.concept}</td>
                     <td>{line.mandateReference}</td>
                     <td>
-                      <Link
-                        className="button button-secondary button-small"
-                        href={`/app/invoices/${line.invoiceId}`}
-                      >
-                        Abrir factura
-                      </Link>
+                      <div className="compact-stack">
+                        <Link
+                          className="button button-secondary button-small"
+                          href={`/app/invoices/${line.invoiceId}`}
+                        >
+                          Abrir factura
+                        </Link>
+                        {line.paymentId && Number(line.netAmount) > 0 ? (
+                          <CustomerRemittancePaymentReturnForm
+                            invoiceId={line.invoiceId}
+                            paymentId={line.paymentId}
+                            defaultAmount={line.netAmount}
+                          />
+                        ) : (
+                          <span className="cell-detail">
+                            Sin saldo de cobro para devolver
+                          </span>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

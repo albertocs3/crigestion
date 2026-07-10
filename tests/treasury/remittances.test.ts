@@ -241,6 +241,7 @@ describe("customer remittances", () => {
       actor,
       { correlationId: "corr-remittance-process" }
     );
+    const detail = await getCustomerRemittance(created.value.id, actor);
     const payment = await prisma.customerPayment.findFirstOrThrow({
       where: {
         dueDateId: dueDate.id,
@@ -262,6 +263,13 @@ describe("customer remittances", () => {
     expect(processed.value.status).toBe("PROCESSED");
     expect(payment.amount.toFixed(2)).toBe("121.00");
     expect(payment.reference).toBe("RC2026/000001");
+    expect(detail?.lines[0]).toMatchObject({
+      paymentId: payment.id,
+      paymentDate: "2026-07-16",
+      paymentAmount: "121.00",
+      returnedAmount: "0.00",
+      netAmount: "121.00"
+    });
     expect(storedDueDate.status).toBe("PAID");
     expect(storedDueDate.invoice.paymentStatus).toBe("PAID");
     expect(auditCount).toBe(1);
