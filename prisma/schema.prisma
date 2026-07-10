@@ -170,6 +170,7 @@ enum CustomerRemittanceStatus {
   DRAFT
   GENERATED
   SENT
+  REJECTED
   PROCESSED
   PARTIALLY_RETURNED
   CLOSED
@@ -648,26 +649,28 @@ model InvoiceDueDate {
 }
 
 model CustomerRemittance {
-  id             String                   @id @default(uuid()) @db.Uuid
-  year           Int
-  sequence       Int
-  number         String                   @unique @db.VarChar(24)
-  status         CustomerRemittanceStatus @default(DRAFT)
-  chargeDate     DateTime                 @db.Date
-  concept        String                   @db.VarChar(140)
-  totalAmount    Decimal                  @db.Decimal(14, 2)
-  lineCount      Int
-  sepaFormat     String?                  @db.VarChar(40)
-  sepaMessageId  String?                  @db.VarChar(80)
-  sepaFileName   String?                  @db.VarChar(160)
-  sepaFileSha256 String?                  @db.Char(64)
-  sepaXml        String?                  @db.Text
-  generatedAt    DateTime?                @db.Timestamptz(3)
-  sentAt         DateTime?                @db.Timestamptz(3)
-  createdById    String                   @db.Uuid
-  updatedById    String?                  @db.Uuid
-  createdAt      DateTime                 @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime                 @updatedAt @db.Timestamptz(3)
+  id              String                   @id @default(uuid()) @db.Uuid
+  year            Int
+  sequence        Int
+  number          String                   @unique @db.VarChar(24)
+  status          CustomerRemittanceStatus @default(DRAFT)
+  chargeDate      DateTime                 @db.Date
+  concept         String                   @db.VarChar(140)
+  totalAmount     Decimal                  @db.Decimal(14, 2)
+  lineCount       Int
+  sepaFormat      String?                  @db.VarChar(40)
+  sepaMessageId   String?                  @db.VarChar(80)
+  sepaFileName    String?                  @db.VarChar(160)
+  sepaFileSha256  String?                  @db.Char(64)
+  sepaXml         String?                  @db.Text
+  generatedAt     DateTime?                @db.Timestamptz(3)
+  sentAt          DateTime?                @db.Timestamptz(3)
+  rejectedAt      DateTime?                @db.Timestamptz(3)
+  rejectionReason String?                  @db.VarChar(500)
+  createdById     String                   @db.Uuid
+  updatedById     String?                  @db.Uuid
+  createdAt       DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime                 @updatedAt @db.Timestamptz(3)
 
   createdBy User                     @relation("CustomerRemittancesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy User?                    @relation("CustomerRemittancesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)

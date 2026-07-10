@@ -11,6 +11,7 @@ import { POST as remittanceClosePost } from "@/app/api/treasury/customer-remitta
 import { POST as remittanceGenerateSepaPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/generate-sepa/route";
 import { POST as remittanceMarkSentPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/mark-sent/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
+import { POST as remittanceRejectPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/reject/route";
 import { GET as remittanceSepaFileGet } from "@/app/api/treasury/customer-remittances/[remittanceId]/sepa-file/route";
 import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
 import { prisma } from "@/lib/prisma";
@@ -468,6 +469,107 @@ describe("customer remittance HTTP contracts", () => {
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+  });
+
+  it("rejects sent remittances through treasury contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    const notRejectableResponse = await remittanceRejectPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/reject`,
+        { reason: "Banco rechaza el fichero" },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    await remittanceGenerateSepaPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/generate-sepa`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    await remittanceMarkSentPost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/mark-sent`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const rejectedResponse = await remittanceRejectPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/reject`,
+        { reason: "Banco rechaza el fichero por fecha de cargo" },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const rejected = await rejectedResponse.json();
+    const missingIdempotencyResponse = await remittanceRejectPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/reject`,
+        { reason: "Banco rechaza el fichero" },
+        { csrfToken, idempotencyKey: null }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const malformedResponse = await remittanceRejectPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/reject`,
+        { reason: "" },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const retryResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-18",
+          concept: "Reintento remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const retry = await retryResponse.json();
+
+    expect(notRejectableResponse.status).toBe(409);
+    expect(await notRejectableResponse.json()).toMatchObject({
+      code: "REMITTANCE_NOT_REJECTABLE"
+    });
+    expect(rejectedResponse.status).toBe(200);
+    expect(rejected).toMatchObject({
+      id: created.id,
+      status: "REJECTED",
+      rejectionReason: "Banco rechaza el fichero por fecha de cargo"
+    });
+    expect(rejected.rejectedAt).not.toBeNull();
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(malformedResponse.status).toBe(422);
+    expect(await malformedResponse.json()).toMatchObject({
+      code: "VALIDATION_ERROR"
+    });
+    expect(retryResponse.status).toBe(201);
+    expect(retry).toMatchObject({
+      number: "RC2026/000002",
+      status: "DRAFT"
     });
   });
 });

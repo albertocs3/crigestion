@@ -33,6 +33,7 @@ export const listCustomerRemittancesSchema = z.object({
       "DRAFT",
       "GENERATED",
       "SENT",
+      "REJECTED",
       "PROCESSED",
       "PARTIALLY_RETURNED",
       "CLOSED",
@@ -52,6 +53,10 @@ export const processCustomerRemittanceSchema = z.object({
   paymentDate: dateOnlySchema
 }).strict();
 
+export const rejectCustomerRemittanceSchema = z.object({
+  reason: z.string().trim().min(3).max(500)
+}).strict();
+
 export type CreateCustomerRemittanceDraftCommand = z.infer<
   typeof createCustomerRemittanceDraftSchema
 >;
@@ -64,6 +69,9 @@ export type ExportCustomerRemittancesCommand = z.infer<
 export type ProcessCustomerRemittanceCommand = z.infer<
   typeof processCustomerRemittanceSchema
 >;
+export type RejectCustomerRemittanceCommand = z.infer<
+  typeof rejectCustomerRemittanceSchema
+>;
 
 export type CustomerRemittanceDto = {
   id: string;
@@ -74,6 +82,7 @@ export type CustomerRemittanceDto = {
     | "DRAFT"
     | "GENERATED"
     | "SENT"
+    | "REJECTED"
     | "PROCESSED"
     | "PARTIALLY_RETURNED"
     | "CLOSED"
@@ -91,6 +100,8 @@ export type CustomerRemittanceDto = {
   sepaFileSha256: string | null;
   generatedAt: string | null;
   sentAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
   lines: CustomerRemittanceLineDto[];
 };
 
@@ -210,6 +221,25 @@ export type MarkCustomerRemittanceSentResult =
       };
     };
 
+export type RejectCustomerRemittanceResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_REJECTABLE";
+        message: string;
+      };
+    };
+
 export type CustomerRemittanceSepaFileResult =
   | {
       ok: true;
@@ -264,6 +294,8 @@ const remittanceSelect = {
   sepaFileSha256: true,
   generatedAt: true,
   sentAt: true,
+  rejectedAt: true,
+  rejectionReason: true,
   lines: {
     orderBy: { position: "asc" },
     select: {
@@ -894,6 +926,105 @@ export async function markCustomerRemittanceSent(
   return { ok: true, status: 200, value: mapRemittance(result.remittance) };
 }
 
+export async function rejectCustomerRemittance(
+  remittanceId: string,
+  command: RejectCustomerRemittanceCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<RejectCustomerRemittanceResult> {
+  const reason = command.reason.trim();
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        lineCount: true,
+        totalAmount: true,
+        sepaFileName: true,
+        sepaFileSha256: true
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (remittance.status !== "SENT") {
+      return { kind: "not-rejectable" as const };
+    }
+
+    await tx.customerRemittanceLine.updateMany({
+      where: {
+        remittanceId,
+        status: "ACTIVE"
+      },
+      data: {
+        status: "CANCELLED"
+      }
+    });
+
+    const rejectedAt = new Date();
+    const rejected = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "REJECTED",
+        rejectedAt,
+        rejectionReason: reason,
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_REJECTED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          previousStatus: remittance.status,
+          sepaFileName: remittance.sepaFileName,
+          sepaFileSha256: remittance.sepaFileSha256,
+          lineCount: remittance.lineCount,
+          totalAmount: remittance.totalAmount.toFixed(2),
+          rejectedAt: rejectedAt.toISOString(),
+          reasonLength: reason.length,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "rejected" as const, remittance: rejected };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-rejectable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_REJECTABLE",
+        message: "Solo se pueden rechazar remesas enviadas sin procesar."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
 export async function cancelCustomerRemittanceDraft(
   remittanceId: string,
   actor: SessionUser,
@@ -1443,6 +1574,8 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
     sepaFileSha256: record.sepaFileSha256,
     generatedAt: record.generatedAt?.toISOString() ?? null,
     sentAt: record.sentAt?.toISOString() ?? null,
+    rejectedAt: record.rejectedAt?.toISOString() ?? null,
+    rejectionReason: record.rejectionReason,
     lines
   };
 }

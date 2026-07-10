@@ -254,6 +254,12 @@ remitido por los canales bancarios externos, la remesa puede marcarse como
 `SENT`, guardando fecha de envio y auditoria. No importa respuestas bancarias y
 no crea conciliaciones automaticas.
 
+Una remesa `SENT` puede rechazarse manualmente si el banco no acepta o no
+procesa el fichero antes de que exista cobro. En ese caso la remesa queda
+`REJECTED`, se guarda motivo y fecha de rechazo, se conservan XML y hash, y sus
+lineas se cancelan para permitir preparar una nueva remesa con los mismos
+vencimientos pendientes. Este rechazo no crea cobros ni se considera devolucion.
+
 Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y
 facturas; los asientos automaticos quedan para un corte posterior. El listado

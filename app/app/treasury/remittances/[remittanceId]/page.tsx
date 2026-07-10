@@ -10,6 +10,7 @@ import { CustomerRemittanceGenerateSepaButton } from "@/modules/treasury/present
 import { CustomerRemittanceMarkSentButton } from "@/modules/treasury/presentation/CustomerRemittanceMarkSentButton";
 import { CustomerRemittancePaymentReturnForm } from "@/modules/treasury/presentation/CustomerRemittancePaymentReturnForm";
 import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
+import { CustomerRemittanceRejectForm } from "@/modules/treasury/presentation/CustomerRemittanceRejectForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
@@ -107,7 +108,17 @@ export default async function TreasuryRemittanceDetailPage({
               <span className="data-label">Enviada</span>
               <strong>{remittance.sentAt ? formatDateTime(remittance.sentAt) : "No"}</strong>
             </div>
+            <div>
+              <span className="data-label">Rechazada</span>
+              <strong>
+                {remittance.rejectedAt ? formatDateTime(remittance.rejectedAt) : "No"}
+              </strong>
+            </div>
           </div>
+
+          {remittance.status === "REJECTED" && remittance.rejectionReason ? (
+            <p className="message error">{remittance.rejectionReason}</p>
+          ) : null}
 
           {remittance.status === "DRAFT" ? (
             <div className="button-row">
@@ -135,6 +146,7 @@ export default async function TreasuryRemittanceDetailPage({
                 remittanceId={remittance.id}
                 defaultPaymentDate={remittance.chargeDate}
               />
+              <CustomerRemittanceRejectForm remittanceId={remittance.id} />
             </div>
           ) : null}
 
@@ -278,6 +290,8 @@ function remittanceStatusLabel(status: CustomerRemittanceDto["status"]): string 
       return "Generada";
     case "SENT":
       return "Enviada";
+    case "REJECTED":
+      return "Rechazada";
     case "PROCESSED":
       return "Procesada";
     case "PARTIALLY_RETURNED":

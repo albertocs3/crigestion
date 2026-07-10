@@ -10,7 +10,8 @@ import {
   getCustomerRemittanceSepaFile,
   listCustomerRemittances,
   markCustomerRemittanceSent,
-  processCustomerRemittance
+  processCustomerRemittance,
+  rejectCustomerRemittance
 } from "@/modules/treasury/application/remittances";
 import { registerCustomerPaymentReturn } from "@/modules/treasury/application/payments";
 import {
@@ -319,6 +320,91 @@ describe("customer remittances", () => {
       number: "RC2026/000001",
       correlationId: "corr-remittance-sent"
     });
+  });
+
+  it("rejects sent remittances before collection and frees their due dates", async () => {
+    const actor = await adminActor();
+    await configureCompanySepa();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const notRejectable = await rejectCustomerRemittance(
+      created.value.id,
+      { reason: "Banco rechaza el fichero" },
+      actor
+    );
+    const generated = await generateCustomerRemittanceSepa(created.value.id, actor);
+
+    if (!generated.ok) {
+      throw new Error(generated.error.code);
+    }
+
+    const sent = await markCustomerRemittanceSent(created.value.id, actor);
+
+    if (!sent.ok) {
+      throw new Error(sent.error.code);
+    }
+
+    const rejected = await rejectCustomerRemittance(
+      created.value.id,
+      { reason: "Banco rechaza el fichero por fecha de cargo" },
+      actor,
+      { correlationId: "corr-remittance-rejected" }
+    );
+    const retry = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-18",
+        concept: "Reintento remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+    const auditEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_REMITTANCE_REJECTED" }
+    });
+    const auditPayload = JSON.stringify(auditEvent.payload);
+
+    expect(notRejectable).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_REJECTABLE",
+        message: "Solo se pueden rechazar remesas enviadas sin procesar."
+      }
+    });
+    expect(rejected.ok).toBe(true);
+    if (!rejected.ok) {
+      throw new Error(rejected.error.code);
+    }
+    expect(rejected.value).toMatchObject({
+      id: created.value.id,
+      status: "REJECTED",
+      rejectionReason: "Banco rechaza el fichero por fecha de cargo"
+    });
+    expect(rejected.value.rejectedAt).not.toBeNull();
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) {
+      throw new Error(retry.error.code);
+    }
+    expect(retry.value.number).toBe("RC2026/000002");
+    expect(auditEvent.payload).toMatchObject({
+      remittanceId: created.value.id,
+      previousStatus: "SENT",
+      reasonLength: 43,
+      correlationId: "corr-remittance-rejected"
+    });
+    expect(auditPayload).not.toContain("Banco rechaza el fichero por fecha de cargo");
   });
 
   it("rejects non eligible and already included due dates", async () => {
