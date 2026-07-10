@@ -669,6 +669,8 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   await page.getByLabel("Fecha cobro").fill("2026-07-16");
   await page.getByRole("button", { name: "Procesar" }).click();
   await expect(page.getByText("Procesada").first()).toBeVisible();
+  await page.getByRole("button", { name: "Cerrar remesa" }).click();
+  await expect(page.getByText("Cerrada").first()).toBeVisible();
 
   const remittance = await prisma.customerRemittance.findFirstOrThrow({
     where: { number: "RC2026/000001" },
@@ -693,11 +695,14 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   const processedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
   });
+  const closedAuditCount = await prisma.auditEvent.count({
+    where: { eventType: "CUSTOMER_REMITTANCE_CLOSED" }
+  });
   const viewedAuditCount = await prisma.auditEvent.count({
     where: { eventType: "CUSTOMER_REMITTANCE_VIEWED" }
   });
 
-  expect(remittance.status).toBe("PROCESSED");
+  expect(remittance.status).toBe("CLOSED");
   expect(remittance.totalAmount.toFixed(2)).toBe("121.00");
   expect(remittance.lines).toHaveLength(1);
   expect(remittance.lines[0]?.status).toBe("ACTIVE");
@@ -706,6 +711,7 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   expect(payment.dueDate.invoice.paymentStatus).toBe("PAID");
   expect(auditCount).toBe(1);
   expect(processedAuditCount).toBe(1);
+  expect(closedAuditCount).toBe(1);
   expect(viewedAuditCount).toBeGreaterThanOrEqual(1);
 });
 

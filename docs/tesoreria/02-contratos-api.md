@@ -428,7 +428,28 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
-## 13. `POST /api/invoices/{invoiceId}/payments`
+## 13. `POST /api/treasury/customer-remittances/{remittanceId}/close`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Requiere CSRF e `Idempotency-Key`.
+
+Reglas:
+
+- Solo cierra remesas `PROCESSED` o `PARTIALLY_RETURNED`.
+- La remesa queda `CLOSED`.
+- No crea, elimina ni modifica cobros, vencimientos o facturas.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_NOT_CLOSABLE` | Remesa fuera de estado cerrable. |
+
+Audita `CUSTOMER_REMITTANCE_CLOSED`.
+
+## 14. `POST /api/invoices/{invoiceId}/payments`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -474,7 +495,7 @@ Audita `CUSTOMER_PAYMENT_REGISTERED` con `paymentId`, `invoiceId`,
 `dueDateId`, `customerId`, `amount`, `paymentDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 14. `POST /api/invoices/{invoiceId}/payment-returns`
+## 15. `POST /api/invoices/{invoiceId}/payment-returns`
 
 Permiso requerido: `Treasury.ManagePayments`.
 
@@ -519,7 +540,7 @@ Audita `CUSTOMER_PAYMENT_RETURNED` con `paymentReturnId`, `paymentId`,
 `invoiceId`, `dueDateId`, `customerId`, `amount`, `returnDate`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`.
 
-## 15. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
+## 16. `POST /api/invoices/{invoiceId}/unpaid-due-dates`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

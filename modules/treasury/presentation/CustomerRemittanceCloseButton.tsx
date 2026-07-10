@@ -1,0 +1,70 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
+
+type SubmissionState =
+  | { status: "idle" }
+  | { status: "submitting" }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
+
+export function CustomerRemittanceCloseButton({
+  remittanceId
+}: {
+  remittanceId: string;
+}) {
+  const router = useRouter();
+  const [state, setState] = useState<SubmissionState>({ status: "idle" });
+  const disabled = state.status === "submitting";
+
+  async function closeRemittance() {
+    setState({ status: "submitting" });
+
+    const csrfToken = await fetchCsrfToken();
+    const response = await fetch(
+      `/api/treasury/customer-remittances/${remittanceId}/close`,
+      {
+        method: "POST",
+        headers: {
+          "Idempotency-Key": crypto.randomUUID(),
+          "X-CSRF-Token": csrfToken
+        }
+      }
+    );
+
+    if (response.ok) {
+      setState({ status: "success", message: "Remesa cerrada." });
+      router.refresh();
+      return;
+    }
+
+    const body = (await response.json().catch(() => null)) as
+      | { message?: string; code?: string }
+      | null;
+
+    setState({
+      status: "error",
+      message: body?.message ?? body?.code ?? "No se pudo cerrar la remesa."
+    });
+  }
+
+  return (
+    <div className="compact-stack">
+      <button
+        className="button button-secondary button-small"
+        disabled={disabled}
+        type="button"
+        onClick={closeRemittance}
+      >
+        {state.status === "submitting" ? "Cerrando..." : "Cerrar remesa"}
+      </button>
+      {state.status === "success" || state.status === "error" ? (
+        <span className={state.status === "error" ? "message error" : "message"}>
+          {state.message}
+        </span>
+      ) : null}
+    </div>
+  );
+}

@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
   cancelCustomerRemittanceDraft,
+  closeCustomerRemittance,
   createCustomerRemittanceDraft,
   getCustomerRemittance,
   listCustomerRemittances,
@@ -259,6 +260,58 @@ describe("customer remittances", () => {
     expect(payment.reference).toBe("RC2026/000001");
     expect(storedDueDate.status).toBe("PAID");
     expect(storedDueDate.invoice.paymentStatus).toBe("PAID");
+    expect(auditCount).toBe(1);
+  });
+
+  it("closes processed remittances without changing payments", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa julio",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    const draftClose = await closeCustomerRemittance(created.value.id, actor);
+    const processed = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor
+    );
+
+    if (!processed.ok) {
+      throw new Error(processed.error.code);
+    }
+
+    const closed = await closeCustomerRemittance(processed.value.id, actor, {
+      correlationId: "corr-remittance-close"
+    });
+    const paymentCount = await prisma.customerPayment.count({
+      where: { dueDateId: dueDate.id }
+    });
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_CLOSED" }
+    });
+
+    expect(draftClose).toMatchObject({
+      ok: false,
+      error: { code: "REMITTANCE_NOT_CLOSABLE" }
+    });
+    expect(closed).toMatchObject({
+      ok: true,
+      value: {
+        id: created.value.id,
+        status: "CLOSED"
+      }
+    });
+    expect(paymentCount).toBe(1);
     expect(auditCount).toBe(1);
   });
 });

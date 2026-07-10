@@ -157,6 +157,25 @@ export type ProcessCustomerRemittanceResult =
       };
     };
 
+export type CloseCustomerRemittanceResult =
+  | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_NOT_CLOSABLE";
+        message: string;
+      };
+    };
+
 const remittanceSelect = {
   id: true,
   year: true,
@@ -722,6 +741,87 @@ export async function processCustomerRemittance(
       error: {
         code: "REMITTANCE_NOT_PROCESSABLE",
         message: "La remesa no se puede procesar con sus vencimientos actuales."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+}
+
+export async function closeCustomerRemittance(
+  remittanceId: string,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<CloseCustomerRemittanceResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    const remittance = await tx.customerRemittance.findUnique({
+      where: { id: remittanceId },
+      select: {
+        id: true,
+        number: true,
+        status: true,
+        lineCount: true,
+        totalAmount: true
+      }
+    });
+
+    if (!remittance) {
+      return { kind: "not-found" as const };
+    }
+
+    if (
+      remittance.status !== "PROCESSED" &&
+      remittance.status !== "PARTIALLY_RETURNED"
+    ) {
+      return { kind: "not-closable" as const };
+    }
+
+    const closed = await tx.customerRemittance.update({
+      where: { id: remittanceId },
+      data: {
+        status: "CLOSED",
+        updatedById: actor.id
+      },
+      select: remittanceSelect
+    });
+
+    await tx.auditEvent.create({
+      data: {
+        eventType: "CUSTOMER_REMITTANCE_CLOSED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          remittanceId,
+          number: remittance.number,
+          previousStatus: remittance.status,
+          lineCount: remittance.lineCount,
+          totalAmount: remittance.totalAmount.toFixed(2),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+
+    return { kind: "closed" as const, remittance: closed };
+  });
+
+  if (result.kind === "not-found") {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  if (result.kind === "not-closable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_NOT_CLOSABLE",
+        message: "Solo se pueden cerrar remesas procesadas o parcialmente devueltas."
       }
     };
   }

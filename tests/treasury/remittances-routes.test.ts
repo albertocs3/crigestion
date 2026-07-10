@@ -7,6 +7,7 @@ import {
   POST as remittancesPost
 } from "@/app/api/treasury/customer-remittances/route";
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
+import { POST as remittanceClosePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/close/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
 import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
 import { prisma } from "@/lib/prisma";
@@ -240,6 +241,60 @@ describe("customer remittance HTTP contracts", () => {
       status: "PROCESSED"
     });
     expect(payment.amount.toFixed(2)).toBe("121.00");
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(auditCount).toBe(1);
+  });
+
+  it("closes processed remittances through the action contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const createResponse = await remittancesPost(
+      jsonRequest(
+        "/api/treasury/customer-remittances",
+        {
+          chargeDate: "2026-07-15",
+          concept: "Remesa julio",
+          dueDateIds: [dueDate.id]
+        },
+        { csrfToken }
+      )
+    );
+    const created = await createResponse.json();
+    await remittanceProcessPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/process`,
+        { paymentDate: "2026-07-16" },
+        { csrfToken }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const closeResponse = await remittanceClosePost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/close`, {
+        csrfToken
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const closed = await closeResponse.json();
+    const missingIdempotencyResponse = await remittanceClosePost(
+      actionRequest(`/api/treasury/customer-remittances/${created.id}/close`, {
+        csrfToken,
+        idempotencyKey: null
+      }),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const auditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_CLOSED" }
+    });
+
+    expect(closeResponse.status).toBe(200);
+    expect(closed).toMatchObject({
+      id: created.id,
+      status: "CLOSED"
+    });
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"

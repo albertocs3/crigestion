@@ -5,6 +5,7 @@ import {
   type CustomerRemittanceDto
 } from "@/modules/treasury/application/remittances";
 import { CustomerRemittanceCancelButton } from "@/modules/treasury/presentation/CustomerRemittanceCancelButton";
+import { CustomerRemittanceCloseButton } from "@/modules/treasury/presentation/CustomerRemittanceCloseButton";
 import { CustomerRemittanceProcessForm } from "@/modules/treasury/presentation/CustomerRemittanceProcessForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -92,6 +93,13 @@ export default async function TreasuryRemittanceDetailPage({
                 defaultPaymentDate={remittance.chargeDate}
               />
               <CustomerRemittanceCancelButton remittanceId={remittance.id} />
+            </div>
+          ) : null}
+
+          {remittance.status === "PROCESSED" ||
+          remittance.status === "PARTIALLY_RETURNED" ? (
+            <div className="button-row">
+              <CustomerRemittanceCloseButton remittanceId={remittance.id} />
             </div>
           ) : null}
         </div>
