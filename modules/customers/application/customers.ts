@@ -212,10 +212,23 @@ type CustomerTaxIdLockedByIssuedInvoicesResult = {
   };
 };
 
+type CustomerAccountingAccountResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code:
+      | "CUSTOMER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"
+      | "CUSTOMER_ACCOUNT_CODE_EXHAUSTED"
+      | "CUSTOMER_ACCOUNT_CODE_ALREADY_EXISTS";
+    message: string;
+  };
+};
+
 export type CreateCustomerResult =
   | { ok: true; status: 201; value: CustomerListItem }
   | CustomerTaxIdAlreadyUsedResult
-  | CustomerSepaMandateReferenceAlreadyUsedResult;
+  | CustomerSepaMandateReferenceAlreadyUsedResult
+  | CustomerAccountingAccountResult;
 
 export type UpdateCustomerStatusResult =
   | { ok: true; status: 200; value: CustomerListItem }
@@ -361,8 +374,17 @@ export async function createCustomer(
     : null;
 
   try {
-    const customer = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       const code = await nextCustomerCode(tx);
+      if (!/^\d{1,6}$/.test(code) || Number(code) < 1) {
+        return { kind: "account-code-exhausted" as const };
+      }
+      const fiscalYears = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "status" = 'OPEN' ORDER BY "year" DESC LIMIT 1 FOR UPDATE`
+      );
+      const fiscalYear = fiscalYears[0];
+      if (!fiscalYear) return { kind: "fiscal-year-not-open" as const };
+      const accountCode = `430${code.padStart(6, "0")}`;
       const createdCustomer = await tx.customer.create({
         data: {
           code,
@@ -395,6 +417,18 @@ export async function createCustomer(
           type: true,
           fiscalTreatment: true
         }
+      });
+      const accountingAccount = await tx.accountingAccount.create({
+        data: {
+          fiscalYearId: fiscalYear.id,
+          code: accountCode,
+          name: command.legalName.slice(0, 180),
+          type: "ACTIVO",
+          level: 9,
+          isPostable: true,
+          createdById: actor.id
+        },
+        select: { id: true, code: true, isPostable: true }
       });
 
       if (sepaMandate) {
@@ -433,12 +467,30 @@ export async function createCustomer(
 
       await tx.auditEvent.create({
         data: {
+          eventType: "ACCOUNTING_ACCOUNT_CREATED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            accountId: accountingAccount.id,
+            code: accountingAccount.code,
+            customerId: createdCustomer.id,
+            customerCode: createdCustomer.code,
+            isPostable: accountingAccount.isPostable,
+            ...(context.correlationId ? { correlationId: context.correlationId } : {})
+          }
+        }
+      });
+
+      await tx.auditEvent.create({
+        data: {
           eventType: "CUSTOMER_CREATED",
           actorType: "USER",
           payload: {
             actorUserId: actor.id,
             customerId: createdCustomer.id,
             customerCode: createdCustomer.code,
+            accountingAccountId: accountingAccount.id,
+            accountingAccountCode: accountingAccount.code,
             type: createdCustomer.type,
             fiscalTreatment: createdCustomer.fiscalTreatment,
             ...(context.correlationId ? { correlationId: context.correlationId } : {})
@@ -446,16 +498,30 @@ export async function createCustomer(
         }
       });
 
-      return tx.customer.findUniqueOrThrow({
+      const customer = await tx.customer.findUniqueOrThrow({
         where: { id: createdCustomer.id },
         select: customerListSelect
       });
+      return { kind: "created" as const, customer };
     });
+
+    if (result.kind === "fiscal-year-not-open") {
+      return customerAccountingError(
+        "CUSTOMER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN",
+        "Debe existir un ejercicio contable abierto para crear el cliente."
+      );
+    }
+    if (result.kind === "account-code-exhausted") {
+      return customerAccountingError(
+        "CUSTOMER_ACCOUNT_CODE_EXHAUSTED",
+        "La numeracion de clientes ha agotado las subcuentas 430 disponibles."
+      );
+    }
 
     return {
       ok: true,
       status: 201,
-      value: mapCustomerListItem(customer)
+      value: mapCustomerListItem(result.customer)
     };
   } catch (error) {
     if (isUniqueConstraintError(error, "normalizedTaxId")) {
@@ -466,8 +532,22 @@ export async function createCustomer(
       return customerSepaMandateReferenceAlreadyUsed();
     }
 
+    if (isUniqueConstraintError(error, "fiscalYearId") || isUniqueConstraintError(error, "code")) {
+      return customerAccountingError(
+        "CUSTOMER_ACCOUNT_CODE_ALREADY_EXISTS",
+        "La subcuenta contable del cliente ya existe en el ejercicio abierto."
+      );
+    }
+
     throw error;
   }
+}
+
+function customerAccountingError(
+  code: CustomerAccountingAccountResult["error"]["code"],
+  message: string
+): CustomerAccountingAccountResult {
+  return { ok: false, status: 409, error: { code, message } };
 }
 
 export async function updateCustomerStatus(

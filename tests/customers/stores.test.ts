@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
+import { createTestAccountingFiscalYear } from "@/tests/helpers/accountingFiscalYear";
 import { createCustomer } from "@/modules/customers/application/customers";
 import {
   createCustomerStore,
@@ -34,6 +35,7 @@ describe("customer stores application service", () => {
     await resetPlatformTables();
     await resetSequences();
     await initializeForStores();
+    await createTestAccountingFiscalYear();
   });
 
   afterAll(async () => {
@@ -307,6 +309,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),

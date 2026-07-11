@@ -35,6 +35,12 @@ Restricciones e indices:
 - Unico por `(series, year)`.
 - La emision bloquea la fila de secuencia dentro de la transaccion antes de
   asignar numero.
+- La misma transaccion bloquea el ejercicio abierto y crea un unico asiento
+  enlazado a la factura: `430` al debe y `700`/`705` mas `477` al haber.
+- Si falta el ejercicio o una cuenta activa e imputable, no se consume numero
+  ni se emiten la factura, el registro VeriFactu o el asiento.
+- Una rectificativa genera el asiento inverso: ventas e IVA al debe y la cuenta
+  `430` del cliente al haber. Todo el flujo revierte si el asiento no es viable.
 - El numero visible se forma como `{series}{yy}{correlativo_5_digitos}`.
 
 ## 4. Tabla `invoices`
@@ -220,6 +226,8 @@ Registrar cobro manual:
 4. Crea `customer_payments`.
 5. Actualiza estado del vencimiento.
 6. Recalcula `paymentStatus` de la factura.
+7. Crea en la misma transaccion un asiento enlazado al cobro: `570` para caja o
+   `572` para banco al debe y la cuenta `430` del cliente al haber.
 7. Audita `CUSTOMER_PAYMENT_REGISTERED`.
 
 Registrar devolucion manual:

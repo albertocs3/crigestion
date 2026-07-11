@@ -9,6 +9,7 @@ import {
 } from "@/app/api/customers/[customerId]/addresses/route";
 import { PATCH as addressPatch } from "@/app/api/customers/[customerId]/addresses/[addressId]/route";
 import { prisma } from "@/lib/prisma";
+import { createTestAccountingFiscalYear } from "@/tests/helpers/accountingFiscalYear";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import {
   hashRequestBody,
@@ -75,6 +76,7 @@ describe("customer addresses HTTP contracts", () => {
     await resetPlatformTables();
     await resetCustomerCodeSequence();
     await initializeForRoutes();
+    await createTestAccountingFiscalYear();
   });
 
   afterAll(async () => {
@@ -394,6 +396,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),

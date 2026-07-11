@@ -50,6 +50,12 @@ describe("customers application service", () => {
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "CUSTOMER_CREATED" }
     });
+    const accountingAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ACCOUNTING_ACCOUNT_CREATED" }
+    });
+    const accountingAccount = await prisma.accountingAccount.findFirstOrThrow({
+      where: { code: "430000001" }
+    });
     const auditPayload = JSON.stringify(auditEvent.payload);
 
     expect(result).toMatchObject({
@@ -78,10 +84,54 @@ describe("customers application service", () => {
       fiscalTreatment: "DOMESTIC",
       correlationId: "customer-test-0001"
     });
+    expect(accountingAccount).toMatchObject({
+      code: "430000001",
+      name: "Cliente Demo SL",
+      type: "ACTIVO",
+      level: 9,
+      isPostable: true
+    });
+    expect(accountingAudit.payload).toMatchObject({
+      actorUserId: actor.id,
+      accountId: accountingAccount.id,
+      code: "430000001",
+      customerCode: "1",
+      correlationId: "customer-test-0001"
+    });
     expect(auditPayload).not.toContain("B12345674");
     expect(auditPayload).not.toContain("ES9121000418450200051332");
     expect(auditPayload).not.toContain("cliente@example.test");
     expect(auditPayload).not.toContain("Calle Mayor");
+  });
+
+  it("maps customer 20 to accounting account 430000020", async () => {
+    await prisma.$executeRaw`ALTER SEQUENCE customer_code_seq RESTART WITH 20`;
+    const actor = await loginAsAdmin();
+    const result = await createCustomer(customerPayload(), actor);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.code);
+    expect(result.value.code).toBe("20");
+    const account = await prisma.accountingAccount.findFirstOrThrow({
+      where: { code: "430000020" }
+    });
+    expect(account.name).toBe("Cliente Demo SL");
+  });
+
+  it("rolls back the customer when no accounting fiscal year is open", async () => {
+    await prisma.accountingFiscalYear.updateMany({
+      data: { status: "CLOSED", closedAt: new Date(), closedById: (await prisma.user.findFirstOrThrow()).id }
+    });
+    const actor = await loginAsAdmin();
+    const result = await createCustomer(customerPayload(), actor);
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CUSTOMER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN" }
+    });
+    expect(await prisma.customer.count()).toBe(0);
+    expect(await prisma.accountingAccount.count()).toBe(0);
   });
 
   it("rejects duplicate fiscal identifiers after normalization", async () => {
@@ -650,6 +700,15 @@ async function initializeForCustomers(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+
+  const installation = await prisma.installation.findFirstOrThrow();
+  await prisma.accountingFiscalYear.create({
+    data: {
+      companyId: installation.companyId!, year: 2026,
+      startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"),
+      planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId!
+    }
+  });
 }
 
 async function createIssuedInvoiceForCustomer(
@@ -721,6 +780,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),

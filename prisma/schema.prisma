@@ -188,8 +188,18 @@ enum AccountingAccountStatus {
   INACTIVE
 }
 
+enum AccountingFiscalYearStatus {
+  OPEN
+  CLOSED
+}
+
 enum AccountingEntryOrigin {
   MANUAL
+  INVOICE
+  CUSTOMER_PAYMENT
+  REGULARIZATION
+  CLOSING
+  OPENING
 }
 
 enum AccountingEntryStatus {
@@ -227,7 +237,8 @@ model Company {
   createdAt              DateTime @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime @updatedAt @db.Timestamptz(3)
 
-  installation Installation?
+  installation          Installation?
+  accountingFiscalYears AccountingFiscalYear[]
 
   @@map("companies")
 }
@@ -407,6 +418,8 @@ model User {
   createdCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesCreatedBy")
   updatedCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesUpdatedBy")
   createdAccountingAccounts     AccountingAccount[]        @relation("AccountingAccountsCreatedBy")
+  createdAccountingFiscalYears  AccountingFiscalYear[]     @relation("AccountingFiscalYearsCreatedBy")
+  closedAccountingFiscalYears   AccountingFiscalYear[]     @relation("AccountingFiscalYearsClosedBy")
   createdAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesCreatedBy")
   updatedAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesUpdatedBy")
   initialInstallation           Installation?
@@ -571,6 +584,7 @@ model Invoice {
   paymentReturns        CustomerPaymentReturn[]
   remittanceLines       CustomerRemittanceLine[]
   verifactuRecord       InvoiceVerifactuRecord?
+  accountingEntry       AccountingJournalEntry?
 
   @@unique([series, year, numberSequence])
   @@index([status, issueDate, id])
@@ -731,6 +745,7 @@ model CustomerPayment {
   dueDate   InvoiceDueDate          @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
   createdBy User                    @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   returns   CustomerPaymentReturn[]
+  accountingEntry AccountingJournalEntry?
 
   @@index([invoiceId, paymentDate, id])
   @@index([dueDateId, paymentDate, id])
@@ -763,26 +778,66 @@ model CustomerPaymentReturn {
 }
 
 model AccountingAccount {
-  id          String                  @id @default(uuid()) @db.Uuid
-  code        String                  @unique @db.VarChar(9)
-  name        String                  @db.VarChar(180)
-  status      AccountingAccountStatus @default(ACTIVE)
-  type        String                  @db.VarChar(80)
-  level       Int
-  isPostable  Boolean                 @default(true)
-  createdById String                  @db.Uuid
-  createdAt   DateTime                @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime                @updatedAt @db.Timestamptz(3)
+  id              String                  @id @default(uuid()) @db.Uuid
+  fiscalYearId    String                  @db.Uuid
+  sourceAccountId String?                 @db.Uuid
+  code            String                  @db.VarChar(9)
+  name            String                  @db.VarChar(180)
+  status          AccountingAccountStatus @default(ACTIVE)
+  type            String                  @db.VarChar(80)
+  level           Int
+  isPostable      Boolean                 @default(true)
+  createdById     String                  @db.Uuid
+  createdAt       DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime                @updatedAt @db.Timestamptz(3)
 
-  createdBy User                    @relation("AccountingAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  lines     AccountingJournalLine[]
+  fiscalYear     AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  sourceAccount  AccountingAccount?      @relation("AccountingAccountCopies", fields: [sourceAccountId], references: [id], onDelete: Restrict)
+  copiedAccounts AccountingAccount[]     @relation("AccountingAccountCopies")
+  createdBy      User                    @relation("AccountingAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  lines          AccountingJournalLine[]
 
-  @@index([status, code])
+  @@unique([fiscalYearId, code])
+  @@index([fiscalYearId, status, code])
+  @@index([sourceAccountId])
   @@map("accounting_accounts")
+}
+
+model AccountingFiscalYear {
+  id                 String                     @id @default(uuid()) @db.Uuid
+  companyId          String                     @db.Uuid
+  year               Int
+  startDate          DateTime                   @db.Date
+  endDate            DateTime                   @db.Date
+  status             AccountingFiscalYearStatus @default(OPEN)
+  planCode           String                     @db.VarChar(40)
+  planVersion        String                     @db.VarChar(20)
+  sourceFiscalYearId String?                    @db.Uuid
+  createdById        String                     @db.Uuid
+  closedById         String?                    @db.Uuid
+  closedAt           DateTime?                  @db.Timestamptz(3)
+  createdAt          DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                   @updatedAt @db.Timestamptz(3)
+
+  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  sourceFiscalYear  AccountingFiscalYear?    @relation("AccountingFiscalYearCopies", fields: [sourceFiscalYearId], references: [id], onDelete: Restrict)
+  copiedFiscalYears AccountingFiscalYear[]   @relation("AccountingFiscalYearCopies")
+  createdBy         User                     @relation("AccountingFiscalYearsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy          User?                    @relation("AccountingFiscalYearsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  accounts          AccountingAccount[]
+  journalEntries    AccountingJournalEntry[]
+
+  @@unique([companyId, year])
+  @@index([companyId, status, year])
+  @@index([sourceFiscalYearId])
+  @@map("accounting_fiscal_years")
 }
 
 model AccountingJournalEntry {
   id             String                @id @default(uuid()) @db.Uuid
+  fiscalYearId   String                @db.Uuid
+  invoiceId      String?               @unique @db.Uuid
+  customerPaymentId String?            @unique @db.Uuid
   year           Int
   sequence       Int
   number         String                @unique @db.VarChar(20)
@@ -797,11 +852,15 @@ model AccountingJournalEntry {
   createdAt      DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
 
-  createdBy User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  lines     AccountingJournalLine[]
+  fiscalYear AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  invoice    Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customerPayment CustomerPayment?    @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
+  createdBy  User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy  User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  lines      AccountingJournalLine[]
 
-  @@unique([year, sequence])
+  @@unique([fiscalYearId, sequence])
+  @@index([fiscalYearId, accountingDate, id])
   @@index([status, accountingDate, id])
   @@index([origin, accountingDate, id])
   @@map("accounting_journal_entries")

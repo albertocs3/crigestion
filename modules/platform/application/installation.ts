@@ -53,7 +53,9 @@ const platformPermissions = [
   ["Billing.Issue", "Emitir facturas"],
   ["Treasury.ManagePayments", "Registrar cobros de clientes"],
   ["Accounting.View", "Consultar contabilidad"],
-  ["Accounting.ManageEntries", "Gestionar asientos contables"]
+  ["Accounting.ManageEntries", "Gestionar asientos contables"],
+  ["Accounting.ManageExercises", "Gestionar ejercicios contables"],
+  ["Accounting.CloseExercises", "Cerrar ejercicios contables"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;
@@ -215,7 +217,6 @@ export async function initializePlatform(
           roleId: administratorRole.id
         }
       });
-
       await tx.reservedUserName.create({
         data: {
           normalizedUserName,

@@ -80,7 +80,9 @@ type PaymentConflictResult = {
     code:
       | "INVOICE_NOT_PAYABLE"
       | "INVOICE_DUE_DATE_NOT_PAYABLE"
-      | "PAYMENT_AMOUNT_EXCEEDS_PENDING";
+      | "PAYMENT_AMOUNT_EXCEEDS_PENDING"
+      | "PAYMENT_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"
+      | "PAYMENT_ACCOUNTING_ACCOUNT_NOT_AVAILABLE";
     message: string;
   };
 };
@@ -143,6 +145,9 @@ export async function registerCustomerPayment(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<RegisterCustomerPaymentResult> {
   const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
+    );
     const invoice = await tx.invoice.findUnique({
       where: { id: invoiceId },
       select: {
@@ -151,6 +156,8 @@ export async function registerCustomerPayment(
         paymentStatus: true,
         total: true,
         customerId: true,
+        customerCodeSnapshot: true,
+        customerLegalNameSnapshot: true,
         number: true
       }
     });
@@ -163,6 +170,10 @@ export async function registerCustomerPayment(
       return { kind: "invoice-not-payable" as const };
     }
 
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoice_due_dates" WHERE "id" = ${command.dueDateId}::uuid AND "invoiceId" = ${invoiceId}::uuid FOR UPDATE`
+    );
+
     const dueDate = await tx.invoiceDueDate.findFirst({
       where: {
         id: command.dueDateId,
@@ -171,7 +182,8 @@ export async function registerCustomerPayment(
       select: {
         id: true,
         amount: true,
-        status: true
+        status: true,
+        paymentMethod: true
       }
     });
 
@@ -195,18 +207,81 @@ export async function registerCustomerPayment(
       return { kind: "amount-exceeds-pending" as const };
     }
 
+    const paymentDate = parseDateOnly(command.paymentDate);
+    const installation = await tx.installation.findFirst({
+      where: { companyId: { not: null } },
+      select: { companyId: true }
+    });
+    const fiscalYears = installation?.companyId
+      ? await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "companyId" = ${installation.companyId}::uuid AND "status" = 'OPEN' AND "startDate" <= ${paymentDate} AND "endDate" >= ${paymentDate} FOR UPDATE`
+        )
+      : [];
+    const fiscalYear = fiscalYears[0];
+    if (!fiscalYear) {
+      return { kind: "accounting-fiscal-year-not-open" as const };
+    }
+    if (!/^\d{1,6}$/.test(invoice.customerCodeSnapshot)) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const customerAccountCode = `430${invoice.customerCodeSnapshot.padStart(6, "0")}`;
+    const treasuryAccountCode = dueDate.paymentMethod === "CASH" ? "570000000" : "572000000";
+    const accounts = await tx.accountingAccount.findMany({
+      where: {
+        fiscalYearId: fiscalYear.id,
+        code: { in: [customerAccountCode, treasuryAccountCode] },
+        status: "ACTIVE",
+        isPostable: true
+      },
+      select: { id: true, code: true }
+    });
+    if (accounts.length !== 2) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+
     const payment = await tx.customerPayment.create({
       data: {
         invoiceId,
         dueDateId: dueDate.id,
         source: "MANUAL",
-        paymentDate: parseDateOnly(command.paymentDate),
+        paymentDate,
         amount: paymentAmount,
         reference: command.reference,
         notes: command.notes,
         createdById: actor.id
       },
       select: { id: true }
+    });
+    const lastEntry = await tx.accountingJournalEntry.findFirst({
+      where: { fiscalYearId: fiscalYear.id },
+      orderBy: { sequence: "desc" },
+      select: { sequence: true }
+    });
+    const journalSequence = (lastEntry?.sequence ?? 0) + 1;
+    const journalNumber = `${paymentDate.getUTCFullYear()}/${journalSequence.toString().padStart(6, "0")}`;
+    const journalConcept = `Cobro factura ${invoice.number ?? invoice.id} - ${invoice.customerLegalNameSnapshot}`.slice(0, 240);
+    const accountingEntry = await tx.accountingJournalEntry.create({
+      data: {
+        fiscalYearId: fiscalYear.id,
+        customerPaymentId: payment.id,
+        year: paymentDate.getUTCFullYear(),
+        sequence: journalSequence,
+        number: journalNumber,
+        accountingDate: paymentDate,
+        concept: journalConcept,
+        origin: "CUSTOMER_PAYMENT",
+        totalDebit: paymentAmount,
+        totalCredit: paymentAmount,
+        createdById: actor.id,
+        lines: {
+          create: [
+            { accountId: accountByCode.get(treasuryAccountCode)!, position: 1, concept: journalConcept, debit: paymentAmount, credit: new Prisma.Decimal(0) },
+            { accountId: accountByCode.get(customerAccountCode)!, position: 2, concept: journalConcept, debit: new Prisma.Decimal(0), credit: paymentAmount }
+          ]
+        }
+      },
+      select: { id: true, number: true }
     });
     const dueDatePaid = existingPaid.plus(paymentAmount);
     const dueDateStatus = dueDatePaid.equals(dueDate.amount) ? "PAID" : "PENDING";
@@ -241,6 +316,8 @@ export async function registerCustomerPayment(
           amount: paymentAmount.toFixed(2),
           paymentDate: command.paymentDate,
           resultingPaymentStatus: paymentStatus,
+          accountingJournalEntryId: accountingEntry.id,
+          accountingJournalEntryNumber: accountingEntry.number,
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
@@ -305,6 +382,12 @@ export async function registerCustomerPayment(
         message: "El importe supera el saldo pendiente del vencimiento."
       }
     };
+  }
+  if (result.kind === "accounting-fiscal-year-not-open") {
+    return { ok: false, status: 409, error: { code: "PAYMENT_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", message: "No hay un ejercicio contable abierto para la fecha del cobro." } };
+  }
+  if (result.kind === "accounting-account-not-available") {
+    return { ok: false, status: 409, error: { code: "PAYMENT_ACCOUNTING_ACCOUNT_NOT_AVAILABLE", message: "Falta alguna cuenta contable activa e imputable necesaria para registrar el cobro." } };
   }
 
   return {

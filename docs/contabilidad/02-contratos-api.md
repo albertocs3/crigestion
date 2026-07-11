@@ -2,9 +2,12 @@
 
 ## 1. Primer Corte
 
-El primer corte expone cuentas contables y asientos manuales ya contabilizados.
-No incluye todavia plantillas, adjuntos, anulaciones, modificacion de asientos,
-ejercicios cerrados ni contabilizacion automatica desde facturas.
+El primer corte expone cuentas contables, ejercicios y asientos manuales ya
+contabilizados. Incluye el PGC PYMES y la copia del plan al siguiente ejercicio.
+No incluye todavia adjuntos, anulaciones, modificacion de asientos ni
+reaperturas. La emision de facturas ordinarias y rectificativas crea ya su
+asiento automatico. Los cobros manuales crean tambien su asiento; las
+devoluciones, cobros de remesas y pagos se incorporaran en cortes posteriores.
 
 Permisos:
 
@@ -12,6 +15,18 @@ Permisos:
 |---|---|
 | `Accounting.View` | Consultar cuentas y diario. |
 | `Accounting.ManageEntries` | Crear cuentas y asientos manuales. |
+| `Accounting.ManageExercises` | Crear la primera contabilidad. |
+| `Accounting.CloseExercises` | Cerrar ejercicios y crear el siguiente. |
+
+## 1.a Ejercicios contables
+
+- `GET /api/accounting/fiscal-years`: requiere `Accounting.View`.
+- `POST /api/accounting/fiscal-years`: crea la primera contabilidad con PGC
+  PYMES; requiere `Accounting.ManageExercises`, CSRF e `Idempotency-Key`.
+- `POST /api/accounting/fiscal-years/{fiscalYearId}/close`: regulariza grupos 6
+  y 7, genera el asiento de cierre patrimonial, crea el siguiente ejercicio,
+  copia sus cuentas y genera la apertura. Requiere `Accounting.CloseExercises`,
+  CSRF e `Idempotency-Key`.
 
 ## 2. `GET /api/accounting/accounts`
 

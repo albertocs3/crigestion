@@ -45,7 +45,8 @@ export async function GET(request: Request) {
     limit: searchParams.get("limit") ?? undefined,
     cursor: searchParams.get("cursor") ?? undefined,
     status: searchParams.get("status") ?? undefined,
-    search: searchParams.get("search") ?? undefined
+    search: searchParams.get("search") ?? undefined,
+    year: searchParams.get("year") ?? undefined
   });
 
   if (!payload.success) {

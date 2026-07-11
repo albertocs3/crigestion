@@ -1411,9 +1411,11 @@ async function createCustomer() {
     select: { id: true }
   });
 
-  return prisma.customer.create({
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026 } });
+  const code = ((await prisma.customer.count()) + 1).toString();
+  const customer = await prisma.customer.create({
     data: {
-      code: `C-${randomUUID().slice(0, 8)}`,
+      code,
       type: "COMPANY",
       legalName: "Cliente Facturacion SL",
       taxId: `B${Math.floor(Math.random() * 100000000)
@@ -1429,6 +1431,10 @@ async function createCustomer() {
       createdById: admin.id
     }
   });
+  await prisma.accountingAccount.create({
+    data: { fiscalYearId: fiscalYear.id, code: `430${code.padStart(6, "0")}`, name: `Cliente ${code}`, type: "ASSET", level: 4, isPostable: true, createdById: admin.id }
+  });
+  return customer;
 }
 
 async function defaultTaxRate() {
@@ -1622,12 +1628,26 @@ async function initializeForRoutes(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+  const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+  const admin = await prisma.user.findFirstOrThrow({ where: { normalizedUserName: "admin" }, select: { id: true } });
+  const fiscalYear = await prisma.accountingFiscalYear.create({
+    data: { companyId: installation.companyId!, year: 2026, startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"), planCode: "PGC_PYMES", planVersion: "2007", createdById: admin.id }
+  });
+  await prisma.accountingAccount.createMany({ data: [
+    { fiscalYearId: fiscalYear.id, code: "700000000", name: "Ventas de mercaderias", type: "INCOME", level: 4, isPostable: true, createdById: admin.id },
+    { fiscalYearId: fiscalYear.id, code: "705000000", name: "Prestaciones de servicios", type: "INCOME", level: 4, isPostable: true, createdById: admin.id },
+    { fiscalYearId: fiscalYear.id, code: "477000000", name: "Hacienda Publica, IVA repercutido", type: "LIABILITY", level: 4, isPostable: true, createdById: admin.id }
+    ,{ fiscalYearId: fiscalYear.id, code: "570000000", name: "Caja", type: "ASSET", level: 4, isPostable: true, createdById: admin.id }
+    ,{ fiscalYearId: fiscalYear.id, code: "572000000", name: "Bancos", type: "ASSET", level: 4, isPostable: true, createdById: admin.id }
+  ] });
 }
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
+    prisma.accountingJournalLine.deleteMany(),
+    prisma.accountingJournalEntry.deleteMany(),
 
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
@@ -1654,9 +1674,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.catalogItem.deleteMany(),
     prisma.catalogCategory.deleteMany(),
     prisma.catalogTaxRate.deleteMany(),
-    prisma.accountingJournalLine.deleteMany(),
-    prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),

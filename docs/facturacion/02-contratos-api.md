@@ -1,5 +1,12 @@
 # Contratos HTTP de Facturacion
 
+## Vencimientos de borrador
+
+`PUT /api/invoices/{invoiceId}/due-dates` requiere `Billing.ManageDrafts`,
+CSRF e `Idempotency-Key`. Recibe `dueDates` con `dueDate`, `amount` y
+`paymentMethod`; solo admite facturas ordinarias en borrador y exige suma exacta
+igual al total. Audita `INVOICE_DUE_DATES_UPDATED`.
+
 ## 1. Primer Corte MVP
 
 El primer corte implementara facturas ordinarias manuales.

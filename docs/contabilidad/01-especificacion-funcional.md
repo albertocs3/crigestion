@@ -540,6 +540,16 @@ Todos los informes:
 
 ## 20. Ejercicios
 
+La primera contabilidad se crea con el cuadro PGC PYMES versionado
+`PGC_PYMES/2021.1`, basado en el Real Decreto 1515/2007 consolidado a 2021. Las
+El cuadro incluye 768 cuentas oficiales no imputables y se incorporan subcuentas
+operativas de nueve digitos para clientes, proveedores, bancos, compras,
+ventas e IVA, hasta un total inicial de 790 cuentas. Cada cuenta pertenece a un
+unico ejercicio.
+
+Cada cliente nuevo crea automaticamente una subcuenta imputable `430xxxxxx` en
+el ejercicio abierto, usando seis digitos derivados de su codigo de cliente.
+
 ### Datos
 
 - Año.
@@ -579,6 +589,12 @@ El cierre genera:
 2. Asiento de cierre de cuentas patrimoniales.
 3. Ejercicio siguiente, si no existe.
 4. Asiento de apertura del ejercicio siguiente.
+
+La creacion del ejercicio siguiente copia en una sola transaccion todas las
+cuentas del ejercicio cerrado, incluidas las personalizadas y las inactivas,
+con nuevos identificadores y referencia a la cuenta de origen. No copia
+apuntes ni saldos. Si el ejercicio siguiente ya existe, el cierre se rechaza y
+no sobrescribe su plan contable.
 
 Se conservará un informe con validaciones, resultados, usuario y fecha.
 

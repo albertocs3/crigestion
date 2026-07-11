@@ -22,6 +22,7 @@ const moneySchema = z
   .default("0.00");
 
 export const createAccountingAccountSchema = z.object({
+  fiscalYearId: z.string().uuid().optional(),
   code: z.string().trim().regex(/^\d{1,9}$/, "La cuenta debe contener hasta nueve digitos."),
   name: z.string().trim().min(2).max(180),
   type: z.string().trim().min(2).max(80),
@@ -60,7 +61,8 @@ export const listAccountingAccountsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().uuid().optional(),
   status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
-  search: z.string().trim().min(1).max(120).optional()
+  search: z.string().trim().min(1).max(120).optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional()
 });
 
 export type CreateAccountingAccountCommand = z.infer<typeof createAccountingAccountSchema>;
@@ -86,7 +88,7 @@ export type JournalEntryDto = {
   number: string;
   accountingDate: string;
   concept: string;
-  origin: "MANUAL";
+  origin: "MANUAL" | "INVOICE" | "CUSTOMER_PAYMENT" | "REGULARIZATION" | "CLOSING" | "OPENING";
   status: "POSTED" | "VOIDED";
   totalDebit: string;
   totalCredit: string;
@@ -192,32 +194,55 @@ export async function createAccountingAccount(
   }
 
   try {
-    const account = await prisma.accountingAccount.create({
-      data: {
-        code: command.code,
-        name: command.name,
-        type: command.type,
-        level: command.level,
-        isPostable: command.isPostable,
-        createdById: actor.id
-      }
-    });
+    const result = await prisma.$transaction(async (tx) => {
+      const fiscalYears = command.fiscalYearId
+        ? await tx.$queryRaw<Array<{ id: string }>>(
+            Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "id" = ${command.fiscalYearId}::uuid AND "status" = 'OPEN' FOR UPDATE`
+          )
+        : await tx.$queryRaw<Array<{ id: string }>>(
+            Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "status" = 'OPEN' ORDER BY "year" DESC LIMIT 1 FOR UPDATE`
+          );
+      const fiscalYear = fiscalYears[0];
 
-    await prisma.auditEvent.create({
-      data: {
-        eventType: "ACCOUNTING_ACCOUNT_CREATED",
-        actorType: "USER",
-        payload: {
-          actorUserId: actor.id,
-          accountId: account.id,
-          code: account.code,
-          isPostable: account.isPostable,
-          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+      if (!fiscalYear) return null;
+      const account = await tx.accountingAccount.create({
+        data: {
+          fiscalYearId: fiscalYear.id,
+          code: command.code,
+          name: command.name,
+          type: command.type,
+          level: command.level,
+          isPostable: command.isPostable,
+          createdById: actor.id
         }
-      }
+      });
+      await tx.auditEvent.create({
+        data: {
+          eventType: "ACCOUNTING_ACCOUNT_CREATED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            accountId: account.id,
+            code: account.code,
+            isPostable: account.isPostable,
+            ...(context.correlationId ? { correlationId: context.correlationId } : {})
+          }
+        }
+      });
+      return account;
     });
 
-    return { ok: true, status: 201, value: mapAccount(account) };
+    if (!result) {
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "ACCOUNT_NOT_POSTABLE_CODE",
+          message: "Debe existir un ejercicio contable abierto."
+        }
+      };
+    }
+    return { ok: true, status: 201, value: mapAccount(result) };
   } catch (error) {
     if (isUniqueConstraintError(error)) {
       return {
@@ -272,9 +297,21 @@ export async function createManualJournalEntry(
 
   const result = await prisma.$transaction(async (tx) => {
     const accountIds = [...new Set(normalizedLines.map((line) => line.accountId))];
+    const accountingDate = parseDateOnly(command.accountingDate);
+    const year = accountingDate.getUTCFullYear();
+    const fiscalYears = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "year" = ${year} AND "status" = 'OPEN' AND "startDate" <= ${accountingDate} AND "endDate" >= ${accountingDate} FOR UPDATE`
+    );
+    const fiscalYear = fiscalYears[0];
+
+    if (!fiscalYear) {
+      return { kind: "account-not-postable" as const };
+    }
+
     const accounts = await tx.accountingAccount.findMany({
       where: {
         id: { in: accountIds },
+        fiscalYearId: fiscalYear.id,
         status: "ACTIVE",
         isPostable: true
       },
@@ -285,10 +322,8 @@ export async function createManualJournalEntry(
       return { kind: "account-not-postable" as const };
     }
 
-    const accountingDate = parseDateOnly(command.accountingDate);
-    const year = accountingDate.getUTCFullYear();
     const lastEntry = await tx.accountingJournalEntry.findFirst({
-      where: { year },
+      where: { fiscalYearId: fiscalYear.id },
       orderBy: { sequence: "desc" },
       select: { sequence: true }
     });
@@ -296,6 +331,7 @@ export async function createManualJournalEntry(
     const number = `${year}/${sequence.toString().padStart(6, "0")}`;
     const entry = await tx.accountingJournalEntry.create({
       data: {
+        fiscalYearId: fiscalYear.id,
         year,
         sequence,
         number,
@@ -393,8 +429,19 @@ export async function listAccountingAccounts(
   command: ListAccountingAccountsCommand,
   actor: SessionUser
 ): Promise<AccountingAccountList> {
+  const selectedFiscalYear = command.year
+    ? null
+    : await prisma.accountingFiscalYear.findFirst({
+        where: { status: "OPEN" },
+        orderBy: { year: "desc" },
+        select: { id: true }
+      });
   const records = await prisma.accountingAccount.findMany({
     where: {
+      ...(command.year ? { fiscalYear: { year: command.year } } : {}),
+      ...(!command.year && selectedFiscalYear
+        ? { fiscalYearId: selectedFiscalYear.id }
+        : {}),
       ...(command.status ? { status: command.status } : {}),
       ...(command.search
         ? {

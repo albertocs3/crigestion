@@ -8,6 +8,10 @@ import {
   listJournalEntries
 } from "@/modules/accounting/application/journal";
 import {
+  closeAccountingFiscalYear,
+  createInitialAccountingFiscalYear
+} from "@/modules/accounting/application/fiscalYears";
+import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
@@ -36,6 +40,76 @@ describe("accounting journal application service", () => {
   afterAll(async () => {
     await resetPlatformTables();
     await prisma.$disconnect();
+  });
+
+  it("creates a PGC PYMES plan and copies its accounts when closing the year", async () => {
+    await prisma.accountingFiscalYear.deleteMany();
+    const actor = await loginAsAdmin();
+    const created = await createInitialAccountingFiscalYear(2026, actor);
+
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.error.code);
+    expect(created.value).toMatchObject({ year: 2026, status: "OPEN", planCode: "PGC_PYMES" });
+    expect(created.value.accountCount).toBe(790);
+    const officialCodes = await prisma.accountingAccount.findMany({
+      where: {
+        fiscalYearId: created.value.id,
+        code: { in: ["100", "200", "300", "400", "500", "600", "700", "7993"] }
+      },
+      select: { code: true, isPostable: true }
+    });
+    expect(officialCodes).toHaveLength(8);
+    expect(officialCodes.every((account) => !account.isPostable)).toBe(true);
+
+    await createAccountingAccount(
+      { code: "572000099", name: "Banco personalizado", type: "ACTIVO", level: 9, isPostable: true },
+      actor
+    );
+    const [bank, revenue] = await Promise.all([
+      prisma.accountingAccount.findFirstOrThrow({
+        where: { fiscalYearId: created.value.id, code: "572000000" }
+      }),
+      prisma.accountingAccount.findFirstOrThrow({
+        where: { fiscalYearId: created.value.id, code: "705000000" }
+      })
+    ]);
+    const sale = await createManualJournalEntry(
+      {
+        accountingDate: "2026-07-10",
+        concept: "Venta antes del cierre",
+        lines: [
+          { accountId: bank.id, concept: "Banco", debit: "121.00", credit: "0.00" },
+          { accountId: revenue.id, concept: "Servicios", debit: "0.00", credit: "121.00" }
+        ]
+      },
+      actor
+    );
+    expect(sale.ok).toBe(true);
+    const closed = await closeAccountingFiscalYear(created.value.id, actor);
+
+    expect(closed.ok).toBe(true);
+    if (!closed.ok) throw new Error(closed.error.code);
+    expect(closed.value.closed.status).toBe("CLOSED");
+    expect(closed.value.next).toMatchObject({ year: 2027, status: "OPEN" });
+    expect(closed.value.next.accountCount).toBe(created.value.accountCount + 1);
+    const copied = await prisma.accountingAccount.findFirstOrThrow({
+      where: { fiscalYearId: closed.value.next.id, code: "572000099" }
+    });
+    expect(copied.sourceAccountId).not.toBeNull();
+    expect(await prisma.accountingJournalLine.count({ where: { accountId: copied.id } })).toBe(0);
+    const automaticEntries = await prisma.accountingJournalEntry.findMany({
+      where: { origin: { in: ["REGULARIZATION", "CLOSING", "OPENING"] } },
+      orderBy: [{ year: "asc" }, { sequence: "asc" }],
+      select: { origin: true, year: true, totalDebit: true, totalCredit: true, lines: true }
+    });
+    expect(automaticEntries.map((entry) => entry.origin)).toEqual([
+      "REGULARIZATION",
+      "CLOSING",
+      "OPENING"
+    ]);
+    expect(automaticEntries.every((entry) => entry.totalDebit.equals(entry.totalCredit))).toBe(true);
+    expect(automaticEntries[2]).toMatchObject({ origin: "OPENING", year: 2027 });
+    expect(automaticEntries[2]?.lines).toHaveLength(2);
   });
 
   it("creates postable accounts and balanced manual journal entries", async () => {
@@ -239,6 +313,19 @@ async function initializeForAccounting(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+
+  await createOpenFiscalYear();
+}
+
+async function createOpenFiscalYear(): Promise<void> {
+  const installation = await prisma.installation.findFirstOrThrow();
+  await prisma.accountingFiscalYear.create({
+    data: {
+      companyId: installation.companyId!, year: 2026,
+      startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"),
+      planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId!
+    }
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {
@@ -246,6 +333,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),

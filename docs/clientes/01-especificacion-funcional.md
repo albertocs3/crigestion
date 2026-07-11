@@ -94,6 +94,16 @@ Los módulos de Incidencias y Atención al Cliente podrán consultar clientes y 
 
 ## 4. Cliente
 
+El alta asigna un codigo numerico automatico y crea en la misma transaccion su
+subcuenta contable en el ejercicio abierto. La subcuenta se forma con el prefijo
+`430` y seis digitos de cliente: el cliente `20` genera `430000020`. La cuenta
+es imputable, de tipo activo y usa como nombre la razon social del cliente.
+
+Si no existe ejercicio contable abierto, la numeracion supera seis digitos o la
+subcuenta ya existe, el alta se rechaza completa: no queda un cliente sin cuenta
+contable. La cuenta se copia posteriormente con el resto del plan durante el
+cierre anual.
+
 ### 4.1 Tipos
 
 - Empresa.

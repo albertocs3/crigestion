@@ -386,6 +386,15 @@ La relación y sus excepciones deberán validarse durante la revisión normativa
 
 ## 14. Vencimientos
 
+En una factura ordinaria en borrador se pueden sustituir los vencimientos por
+entre 1 y 24 cuotas, cada una con fecha, importe y metodo de pago propios. Las
+posiciones las asigna el servidor y la suma debe coincidir exactamente con el
+total de la factura. Ninguna fecha puede ser anterior a la emision.
+
+Los vencimientos quedan bloqueados al emitir. Si se modifican lineas despues de
+repartir varias cuotas, la emision se rechaza hasta volver a cuadrar el reparto.
+Rectificativas, cobros y remesas conservan sus reglas actuales y referencias.
+
 Los vencimientos:
 
 - Se calculan según las condiciones de pago del cliente.

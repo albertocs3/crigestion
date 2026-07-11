@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
@@ -7,7 +8,8 @@ import {
   createInvoiceDraft,
   createInvoiceDraftSchema,
   issueInvoice,
-  issueInvoiceSchema
+  issueInvoiceSchema,
+  replaceInvoiceDueDates
 } from "@/modules/billing/application/invoices";
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
@@ -148,6 +150,10 @@ describe("billing invoices application service", () => {
     const verifactuRecord = await prisma.invoiceVerifactuRecord.findUniqueOrThrow({
       where: { invoiceId: draft.value.id }
     });
+    const accountingEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({
+      where: { invoiceId: draft.value.id },
+      include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
+    });
     const auditPayload = JSON.stringify(issuedAudit.payload);
 
     expect(draft.value).toMatchObject({
@@ -195,6 +201,21 @@ describe("billing invoices application service", () => {
       }
     });
     expect(verifactuRecord.status).toBe("PENDING");
+    expect(accountingEntry).toMatchObject({
+      origin: "INVOICE",
+      number: "2026/000001",
+      totalDebit: new Prisma.Decimal("121.00"),
+      totalCredit: new Prisma.Decimal("121.00")
+    });
+    expect(accountingEntry.lines.map((line) => ({
+      account: line.account.code,
+      debit: line.debit.toFixed(2),
+      credit: line.credit.toFixed(2)
+    }))).toEqual([
+      { account: `430${customer.code.padStart(6, "0")}`, debit: "121.00", credit: "0.00" },
+      { account: "705000000", debit: "0.00", credit: "100.00" },
+      { account: "477000000", debit: "0.00", credit: "21.00" }
+    ]);
     expect(issuedAudit.payload).toMatchObject({
       actorUserId: actor.id,
       invoiceId: draft.value.id,
@@ -453,6 +474,13 @@ describe("billing invoices application service", () => {
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "INVOICE_RECTIFICATION_CREATED" }
     });
+    if (!rectification.ok) {
+      throw new Error(rectification.error.code);
+    }
+    const accountingEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({
+      where: { invoiceId: rectification.value.id },
+      include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
+    });
 
     expect(rectification).toMatchObject({
       ok: true,
@@ -494,6 +522,21 @@ describe("billing invoices application service", () => {
     expect(storedOriginal.total.toFixed(2)).toBe("121.00");
     expect(storedOriginal.lines[0]?.quantity.toFixed(3)).toBe("1.000");
     expect(storedOriginal.lines[0]?.lineTotal.toFixed(2)).toBe("121.00");
+    expect(accountingEntry).toMatchObject({
+      origin: "INVOICE",
+      number: "2026/000002",
+      totalDebit: new Prisma.Decimal("121.00"),
+      totalCredit: new Prisma.Decimal("121.00")
+    });
+    expect(accountingEntry.lines.map((line) => ({
+      account: line.account.code,
+      debit: line.debit.toFixed(2),
+      credit: line.credit.toFixed(2)
+    }))).toEqual([
+      { account: "705000000", debit: "100.00", credit: "0.00" },
+      { account: "477000000", debit: "21.00", credit: "0.00" },
+      { account: `430${original.customer.code.padStart(6, "0")}`, debit: "0.00", credit: "121.00" }
+    ]);
     expect(duplicate).toEqual({
       ok: false,
       status: 409,
@@ -510,8 +553,44 @@ describe("billing invoices application service", () => {
       total: "-121.00",
       reason: "AMOUNT_ERROR",
       issueDate: "2026-07-08",
+      accountingJournalEntryId: accountingEntry.id,
+      accountingJournalEntryNumber: "2026/000002",
       correlationId: "invoice-rectification-0001"
     });
+  });
+
+  it("rolls back a rectification when a required accounting account is unavailable", async () => {
+    const actor = await loginAsAdmin();
+    const original = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Rollback Rectificativa SL"
+    });
+    await prisma.accountingAccount.updateMany({
+      where: { code: "477000000" },
+      data: { status: "INACTIVE" }
+    });
+
+    const result = await createInvoiceRectification(
+      original.issued.value.id,
+      { issueDate: "2026-07-08", reason: "AMOUNT_ERROR", notes: null },
+      actor
+    );
+    const storedOriginal = await prisma.invoice.findUniqueOrThrow({
+      where: { id: original.issued.value.id },
+      select: { status: true }
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE",
+        message: "Falta alguna cuenta contable activa e imputable necesaria para emitir la factura."
+      }
+    });
+    expect(storedOriginal.status).toBe("ISSUED");
+    expect(await prisma.invoice.count({ where: { documentType: "RECTIFICATION" } })).toBe(0);
+    expect(await prisma.invoiceNumberSequence.findUnique({ where: { series_year: { series: "R", year: 2026 } } })).toBeNull();
   });
 
   it("registers partial and full customer payments with safe audit payloads", async () => {
@@ -597,6 +676,11 @@ describe("billing invoices application service", () => {
       where: { invoiceId: issued.value.id },
       orderBy: { paymentDate: "asc" }
     });
+    const paymentEntries = await prisma.accountingJournalEntry.findMany({
+      where: { origin: "CUSTOMER_PAYMENT" },
+      orderBy: { sequence: "asc" },
+      include: { lines: { orderBy: { position: "asc" }, include: { account: true } } }
+    });
     const dueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
       where: { id: dueDateId }
     });
@@ -632,6 +716,15 @@ describe("billing invoices application service", () => {
       "60.00",
       "61.00"
     ]);
+    expect(paymentEntries.map((entry) => ({
+      paymentId: entry.customerPaymentId,
+      debit: entry.totalDebit.toFixed(2),
+      credit: entry.totalCredit.toFixed(2),
+      accounts: entry.lines.map((line) => line.account.code)
+    }))).toEqual([
+      { paymentId: storedPayments[0]?.id, debit: "60.00", credit: "60.00", accounts: ["572000000", `430${customer.code.padStart(6, "0")}`] },
+      { paymentId: storedPayments[1]?.id, debit: "61.00", credit: "61.00", accounts: ["572000000", `430${customer.code.padStart(6, "0")}`] }
+    ]);
     expect(dueDate.status).toBe("PAID");
     expect(auditEvents).toHaveLength(2);
     expect(auditEvents[0]?.payload).toMatchObject({
@@ -643,6 +736,10 @@ describe("billing invoices application service", () => {
       paymentDate: "2026-07-10",
       resultingPaymentStatus: "PARTIALLY_PAID",
       correlationId: "customer-payment-0001"
+    });
+    expect(auditEvents[0]?.payload).toMatchObject({
+      accountingJournalEntryId: paymentEntries[0]?.id,
+      accountingJournalEntryNumber: "2026/000002"
     });
     expect(auditPayload).not.toContain(customer.taxId);
     expect(auditPayload).not.toContain("No debe aparecer");
@@ -830,6 +927,36 @@ describe("billing invoices application service", () => {
       correlationId: "customer-payment-return-0001"
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain("Texto interno");
+  });
+
+  it("posts cash payments to 570 and rolls back when the treasury account is unavailable", async () => {
+    const actor = await loginAsAdmin();
+    const cashInvoice = await createIssuedInvoiceWithOneLine(actor, { issueDate: "2026-07-07", legalName: "Cliente Cobro Caja SL" });
+    const cashDueDateId = cashInvoice.issued.value.dueDates[0]!.id;
+    await prisma.invoiceDueDate.update({ where: { id: cashDueDateId }, data: { paymentMethod: "CASH" } });
+    const cashResult = await registerCustomerPayment(
+      cashInvoice.issued.value.id,
+      { dueDateId: cashDueDateId, paymentDate: "2026-07-10", amount: "121.00", reference: null, notes: null },
+      actor
+    );
+    const cashEntry = await prisma.accountingJournalEntry.findFirstOrThrow({
+      where: { origin: "CUSTOMER_PAYMENT" },
+      include: { lines: { orderBy: { position: "asc" }, include: { account: true } } }
+    });
+    expect(cashResult.ok).toBe(true);
+    expect(cashEntry.lines.map((line) => line.account.code)).toEqual(["570000000", `430${cashInvoice.customer.code.padStart(6, "0")}`]);
+
+    const bankInvoice = await createIssuedInvoiceWithOneLine(actor, { issueDate: "2026-07-08", legalName: "Cliente Rollback Cobro SL" });
+    const bankDueDateId = bankInvoice.issued.value.dueDates[0]!.id;
+    await prisma.accountingAccount.updateMany({ where: { code: "572000000" }, data: { status: "INACTIVE" } });
+    const failed = await registerCustomerPayment(
+      bankInvoice.issued.value.id,
+      { dueDateId: bankDueDateId, paymentDate: "2026-07-11", amount: "121.00", reference: null, notes: null },
+      actor
+    );
+    expect(failed).toEqual({ ok: false, status: 409, error: { code: "PAYMENT_ACCOUNTING_ACCOUNT_NOT_AVAILABLE", message: "Falta alguna cuenta contable activa e imputable necesaria para registrar el cobro." } });
+    expect(await prisma.customerPayment.count({ where: { invoiceId: bankInvoice.issued.value.id } })).toBe(0);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: bankInvoice.issued.value.id } })).paymentStatus).toBe("PENDING");
   });
 
   it("marks customer due dates as unpaid and blocks ordinary collection", async () => {
@@ -1143,6 +1270,34 @@ describe("billing invoices application service", () => {
     });
   });
 
+  it("replaces a draft due date with multiple dates whose sum matches the invoice", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(actor.id);
+    const taxRate = await defaultTaxRate();
+    const draft = await createInvoiceDraft({ customerId: customer.id, issueDate: "2026-07-07", operationDate: "2026-07-07", notes: null }, actor);
+    if (!draft.ok) throw new Error(draft.error.code);
+    const line = await addInvoiceLine(draft.value.id, { description: "Servicio", quantity: "1.000", unitPrice: "100.00", discountPercent: "0.00", discountAmount: "0.00", taxRateId: taxRate.id }, actor);
+    if (!line.ok) throw new Error(line.error.code);
+
+    const mismatch = await replaceInvoiceDueDates(draft.value.id, { dueDates: [
+      { dueDate: "2026-08-01", amount: "60.00", paymentMethod: "BANK_TRANSFER" },
+      { dueDate: "2026-09-01", amount: "60.00", paymentMethod: "DIRECT_DEBIT" }
+    ] }, actor);
+    expect(mismatch).toMatchObject({ ok: false, error: { code: "INVOICE_DUE_DATES_TOTAL_MISMATCH" } });
+
+    const replaced = await replaceInvoiceDueDates(draft.value.id, { dueDates: [
+      { dueDate: "2026-08-01", amount: "60.00", paymentMethod: "BANK_TRANSFER" },
+      { dueDate: "2026-09-01", amount: "61.00", paymentMethod: "DIRECT_DEBIT" }
+    ] }, actor, { correlationId: "due-dates-0001" });
+    expect(replaced).toMatchObject({ ok: true, value: { dueDates: [
+      { position: 1, dueDate: "2026-08-01", amount: "60.00" },
+      { position: 2, dueDate: "2026-09-01", amount: "61.00" }
+    ] } });
+    const issued = await issueInvoice(draft.value.id, { issueDate: "2026-07-07" }, actor);
+    expect(issued.ok).toBe(true);
+    expect(await prisma.auditEvent.count({ where: { eventType: "INVOICE_DUE_DATES_UPDATED" } })).toBe(1);
+  });
+
   it("rejects customer payments for drafts and overpayments", async () => {
     const actor = await loginAsAdmin();
     const customer = await createCustomer(actor.id);
@@ -1321,9 +1476,12 @@ async function createCustomer(
     paymentFixedDay?: number | null;
   } = {}
 ) {
-  return prisma.customer.create({
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026 } });
+  const customerNumber = (await prisma.customer.count()) + 1;
+  const code = customerNumber.toString();
+  const customer = await prisma.customer.create({
     data: {
-      code: `C-${randomUUID().slice(0, 8)}`,
+      code,
       type: "COMPANY",
       legalName: "Cliente Facturacion SL",
       taxId: `B${Math.floor(Math.random() * 100000000)
@@ -1342,6 +1500,18 @@ async function createCustomer(
       ...overrides
     }
   });
+  await prisma.accountingAccount.create({
+    data: {
+      fiscalYearId: fiscalYear.id,
+      code: `430${code.padStart(6, "0")}`,
+      name: `Cliente ${code}`,
+      type: "ASSET",
+      level: 4,
+      isPostable: true,
+      createdById
+    }
+  });
+  return customer;
 }
 
 async function initializeForBilling(): Promise<void> {
@@ -1355,12 +1525,36 @@ async function initializeForBilling(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+  const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+  const admin = await prisma.user.findFirstOrThrow({ where: { userName: "admin" }, select: { id: true } });
+  const fiscalYear = await prisma.accountingFiscalYear.create({
+    data: {
+      companyId: installation.companyId!,
+      year: 2026,
+      startDate: new Date("2026-01-01T00:00:00.000Z"),
+      endDate: new Date("2026-12-31T00:00:00.000Z"),
+      planCode: "PGC_PYMES",
+      planVersion: "2007",
+      createdById: admin.id
+    }
+  });
+  await prisma.accountingAccount.createMany({
+    data: [
+      { fiscalYearId: fiscalYear.id, code: "700000000", name: "Ventas de mercaderias", type: "INCOME", level: 4, isPostable: true, createdById: admin.id },
+      { fiscalYearId: fiscalYear.id, code: "705000000", name: "Prestaciones de servicios", type: "INCOME", level: 4, isPostable: true, createdById: admin.id },
+      { fiscalYearId: fiscalYear.id, code: "477000000", name: "Hacienda Publica, IVA repercutido", type: "LIABILITY", level: 4, isPostable: true, createdById: admin.id }
+      ,{ fiscalYearId: fiscalYear.id, code: "570000000", name: "Caja", type: "ASSET", level: 4, isPostable: true, createdById: admin.id }
+      ,{ fiscalYearId: fiscalYear.id, code: "572000000", name: "Bancos", type: "ASSET", level: 4, isPostable: true, createdById: admin.id }
+    ]
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
+    prisma.accountingJournalLine.deleteMany(),
+    prisma.accountingJournalEntry.deleteMany(),
 
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
@@ -1387,9 +1581,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.catalogItem.deleteMany(),
     prisma.catalogCategory.deleteMany(),
     prisma.catalogTaxRate.deleteMany(),
-    prisma.accountingJournalLine.deleteMany(),
-    prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),

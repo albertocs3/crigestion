@@ -63,6 +63,13 @@ export const addInvoiceLineSchema = z.object({
 export const issueInvoiceSchema = z.object({
   issueDate: dateOnlySchema
 }).strict();
+export const replaceInvoiceDueDatesSchema = z.object({
+  dueDates: z.array(z.object({
+    dueDate: dateOnlySchema,
+    amount: moneySchema.refine((value) => new Prisma.Decimal(value).gt(0), "El importe debe ser mayor que cero."),
+    paymentMethod: z.enum(["BANK_TRANSFER", "CASH", "DIRECT_DEBIT"])
+  }).strict()).min(1).max(24)
+}).strict();
 export const createInvoiceRectificationSchema = z.object({
   issueDate: dateOnlySchema,
   reason: z
@@ -90,6 +97,7 @@ export const listInvoicesSchema = z.object({
 export type CreateInvoiceDraftCommand = z.infer<typeof createInvoiceDraftSchema>;
 export type AddInvoiceLineCommand = z.infer<typeof addInvoiceLineSchema>;
 export type IssueInvoiceCommand = z.infer<typeof issueInvoiceSchema>;
+export type ReplaceInvoiceDueDatesCommand = z.infer<typeof replaceInvoiceDueDatesSchema>;
 export type CreateInvoiceRectificationCommand = z.infer<
   typeof createInvoiceRectificationSchema
 >;
@@ -266,7 +274,7 @@ type InvoiceNotIssuableResult = {
   ok: false;
   status: 409;
   error: {
-    code: "INVOICE_NOT_ISSUABLE" | "INVOICE_EMPTY" | "INVOICE_CHRONOLOGY_VIOLATION";
+    code: "INVOICE_NOT_ISSUABLE" | "INVOICE_EMPTY" | "INVOICE_CHRONOLOGY_VIOLATION" | "INVOICE_DUE_DATES_TOTAL_MISMATCH" | "INVOICE_DUE_DATE_BEFORE_ISSUE_DATE" | "INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN" | "INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE" | "INVOICE_ACCOUNTING_ENTRY_UNBALANCED";
     message: string;
   };
 };
@@ -301,6 +309,12 @@ export type AddInvoiceLineResult =
   | CatalogItemNotFoundResult
   | CatalogTaxRateNotFoundResult;
 
+export type ReplaceInvoiceDueDatesResult =
+  | { ok: true; status: 200; value: InvoiceDetail }
+  | InvoiceNotFoundResult
+  | InvoiceNotEditableResult
+  | InvoiceNotIssuableResult;
+
 export type IssueInvoiceResult =
   | { ok: true; status: 200; value: InvoiceDetail }
   | InvoiceNotFoundResult
@@ -321,7 +335,8 @@ type InvoiceNotRectifiableResult = {
 export type CreateInvoiceRectificationResult =
   | { ok: true; status: 201; value: InvoiceDetail }
   | InvoiceNotFoundResult
-  | InvoiceNotRectifiableResult;
+  | InvoiceNotRectifiableResult
+  | InvoiceNotIssuableResult;
 
 export async function listInvoices(
   command: ListInvoicesCommand,
@@ -626,6 +641,64 @@ export async function addInvoiceLine(
   };
 }
 
+export async function replaceInvoiceDueDates(
+  invoiceId: string,
+  command: ReplaceInvoiceDueDatesCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<ReplaceInvoiceDueDatesResult> {
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
+    );
+    const invoice = await tx.invoice.findUnique({
+      where: { id: invoiceId },
+      select: { id: true, documentType: true, status: true, issueDate: true, total: true }
+    });
+    if (!invoice) return { kind: "not-found" as const };
+    if (invoice.status !== "DRAFT" || invoice.documentType !== "STANDARD") {
+      return { kind: "not-editable" as const };
+    }
+    const total = command.dueDates.reduce(
+      (sum, dueDate) => sum.plus(dueDate.amount),
+      new Prisma.Decimal(0)
+    );
+    if (!total.equals(invoice.total)) return { kind: "total-mismatch" as const };
+    if (command.dueDates.some((dueDate) => parseDateOnly(dueDate.dueDate) < invoice.issueDate)) {
+      return { kind: "before-issue" as const };
+    }
+    await tx.invoiceDueDate.deleteMany({ where: { invoiceId } });
+    await tx.invoiceDueDate.createMany({
+      data: command.dueDates.map((dueDate, index) => ({
+        invoiceId,
+        position: index + 1,
+        dueDate: parseDateOnly(dueDate.dueDate),
+        amount: dueDate.amount,
+        paymentMethod: dueDate.paymentMethod
+      }))
+    });
+    await tx.auditEvent.create({
+      data: {
+        eventType: "INVOICE_DUE_DATES_UPDATED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          invoiceId,
+          dueDateCount: command.dueDates.length,
+          total: total.toFixed(2),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {})
+        }
+      }
+    });
+    return { kind: "updated" as const, invoice: await findInvoiceDetail(tx, invoiceId) };
+  });
+  if (result.kind === "not-found") return invoiceNotFound();
+  if (result.kind === "not-editable") return invoiceNotEditable();
+  if (result.kind === "total-mismatch") return invoiceDueDatesTotalMismatch();
+  if (result.kind === "before-issue") return invoiceDueDateBeforeIssueDate();
+  return { ok: true, status: 200, value: mapInvoiceDetail(result.invoice) };
+}
+
 export async function issueInvoice(
   invoiceId: string,
   command: IssueInvoiceCommand,
@@ -633,6 +706,9 @@ export async function issueInvoice(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<IssueInvoiceResult> {
   const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
+    );
     const invoice = await tx.invoice.findUnique({
       where: { id: invoiceId },
       select: {
@@ -642,7 +718,17 @@ export async function issueInvoice(
         year: true,
         issueDate: true,
         total: true,
+        taxAmount: true,
         customerId: true,
+        customerCodeSnapshot: true,
+        customerLegalNameSnapshot: true,
+        lines: {
+          select: {
+            catalogItemKindSnapshot: true,
+            lineTaxableBase: true
+          }
+        },
+        dueDates: { select: { dueDate: true, amount: true } },
         _count: {
           select: {
             lines: true
@@ -664,6 +750,16 @@ export async function issueInvoice(
     }
 
     const issueDate = parseDateOnly(command.issueDate);
+    const dueDateTotal = invoice.dueDates.reduce(
+      (total, dueDate) => total.plus(dueDate.amount),
+      new Prisma.Decimal(0)
+    );
+    if (invoice.dueDates.length === 0 || !dueDateTotal.equals(invoice.total)) {
+      return { kind: "due-dates-total-mismatch" as const };
+    }
+    if (invoice.dueDates.some((dueDate) => dueDate.dueDate < issueDate)) {
+      return { kind: "due-date-before-issue" as const };
+    }
     const chronologyViolation = await hasChronologyViolation(
       tx,
       invoice.series,
@@ -674,8 +770,106 @@ export async function issueInvoice(
       return { kind: "chronology-violation" as const };
     }
 
+    const installation = await tx.installation.findFirst({
+      where: { companyId: { not: null } },
+      select: { companyId: true }
+    });
+    const fiscalYears = installation?.companyId
+      ? await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "companyId" = ${installation.companyId}::uuid AND "status" = 'OPEN' AND "startDate" <= ${issueDate} AND "endDate" >= ${issueDate} FOR UPDATE`
+        )
+      : [];
+    const fiscalYear = fiscalYears[0];
+    if (!fiscalYear) {
+      return { kind: "accounting-fiscal-year-not-open" as const };
+    }
+
+    if (!/^\d{1,6}$/.test(invoice.customerCodeSnapshot)) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const customerAccountCode = `430${invoice.customerCodeSnapshot.padStart(6, "0")}`;
+    const productBase = invoice.lines.reduce(
+      (total, line) => line.catalogItemKindSnapshot === "PRODUCT" ? total.plus(line.lineTaxableBase) : total,
+      new Prisma.Decimal(0)
+    );
+    const serviceBase = invoice.lines.reduce(
+      (total, line) => line.catalogItemKindSnapshot !== "PRODUCT" ? total.plus(line.lineTaxableBase) : total,
+      new Prisma.Decimal(0)
+    );
+    const requiredCodes = [
+      customerAccountCode,
+      ...(productBase.isZero() ? [] : ["700000000"]),
+      ...(serviceBase.isZero() ? [] : ["705000000"]),
+      ...(invoice.taxAmount.isZero() ? [] : ["477000000"])
+    ];
+    const accounts = await tx.accountingAccount.findMany({
+      where: {
+        fiscalYearId: fiscalYear.id,
+        code: { in: requiredCodes },
+        status: "ACTIVE",
+        isPostable: true
+      },
+      select: { id: true, code: true }
+    });
+    if (accounts.length !== requiredCodes.length) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+    const totalCredit = productBase.plus(serviceBase).plus(invoice.taxAmount);
+    if (!invoice.total.equals(totalCredit)) {
+      return { kind: "accounting-entry-unbalanced" as const };
+    }
+
     const sequence = await reserveInvoiceNumber(tx, invoice.series, issueDate);
     const number = formatInvoiceNumber(invoice.series, sequence.year, sequence.value);
+
+    const lastEntry = await tx.accountingJournalEntry.findFirst({
+      where: { fiscalYearId: fiscalYear.id },
+      orderBy: { sequence: "desc" },
+      select: { sequence: true }
+    });
+    const journalSequence = (lastEntry?.sequence ?? 0) + 1;
+    const journalNumber = `${issueDate.getUTCFullYear()}/${journalSequence.toString().padStart(6, "0")}`;
+    const journalConcept = `Factura ${number} - ${invoice.customerLegalNameSnapshot}`.slice(0, 240);
+    const creditLines = [
+      ...(productBase.isZero() ? [] : [{ code: "700000000", amount: productBase }]),
+      ...(serviceBase.isZero() ? [] : [{ code: "705000000", amount: serviceBase }]),
+      ...(invoice.taxAmount.isZero() ? [] : [{ code: "477000000", amount: invoice.taxAmount }])
+    ];
+    const accountingEntry = await tx.accountingJournalEntry.create({
+      data: {
+        fiscalYearId: fiscalYear.id,
+        invoiceId,
+        year: issueDate.getUTCFullYear(),
+        sequence: journalSequence,
+        number: journalNumber,
+        accountingDate: issueDate,
+        concept: journalConcept,
+        origin: "INVOICE",
+        totalDebit: invoice.total,
+        totalCredit,
+        createdById: actor.id,
+        lines: {
+          create: [
+            {
+              accountId: accountByCode.get(customerAccountCode)!,
+              position: 1,
+              concept: journalConcept,
+              debit: invoice.total,
+              credit: new Prisma.Decimal(0)
+            },
+            ...creditLines.map((line, index) => ({
+              accountId: accountByCode.get(line.code)!,
+              position: index + 2,
+              concept: journalConcept,
+              debit: new Prisma.Decimal(0),
+              credit: line.amount
+            }))
+          ]
+        }
+      },
+      select: { id: true, number: true }
+    });
 
     await tx.invoice.update({
       where: { id: invoiceId },
@@ -709,6 +903,8 @@ export async function issueInvoice(
           number,
           customerId: invoice.customerId,
           total: invoice.total.toFixed(2),
+          accountingJournalEntryId: accountingEntry.id,
+          accountingJournalEntryNumber: accountingEntry.number,
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
@@ -735,6 +931,21 @@ export async function issueInvoice(
   if (result.kind === "chronology-violation") {
     return invoiceChronologyViolation();
   }
+  if (result.kind === "due-dates-total-mismatch") {
+    return invoiceDueDatesTotalMismatch();
+  }
+  if (result.kind === "due-date-before-issue") {
+    return invoiceDueDateBeforeIssueDate();
+  }
+  if (result.kind === "accounting-fiscal-year-not-open") {
+    return invoiceAccountingFiscalYearNotOpen();
+  }
+  if (result.kind === "accounting-account-not-available") {
+    return invoiceAccountingAccountNotAvailable();
+  }
+  if (result.kind === "accounting-entry-unbalanced") {
+    return invoiceAccountingEntryUnbalanced();
+  }
 
   return {
     ok: true,
@@ -750,6 +961,9 @@ export async function createInvoiceRectification(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<CreateInvoiceRectificationResult> {
   const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
+    );
     const original = await tx.invoice.findUnique({
       where: { id: invoiceId },
       select: {
@@ -838,8 +1052,59 @@ export async function createInvoiceRectification(
       return { kind: "chronology-violation" as const };
     }
 
+    const installation = await tx.installation.findFirst({
+      where: { companyId: { not: null } },
+      select: { companyId: true }
+    });
+    const fiscalYears = installation?.companyId
+      ? await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "companyId" = ${installation.companyId}::uuid AND "status" = 'OPEN' AND "startDate" <= ${issueDate} AND "endDate" >= ${issueDate} FOR UPDATE`
+        )
+      : [];
+    const fiscalYear = fiscalYears[0];
+    if (!fiscalYear) {
+      return { kind: "accounting-fiscal-year-not-open" as const };
+    }
+    if (!/^\d{1,6}$/.test(original.customerCodeSnapshot)) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const customerAccountCode = `430${original.customerCodeSnapshot.padStart(6, "0")}`;
+    const productBase = original.lines.reduce(
+      (total, line) => line.catalogItemKindSnapshot === "PRODUCT" ? total.plus(line.lineTaxableBase) : total,
+      new Prisma.Decimal(0)
+    );
+    const serviceBase = original.lines.reduce(
+      (total, line) => line.catalogItemKindSnapshot !== "PRODUCT" ? total.plus(line.lineTaxableBase) : total,
+      new Prisma.Decimal(0)
+    );
+    const requiredCodes = [
+      customerAccountCode,
+      ...(productBase.isZero() ? [] : ["700000000"]),
+      ...(serviceBase.isZero() ? [] : ["705000000"]),
+      ...(original.taxAmount.isZero() ? [] : ["477000000"])
+    ];
+    const accounts = await tx.accountingAccount.findMany({
+      where: { fiscalYearId: fiscalYear.id, code: { in: requiredCodes }, status: "ACTIVE", isPostable: true },
+      select: { id: true, code: true }
+    });
+    if (accounts.length !== requiredCodes.length) {
+      return { kind: "accounting-account-not-available" as const };
+    }
+    const totalDebit = productBase.plus(serviceBase).plus(original.taxAmount);
+    if (!original.total.equals(totalDebit)) {
+      return { kind: "accounting-entry-unbalanced" as const };
+    }
+    const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+
     const sequence = await reserveInvoiceNumber(tx, "R", issueDate);
     const number = formatInvoiceNumber("R", sequence.year, sequence.value);
+    const lastEntry = await tx.accountingJournalEntry.findFirst({
+      where: { fiscalYearId: fiscalYear.id },
+      orderBy: { sequence: "desc" },
+      select: { sequence: true }
+    });
+    const journalSequence = (lastEntry?.sequence ?? 0) + 1;
+    const journalNumber = `${issueDate.getUTCFullYear()}/${journalSequence.toString().padStart(6, "0")}`;
     const rectification = await tx.invoice.create({
       data: {
         documentType: "RECTIFICATION",
@@ -915,6 +1180,47 @@ export async function createInvoiceRectification(
       });
     }
 
+    const journalConcept = `Rectificativa ${number} de ${original.number ?? original.id}`.slice(0, 240);
+    const debitLines = [
+      ...(productBase.isZero() ? [] : [{ code: "700000000", amount: productBase }]),
+      ...(serviceBase.isZero() ? [] : [{ code: "705000000", amount: serviceBase }]),
+      ...(original.taxAmount.isZero() ? [] : [{ code: "477000000", amount: original.taxAmount }])
+    ];
+    const accountingEntry = await tx.accountingJournalEntry.create({
+      data: {
+        fiscalYearId: fiscalYear.id,
+        invoiceId: rectification.id,
+        year: issueDate.getUTCFullYear(),
+        sequence: journalSequence,
+        number: journalNumber,
+        accountingDate: issueDate,
+        concept: journalConcept,
+        origin: "INVOICE",
+        totalDebit,
+        totalCredit: original.total,
+        createdById: actor.id,
+        lines: {
+          create: [
+            ...debitLines.map((line, index) => ({
+              accountId: accountByCode.get(line.code)!,
+              position: index + 1,
+              concept: journalConcept,
+              debit: line.amount,
+              credit: new Prisma.Decimal(0)
+            })),
+            {
+              accountId: accountByCode.get(customerAccountCode)!,
+              position: debitLines.length + 1,
+              concept: journalConcept,
+              debit: new Prisma.Decimal(0),
+              credit: original.total
+            }
+          ]
+        }
+      },
+      select: { id: true, number: true }
+    });
+
     const dueDateTemplate = original.dueDates[0];
 
     await tx.invoiceDueDate.create({
@@ -957,6 +1263,8 @@ export async function createInvoiceRectification(
           total: original.total.neg().toFixed(2),
           reason: command.reason,
           issueDate: command.issueDate,
+          accountingJournalEntryId: accountingEntry.id,
+          accountingJournalEntryNumber: accountingEntry.number,
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
@@ -1003,6 +1311,15 @@ export async function createInvoiceRectification(
         message: "La fecha de emision rompe el orden cronologico de la serie rectificativa."
       }
     };
+  }
+  if (result.kind === "accounting-fiscal-year-not-open") {
+    return invoiceAccountingFiscalYearNotOpen();
+  }
+  if (result.kind === "accounting-account-not-available") {
+    return invoiceAccountingAccountNotAvailable();
+  }
+  if (result.kind === "accounting-entry-unbalanced") {
+    return invoiceAccountingEntryUnbalanced();
   }
 
   return {
@@ -1238,15 +1555,13 @@ async function recalculateInvoice(
     where: { id: invoiceId },
     data: totals
   });
-  await tx.invoiceDueDate.updateMany({
-    where: {
-      invoiceId,
-      position: 1
-    },
-    data: {
-      amount: totals.total
-    }
-  });
+  const dueDateCount = await tx.invoiceDueDate.count({ where: { invoiceId } });
+  if (dueDateCount === 1) {
+    await tx.invoiceDueDate.updateMany({
+      where: { invoiceId, position: 1 },
+      data: { amount: totals.total }
+    });
+  }
 }
 
 async function nextInvoiceLinePosition(
@@ -1621,6 +1936,18 @@ function invoiceNotIssuable(): InvoiceNotIssuableResult {
   };
 }
 
+function invoiceAccountingFiscalYearNotOpen(): InvoiceNotIssuableResult {
+  return { ok: false, status: 409, error: { code: "INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", message: "No hay un ejercicio contable abierto para la fecha de emision." } };
+}
+
+function invoiceAccountingAccountNotAvailable(): InvoiceNotIssuableResult {
+  return { ok: false, status: 409, error: { code: "INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE", message: "Falta alguna cuenta contable activa e imputable necesaria para emitir la factura." } };
+}
+
+function invoiceAccountingEntryUnbalanced(): InvoiceNotIssuableResult {
+  return { ok: false, status: 409, error: { code: "INVOICE_ACCOUNTING_ENTRY_UNBALANCED", message: "El asiento de la factura no esta cuadrado." } };
+}
+
 function invoiceEmpty(): InvoiceNotIssuableResult {
   return {
     ok: false,
@@ -1639,6 +1966,28 @@ function invoiceChronologyViolation(): InvoiceNotIssuableResult {
     error: {
       code: "INVOICE_CHRONOLOGY_VIOLATION",
       message: "La fecha de emision rompe el orden cronologico de la serie."
+    }
+  };
+}
+
+function invoiceDueDatesTotalMismatch(): InvoiceNotIssuableResult {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "INVOICE_DUE_DATES_TOTAL_MISMATCH",
+      message: "La suma de los vencimientos debe coincidir exactamente con el total de la factura."
+    }
+  };
+}
+
+function invoiceDueDateBeforeIssueDate(): InvoiceNotIssuableResult {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "INVOICE_DUE_DATE_BEFORE_ISSUE_DATE",
+      message: "Ningun vencimiento puede ser anterior a la fecha de emision."
     }
   };
 }

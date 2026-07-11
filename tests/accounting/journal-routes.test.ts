@@ -400,6 +400,15 @@ async function initializeForRoutes(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+
+  const installation = await prisma.installation.findFirstOrThrow();
+  await prisma.accountingFiscalYear.create({
+    data: {
+      companyId: installation.companyId!, year: 2026,
+      startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"),
+      planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId!
+    }
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {
@@ -407,6 +416,7 @@ async function resetPlatformTables(): Promise<void> {
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
     prisma.auditEvent.deleteMany(),

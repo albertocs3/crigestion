@@ -6,6 +6,8 @@ import {
   listJournalEntriesSchema
 } from "@/modules/accounting/application/journal";
 import { AccountingAccountCreateForm } from "@/modules/accounting/presentation/AccountingAccountCreateForm";
+import { listAccountingFiscalYears } from "@/modules/accounting/application/fiscalYears";
+import { AccountingFiscalYearCloseButton, AccountingFiscalYearCreateForm } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -49,24 +51,28 @@ export default async function AccountingPage({
     limit: 50,
     cursor: params.accountCursor,
     status: "ACTIVE",
-    search: params.search
+    search: params.search,
+    year: params.year
   });
   const entriesPayload = listJournalEntriesSchema.safeParse({
     limit: 25,
     cursor: params.entryCursor,
     year: params.year
   });
-  const [accounts, entries] = await Promise.all([
+  const [accounts, entries, fiscalYears] = await Promise.all([
     accountsPayload.success
       ? listAccountingAccounts(accountsPayload.data, authorization.user)
       : { accounts: [], nextCursor: null },
     entriesPayload.success
       ? listJournalEntries(entriesPayload.data, authorization.user)
-      : { entries: [], nextCursor: null }
+      : { entries: [], nextCursor: null },
+    listAccountingFiscalYears()
   ]);
   const canManageEntries = authorization.user.permissions.includes(
     "Accounting.ManageEntries"
   );
+  const canManageExercises = authorization.user.permissions.includes("Accounting.ManageExercises");
+  const canCloseExercises = authorization.user.permissions.includes("Accounting.CloseExercises");
 
   return (
     <main className="shell">
@@ -139,6 +145,19 @@ export default async function AccountingPage({
             <p className="message error">Filtro de asientos invalido.</p>
           ) : null}
         </div>
+
+        {fiscalYears.length === 0 && canManageExercises ? (
+          <div className="panel stack">
+            <AccountingFiscalYearCreateForm defaultYear={new Date().getFullYear()} />
+          </div>
+        ) : null}
+
+        {fiscalYears.length > 0 ? (
+          <div className="panel stack">
+            <div><h2>Ejercicios contables</h2><p className="muted">Cada ejercicio conserva su propio plan de cuentas.</p></div>
+            <div className="table-wrap"><table><thead><tr><th>Ejercicio</th><th>Estado</th><th>Plan</th><th>Cuentas</th><th>Acciones</th></tr></thead><tbody>{fiscalYears.map((fiscalYear) => <tr key={fiscalYear.id}><td><strong>{fiscalYear.year}</strong></td><td>{fiscalYear.status === "OPEN" ? "Abierto" : "Cerrado"}</td><td>{fiscalYear.planCode} {fiscalYear.planVersion}</td><td>{fiscalYear.accountCount}</td><td>{fiscalYear.status === "OPEN" && canCloseExercises ? <AccountingFiscalYearCloseButton fiscalYearId={fiscalYear.id} year={fiscalYear.year} /> : "-"}</td></tr>)}</tbody></table></div>
+          </div>
+        ) : null}
 
         {canManageEntries ? (
           <div className="panel stack">

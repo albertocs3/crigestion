@@ -49,9 +49,10 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await page.getByRole("button", { name: "Entrar" }).click();
 
   await expect(page).toHaveURL(/\/app$/);
-  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inicio" })).toBeAttached();
   await expect(page.getByText(`Sesion activa de ${displayName}`)).toBeVisible();
-  await expect(page.getByText(userName)).toBeVisible();
+  await expect(page.getByText(userName)).not.toBeVisible();
+  await page.getByText("Utilidades", { exact: true }).click();
   await expect(page.getByRole("link", { name: "Configuracion" })).toBeVisible();
 
   await page.getByRole("link", { name: "Configuracion" }).click();
@@ -113,8 +114,9 @@ test("shows access denied for a user without users or roles permissions", async 
   await loginLimitedUser(page);
 
   await expect(page).toHaveURL(/\/app$/);
-  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inicio" })).toBeAttached();
   await expect(page.getByText("Sesion activa de Usuario Auditor E2E")).toBeVisible();
+  await page.getByText("Utilidades", { exact: true }).click();
   await expect(page.getByRole("link", { name: "Ver auditoria" })).toBeVisible();
 
   await page.goto("/app/users");
@@ -202,6 +204,7 @@ test("requests restore validation and manages maintenance mode from the UI", asy
 }) => {
   await initializeAndLoginAdmin(page, "e2e-restore-maintenance-setup");
 
+  await page.getByText("Utilidades", { exact: true }).click();
   await page.getByRole("link", { name: "Restauraciones" }).click();
   await expect(page).toHaveURL(/\/app\/restores$/);
   await expect(page.getByRole("heading", { name: "Restauraciones" })).toBeVisible();
@@ -268,14 +271,14 @@ test("requests restore validation and manages maintenance mode from the UI", asy
   });
 
   await page.goto("/app");
-  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inicio" })).toBeAttached();
   await page.getByRole("button", { name: "Cerrar sesion" }).click();
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel("Usuario").fill(userName);
   await page.getByLabel("Contrasena").fill(password);
   await page.getByRole("button", { name: "Entrar" }).click();
   await expect(page).toHaveURL(/\/app$/);
-  await expect(page.getByRole("heading", { name: "Inicio operativo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Inicio" })).toBeAttached();
 
   await page.goto("/app/restores");
   await expect(page.getByText("Activo", { exact: true })).toBeVisible();

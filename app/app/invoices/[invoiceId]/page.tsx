@@ -5,6 +5,7 @@ import {
   type InvoiceDetail
 } from "@/modules/billing/application/invoices";
 import { InvoiceIssueButton } from "@/modules/billing/presentation/InvoiceIssueButton";
+import { InvoiceDueDatesForm } from "@/modules/billing/presentation/InvoiceDueDatesForm";
 import { InvoiceLineCreateForm } from "@/modules/billing/presentation/InvoiceLineCreateForm";
 import { InvoiceRectificationCreateForm } from "@/modules/billing/presentation/InvoiceRectificationCreateForm";
 import { listCatalogItems } from "@/modules/catalog/application/items";
@@ -390,6 +391,20 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               invoiceId={invoice.id}
               items={items.items}
               taxRates={taxRates}
+            />
+          </div>
+        ) : null}
+
+        {canManageDrafts && editable && invoice.documentType === "STANDARD" ? (
+          <div className="panel stack">
+            <InvoiceDueDatesForm
+              invoiceId={invoice.id}
+              total={invoice.totals.total}
+              initialDueDates={invoice.dueDates.map((dueDate) => ({
+                dueDate: dueDate.dueDate,
+                amount: dueDate.amount,
+                paymentMethod: dueDate.paymentMethod
+              }))}
             />
           </div>
         ) : null}
