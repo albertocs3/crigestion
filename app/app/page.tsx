@@ -7,6 +7,49 @@ export const dynamic = "force-dynamic";
 
 export default async function AppHomePage() {
   const session = await requireAuthenticatedPage();
+  const permissions = session.user.permissions;
+  const utilities = [
+    permissions.includes("Platform.ManageUsers")
+      ? { href: "/app/users", label: "Gestionar usuarios" }
+      : null,
+    permissions.includes("Platform.ManageRoles")
+      ? { href: "/app/roles", label: "Gestionar roles" }
+      : null,
+    permissions.includes("Platform.ManageSessions")
+      ? { href: "/app/sessions", label: "Gestionar sesiones" }
+      : null,
+    permissions.includes("Platform.ManageConfiguration")
+      ? { href: "/app/configuration", label: "Configuracion" }
+      : null,
+    permissions.includes("Platform.ViewAudit")
+      ? { href: "/app/audit", label: "Ver auditoria" }
+      : null,
+    permissions.includes("Platform.ManageBackups")
+      ? { href: "/app/backups", label: "Copias de seguridad" }
+      : null,
+    permissions.includes("Platform.ManageBackups")
+      ? { href: "/app/restores", label: "Restauraciones" }
+      : null
+  ].filter((utility): utility is { href: string; label: string } => utility !== null);
+  const modules = [
+    permissions.includes("Customers.View")
+      ? { href: "/app/customers", label: "Clientes", tone: "customers" }
+      : null,
+    permissions.includes("Catalog.View")
+      ? { href: "/app/catalog", label: "Catalogo", tone: "catalog" }
+      : null,
+    permissions.includes("Billing.View")
+      ? { href: "/app/invoices", label: "Facturas", tone: "billing" }
+      : null,
+    permissions.includes("Treasury.ManagePayments")
+      ? { href: "/app/treasury", label: "Tesoreria", tone: "treasury" }
+      : null,
+    permissions.includes("Accounting.View")
+      ? { href: "/app/accounting", label: "Contabilidad", tone: "accounting" }
+      : null
+  ].filter(
+    (module): module is { href: string; label: string; tone: string } => module !== null
+  );
 
   return (
     <main className="shell">
@@ -15,92 +58,47 @@ export default async function AppHomePage() {
         <LogoutButton />
       </header>
       <section className="content stack">
-        <div className="panel stack">
-          <div>
-            <h1>Inicio operativo</h1>
-            <p className="muted">
-              Sesion activa de {session.user.displayName} con rol{" "}
-              {session.user.role.name}.
-            </p>
+        <h1 className="sr-only">Inicio</h1>
+        <div className="panel home-overview">
+          <div className="home-main">
+            <div className="home-session-summary">
+              <p className="muted">
+                Sesion activa de <strong>{session.user.displayName}</strong> con rol{" "}
+                <strong>{session.user.role.name}</strong>.
+              </p>
+              <p className="home-expiry">
+                <span className="data-label">Caducidad</span>
+                <strong>
+                  <time dateTime={session.expiresAt}>
+                    {new Date(session.expiresAt).toLocaleString("es-ES")}
+                  </time>
+                </strong>
+              </p>
+            </div>
+            <nav className="home-module-grid" aria-label="Modulos principales">
+              {modules.map((module) => (
+                <Link
+                  className={`home-module-card home-module-${module.tone}`}
+                  href={module.href}
+                  key={module.href}
+                >
+                  {module.label}
+                </Link>
+              ))}
+            </nav>
           </div>
-          <div className="data-grid">
-            <div>
-              <span className="data-label">Usuario</span>
-              <strong>{session.user.userName}</strong>
-            </div>
-            <div>
-              <span className="data-label">Permisos</span>
-              <strong>{session.user.permissions.length}</strong>
-            </div>
-            <div>
-              <span className="data-label">Caducidad</span>
-              <strong>{new Date(session.expiresAt).toLocaleString("es-ES")}</strong>
-            </div>
-          </div>
-          <div>
-            <div className="button-row">
-              {session.user.permissions.includes("Platform.ManageUsers") ? (
-                <Link className="button" href="/app/users">
-                  Gestionar usuarios
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ManageRoles") ? (
-                <Link className="button button-secondary" href="/app/roles">
-                  Gestionar roles
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ManageSessions") ? (
-                <Link className="button button-secondary" href="/app/sessions">
-                  Gestionar sesiones
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ManageConfiguration") ? (
-                <Link className="button button-secondary" href="/app/configuration">
-                  Configuracion
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ViewAudit") ? (
-                <Link className="button button-secondary" href="/app/audit">
-                  Ver auditoria
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ManageBackups") ? (
-                <Link className="button button-secondary" href="/app/backups">
-                  Copias de seguridad
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Platform.ManageBackups") ? (
-                <Link className="button button-secondary" href="/app/restores">
-                  Restauraciones
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Customers.View") ? (
-                <Link className="button button-secondary" href="/app/customers">
-                  Clientes
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Catalog.View") ? (
-                <Link className="button button-secondary" href="/app/catalog">
-                  Catalogo
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Billing.View") ? (
-                <Link className="button button-secondary" href="/app/invoices">
-                  Facturas
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Treasury.ManagePayments") ? (
-                <Link className="button button-secondary" href="/app/treasury">
-                  Tesoreria
-                </Link>
-              ) : null}
-              {session.user.permissions.includes("Accounting.View") ? (
-                <Link className="button button-secondary" href="/app/accounting">
-                  Contabilidad
-                </Link>
-              ) : null}
-            </div>
-          </div>
+          {utilities.length > 0 ? (
+            <details className="home-utilities">
+              <summary>Utilidades</summary>
+              <nav aria-label="Utilidades de administracion">
+                {utilities.map((utility) => (
+                  <Link href={utility.href} key={utility.href}>
+                    {utility.label}
+                  </Link>
+                ))}
+              </nav>
+            </details>
+          ) : null}
         </div>
         <div className="panel stack">
           <ChangePasswordForm />

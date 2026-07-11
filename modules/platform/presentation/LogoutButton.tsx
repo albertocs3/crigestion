@@ -24,7 +24,7 @@ export function LogoutButton() {
 
   return (
     <button
-      className="button button-secondary"
+      className="button button-danger-soft"
       disabled={isSubmitting}
       type="button"
       onClick={handleLogout}

@@ -25,6 +25,18 @@ a {
   color: inherit;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .shell {
   min-height: 100vh;
   display: grid;
@@ -158,6 +170,16 @@ a {
   border-color: var(--border);
   background: var(--panel);
   color: var(--foreground);
+}
+
+.button-danger-soft {
+  border-color: #ef9a9a;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.button-danger-soft:hover {
+  background: #fecaca;
 }
 
 .button-small {
@@ -356,6 +378,158 @@ tr:last-child td {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.home-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 240px);
+  align-items: start;
+  gap: 28px;
+}
+
+.home-main {
+  display: grid;
+  gap: 28px;
+}
+
+.home-session-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+}
+
+.home-session-summary p {
+  margin: 0;
+}
+
+.home-expiry {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.home-module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.home-module-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 112px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--foreground);
+  font-size: 17px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  text-transform: uppercase;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.home-module-card:hover {
+  transform: translateY(-2px);
+  border-color: #98a2b3;
+  box-shadow: 0 8px 18px rgb(31 41 51 / 9%);
+}
+
+.home-module-card:focus-visible,
+.home-utilities summary:focus-visible,
+.home-utilities a:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  outline-offset: 2px;
+}
+
+.home-module-customers {
+  background: #e0f2fe;
+}
+
+.home-module-catalog {
+  background: #ecfccb;
+}
+
+.home-module-billing {
+  background: #fef3c7;
+}
+
+.home-module-treasury {
+  background: #ede9fe;
+}
+
+.home-module-accounting {
+  background: #fce7f3;
+}
+
+.home-utilities {
+  position: relative;
+}
+
+.home-utilities summary {
+  min-height: 44px;
+  padding: 11px 16px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+  list-style-position: inside;
+  text-align: center;
+}
+
+.home-utilities nav {
+  display: grid;
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: #e5efed;
+}
+
+.home-utilities a {
+  padding: 10px 12px;
+  border-bottom: 1px solid #8bb8b3;
+  text-align: center;
+  text-decoration: none;
+}
+
+.home-utilities a:last-child {
+  border-bottom: 0;
+}
+
+.home-utilities a:hover {
+  background: #d4e6e3;
+}
+
+@media (max-width: 760px) {
+  .home-overview {
+    grid-template-columns: 1fr;
+  }
+
+  .home-session-summary {
+    display: grid;
+  }
+
+  .home-expiry {
+    display: grid;
+    gap: 4px;
+    white-space: normal;
+  }
+
+  .home-module-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 460px) {
+  .home-module-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .filter-row {
