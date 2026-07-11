@@ -163,6 +163,14 @@ export default async function TreasuryRemittanceDetailPage({
                   Descargar XML
                 </Link>
               ) : null}
+              {activeLines.length > 0 ? (
+                <Link
+                  className="button button-secondary button-small"
+                  href={`/api/treasury/customer-remittances/${remittance.id}/bank-response-csv-template`}
+                >
+                  Descargar plantilla CSV
+                </Link>
+              ) : null}
               <CustomerRemittanceProcessForm
                 remittanceId={remittance.id}
                 defaultPaymentDate={remittance.chargeDate}

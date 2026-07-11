@@ -9,6 +9,7 @@ import {
 import { POST as remittanceCancelPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/cancel/route";
 import { POST as remittanceClosePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/close/route";
 import { POST as remittanceGenerateSepaPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/generate-sepa/route";
+import { GET as remittanceBankResponseTemplateGet } from "@/app/api/treasury/customer-remittances/[remittanceId]/bank-response-csv-template/route";
 import { POST as remittanceImportBankResponseCsvPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/import-bank-response-csv/route";
 import { POST as remittanceMarkSentPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/mark-sent/route";
 import { POST as remittanceProcessPost } from "@/app/api/treasury/customer-remittances/[remittanceId]/process/route";
@@ -722,18 +723,47 @@ describe("customer remittance HTTP contracts", () => {
       { params: Promise.resolve({ remittanceId: created.id }) }
     );
 
+    const templateResponse = await remittanceBankResponseTemplateGet(
+      apiRequest(
+        `/api/treasury/customer-remittances/${created.id}/bank-response-csv-template`
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const template = await templateResponse.text();
+    const completedTemplate = template
+      .replace("\uFEFF", "")
+      .split(/\r?\n/)
+      .map((row, index) => {
+        if (index === 1) {
+          return row.replace(/,"",""$/, ',"COBRADA",""');
+        }
+
+        if (index === 2) {
+          return row.replace(
+            /,"",""$/,
+            ',"RECHAZADA","Banco rechaza una linea"'
+          );
+        }
+
+        return row;
+      })
+      .join("\r\n");
+
     const importResponse = await remittanceImportBankResponseCsvPost(
       jsonRequest(
         `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
         {
           paymentDate: "2026-07-16",
-          csv: "linea,resultado,motivo\n1,COBRADA,\n2,RECHAZADA,Banco rechaza una linea"
+          csv: completedTemplate
         },
         { csrfToken }
       ),
       { params: Promise.resolve({ remittanceId: created.id }) }
     );
     const imported = await importResponse.json();
+    const templateAuditCount = await prisma.auditEvent.count({
+      where: { eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_TEMPLATE_EXPORTED" }
+    });
     const missingIdempotencyResponse = await remittanceImportBankResponseCsvPost(
       jsonRequest(
         `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
@@ -746,6 +776,21 @@ describe("customer remittance HTTP contracts", () => {
       { params: Promise.resolve({ remittanceId: created.id }) }
     );
 
+    expect(templateResponse.status).toBe(200);
+    expect(templateResponse.headers.get("Content-Type")).toBe(
+      "text/csv; charset=utf-8"
+    );
+    expect(templateResponse.headers.get("Content-Disposition")).toContain(
+      "respuesta-bancaria-RC2026-000001.csv"
+    );
+    expect(templateResponse.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(template).toContain(
+      '"linea","factura","cliente","importe","resultado","motivo"'
+    );
+    expect(template).toContain('"1","F2600001"');
+    expect(template).toContain('"2","F2600002"');
+    expect(template).not.toContain("ES9121000418450200051332");
+    expect(templateAuditCount).toBe(1);
     expect(importResponse.status).toBe(200);
     expect(imported).toMatchObject({
       id: created.id,

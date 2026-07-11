@@ -551,7 +551,34 @@ Errores funcionales:
 
 Audita `CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED`.
 
-## 17. `POST /api/treasury/customer-remittances/{remittanceId}/import-bank-response-csv`
+## 17.a `GET /api/treasury/customer-remittances/{remittanceId}/bank-response-csv-template`
+
+Permiso requerido: `Treasury.ManagePayments`.
+
+Respuesta `200`: `text/csv; charset=utf-8` con BOM y descarga privada sin cache.
+Incluye una fila por linea activa, conservando su numero persistido, y las
+columnas:
+
+```csv
+linea,factura,cliente,importe,resultado,motivo
+1,F2600001,Cliente Uno SL,121.00,,
+```
+
+El usuario debe completar `resultado` con `COBRADA` o `RECHAZADA` y `motivo`
+cuando rechace una linea. Las columnas informativas no contienen IBAN ni datos
+bancarios completos y se neutralizan para evitar formulas de hoja de calculo.
+
+Solo esta disponible para remesas `SENT` con lineas activas. Audita
+`CUSTOMER_REMITTANCE_BANK_RESPONSE_TEMPLATE_EXPORTED`.
+
+Errores funcionales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
+| `409` | `REMITTANCE_BANK_RESPONSE_TEMPLATE_NOT_AVAILABLE` | Remesa no enviada o sin lineas activas. |
+
+## 17.b `POST /api/treasury/customer-remittances/{remittanceId}/import-bank-response-csv`
 
 Permiso requerido: `Treasury.ManagePayments`.
 

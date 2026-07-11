@@ -267,7 +267,10 @@ liberar los vencimientos. Si hay mezcla de lineas cobradas y rechazadas, la
 remesa queda `PARTIALLY_PROCESSED`.
 La misma operacion puede ejecutarse mediante una importacion CSV controlada con
 las columnas `linea`, `resultado` y `motivo`; este CSV operativo no equivale a
-una importacion Norma 19 ni Norma 43.
+una importacion Norma 19 ni Norma 43. Desde una remesa enviada se descarga una
+plantilla con las lineas activas ya numeradas y datos identificativos no
+bancarios; el usuario completa `COBRADA` o `RECHAZADA`, informa el motivo de los
+rechazos y reimporta el mismo fichero.
 
 Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y

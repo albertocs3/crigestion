@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { ChangeEvent, FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
 
@@ -20,6 +20,21 @@ export function CustomerRemittanceBankResponseCsvForm({
   const router = useRouter();
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
   const disabled = state.status === "submitting";
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const csv = await file.text();
+    const textarea = event.currentTarget.form?.elements.namedItem("csv");
+
+    if (textarea instanceof HTMLTextAreaElement) {
+      textarea.value = csv;
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,7 +81,8 @@ export function CustomerRemittanceBankResponseCsvForm({
       <div>
         <h2>Importar respuesta CSV</h2>
         <p className="muted">
-          Formato controlado por lineas: linea, resultado y motivo opcional.
+          Descarga la plantilla, completa resultado con COBRADA o RECHAZADA y
+          añade un motivo para cada linea rechazada.
         </p>
       </div>
       <div className="filter-row">
@@ -82,7 +98,16 @@ export function CustomerRemittanceBankResponseCsvForm({
         </label>
       </div>
       <label>
-        CSV
+        Archivo CSV completado
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          disabled={disabled}
+          onChange={handleFileChange}
+        />
+      </label>
+      <label>
+        Contenido CSV
         <textarea
           name="csv"
           required

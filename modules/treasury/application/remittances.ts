@@ -378,6 +378,32 @@ export type CustomerRemittanceSepaFileResult =
       };
     };
 
+export type CustomerRemittanceBankResponseTemplateResult =
+  | {
+      ok: true;
+      status: 200;
+      value: {
+        filename: string;
+        content: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 404;
+      error: {
+        code: "REMITTANCE_NOT_FOUND";
+        message: string;
+      };
+    }
+  | {
+      ok: false;
+      status: 409;
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_TEMPLATE_NOT_AVAILABLE";
+        message: string;
+      };
+    };
+
 export type CloseCustomerRemittanceResult =
   | { ok: true; status: 200; value: CustomerRemittanceDto }
   | {
@@ -743,6 +769,63 @@ export async function exportCustomerRemittancesCsv(
   return {
     filename: `remesas-clientes-${formatDateOnly(new Date())}.csv`,
     content: customerRemittancesCsv(remittances)
+  };
+}
+
+export async function exportCustomerRemittanceBankResponseTemplate(
+  remittanceId: string,
+  actor: SessionUser
+): Promise<CustomerRemittanceBankResponseTemplateResult> {
+  const record = await prisma.customerRemittance.findUnique({
+    where: { id: remittanceId },
+    select: remittanceSelect
+  });
+
+  if (!record) {
+    return {
+      ok: false,
+      status: 404,
+      error: {
+        code: "REMITTANCE_NOT_FOUND",
+        message: "La remesa no existe."
+      }
+    };
+  }
+
+  const remittance = mapRemittance(record);
+  const activeLines = remittance.lines.filter((line) => line.status === "ACTIVE");
+
+  if (remittance.status !== "SENT" || activeLines.length === 0) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_BANK_RESPONSE_TEMPLATE_NOT_AVAILABLE",
+        message: "La plantilla solo esta disponible para remesas enviadas con lineas activas."
+      }
+    };
+  }
+
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_TEMPLATE_EXPORTED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        remittanceId: remittance.id,
+        number: remittance.number,
+        lineCount: activeLines.length
+      }
+    }
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    value: {
+      filename: `respuesta-bancaria-${remittance.number.replace(/[^A-Za-z0-9_-]/g, "-")}.csv`,
+      content: customerRemittanceBankResponseTemplateCsv(activeLines)
+    }
   };
 }
 
@@ -1800,6 +1883,22 @@ function customerRemittancesCsv(remittances: CustomerRemittanceDto[]): string {
       line.mandateReference
     ])
   );
+
+  return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function customerRemittanceBankResponseTemplateCsv(
+  lines: CustomerRemittanceLineDto[]
+): string {
+  const header = ["linea", "factura", "cliente", "importe", "resultado", "motivo"];
+  const rows = lines.map((line) => [
+    line.position.toString(),
+    line.invoiceNumber ?? "",
+    line.customer.legalName,
+    line.amount,
+    "",
+    ""
+  ]);
 
   return [header, ...rows].map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
