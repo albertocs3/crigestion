@@ -1,0 +1,112 @@
+{
+  "manifestVersion": "AEAT_VERIFACTU_ARTIFACTS_V1",
+  "retrievedAt": "2026-07-12T00:00:00+02:00",
+  "sourceIndex": "https://sede.agenciatributaria.gob.es/Sede/iva/sistemas-informaticos-facturacion-verifactu/informacion-tecnica.html",
+  "sourceIndexUpdatedAt": "2026-03-26",
+  "artifacts": [
+    {
+      "id": "record-design",
+      "version": "1.0",
+      "url": "https://www.agenciatributaria.es/static_files/AEAT_Desarrolladores/EEDD/IVA/VERI-FACTU/DsRegistroVeriFactu.xlsx",
+      "sha256": "40ce191aa1def6e44a5f1e86d7ece727258745b34e3fe4d6abe1468252dac2ca",
+      "bytes": 59877,
+      "lastModified": "Mon, 28 Oct 2024 08:35:55 GMT"
+    },
+    {
+      "id": "service-wsdl",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SistemaFacturacion.wsdl",
+      "sha256": "05919120708ff7650612fa6683c9336eaf919335d9a4db10e86759190af48602",
+      "bytes": 8780,
+      "lastModified": "Mon, 24 Mar 2025 08:27:51 GMT"
+    },
+    {
+      "id": "supply-xsd",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SuministroLR.xsd",
+      "sha256": "cbdac8d427cc5ab5d77ca48974cab0f35d6bb819c4c66db361681e3710aeba36",
+      "bytes": 1573,
+      "lastModified": "Thu, 17 Jul 2025 08:41:20 GMT"
+    },
+    {
+      "id": "supply-response-xsd",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/RespuestaSuministro.xsd",
+      "sha256": "82acf80f785643caac13087aae66808ed721a13f08ca5218cf8ae81b695549ef",
+      "bytes": 6259,
+      "lastModified": "Fri, 14 Feb 2025 08:42:39 GMT"
+    },
+    {
+      "id": "query-xsd",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/ConsultaLR.xsd",
+      "sha256": "bf2cdb8fc4b95b291757a72b76d8fffca06a6d30d9329122ca2fd6b2d5f8f1b1",
+      "bytes": 3886,
+      "lastModified": "Mon, 13 Oct 2025 12:19:21 GMT"
+    },
+    {
+      "id": "query-response-xsd",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/RespuestaConsultaLR.xsd",
+      "sha256": "de35063acb8d9ba0d6ae51acc6b595de9c2b12333250e95e13108ef5f2670d45",
+      "bytes": 10058,
+      "lastModified": "Thu, 18 Sep 2025 06:33:23 GMT"
+    },
+    {
+      "id": "common-types-xsd",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/SuministroInformacion.xsd",
+      "sha256": "ee4c1655175644de44c4c25055ffeb8e5f4bb4bc3834ce8254d4222ef18c8aa1",
+      "bytes": 49540,
+      "lastModified": "Fri, 09 Jan 2026 11:29:25 GMT"
+    },
+    {
+      "id": "error-codes",
+      "version": "tikeV1.0",
+      "url": "https://prewww2.aeat.es/static_files/common/internet/dep/aplicaciones/es/aeat/tikeV1.0/cont/ws/errores.properties",
+      "sha256": "152fec330b97a1cc7e0579eadb58849c21cc2c7668e21c830ecd3ea7adc6feb3",
+      "bytes": 25335,
+      "lastModified": "Thu, 04 Dec 2025 10:51:19 GMT"
+    },
+    {
+      "id": "validation-errors",
+      "version": "1.2.2",
+      "url": "https://www.agenciatributaria.es/static_files/AEAT_Desarrolladores/EEDD/IVA/VERI-FACTU/Validaciones_Errores_Veri-Factu.pdf",
+      "sha256": "426eb926fc098a36a163f66ca5f40d9e0847ca23300bbe5008979832d3513440",
+      "bytes": 658946,
+      "lastModified": "Wed, 08 Apr 2026 08:08:31 GMT"
+    },
+    {
+      "id": "service-specification",
+      "version": "1.0.3",
+      "url": "https://sede.agenciatributaria.gob.es/static_files/AEAT_Desarrolladores/EEDD/IVA/VERI-FACTU/Veri-Factu_Descripcion_SWeb.pdf",
+      "sha256": "b3570f6a308ce98a5f52001a0dc427310ad6cf7bccd60a9ee98720a59e553c02",
+      "bytes": 1712899,
+      "lastModified": "Tue, 14 Oct 2025 08:33:28 GMT"
+    },
+    {
+      "id": "hash-specification",
+      "version": "0.1.2",
+      "url": "https://www.agenciatributaria.es/static_files/AEAT_Desarrolladores/EEDD/IVA/VERI-FACTU/Veri-Factu_especificaciones_huella_hash_registros.pdf",
+      "sha256": "f4334c254bb875b417247b54315199f89d75a8c4814dfd1e86efec562653d7de",
+      "bytes": 1174110,
+      "lastModified": "Tue, 08 Oct 2024 09:58:51 GMT"
+    },
+    {
+      "id": "qr-specification",
+      "version": "0.5.0",
+      "url": "https://www.agenciatributaria.es/static_files/AEAT_Desarrolladores/EEDD/IVA/VERI-FACTU/DetalleEspecificacTecnCodigoQRfactura.pdf",
+      "sha256": "f86b3c260d8a4963dbc18c5007732b53199156c5d1db63242e68db71501b49eb",
+      "bytes": 786534,
+      "lastModified": "Thu, 18 Dec 2025 09:30:09 GMT"
+    },
+    {
+      "id": "xmldsig-core-xsd",
+      "version": "2002-02-12",
+      "url": "https://www.w3.org/TR/xmldsig-core/xmldsig-core-schema.xsd",
+      "sha256": "d102ad3df7664c307e0c2c776ba4a90513b1969974d8a940bae1a77f9f21e15d",
+      "bytes": 10292,
+      "lastModified": "Tue, 16 Apr 2013 12:48:49 GMT"
+    }
+  ]
+}

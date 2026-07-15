@@ -49,7 +49,8 @@ export const createManualJournalEntrySchema = z.object({
 export const listJournalEntriesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
   cursor: z.string().uuid().optional(),
-  year: z.coerce.number().int().min(2000).max(2100).optional()
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  entryId: z.string().uuid().optional()
 });
 
 export const exportJournalEntriesSchema = z.object({
@@ -88,7 +89,7 @@ export type JournalEntryDto = {
   number: string;
   accountingDate: string;
   concept: string;
-  origin: "MANUAL" | "INVOICE" | "CUSTOMER_PAYMENT" | "REGULARIZATION" | "CLOSING" | "OPENING";
+  origin: "MANUAL" | "INVOICE" | "INVOICE_VOIDING" | "CUSTOMER_PAYMENT" | "CUSTOMER_PAYMENT_RETURN" | "CUSTOMER_CREDIT_REFUND" | "REGULARIZATION" | "CLOSING" | "OPENING";
   status: "POSTED" | "VOIDED";
   totalDebit: string;
   totalCredit: string;
@@ -394,6 +395,7 @@ export async function listJournalEntries(
 ): Promise<JournalEntryList> {
   const records = await prisma.accountingJournalEntry.findMany({
     where: {
+      ...(command.entryId ? { id: command.entryId } : {}),
       ...(command.year ? { year: command.year } : {}),
       status: "POSTED"
     },
@@ -412,6 +414,7 @@ export async function listJournalEntries(
       payload: {
         actorUserId: actor.id,
         year: command.year ?? null,
+        entryId: command.entryId ?? null,
         limit: command.limit,
         cursor: command.cursor ?? null,
         resultCount: page.length

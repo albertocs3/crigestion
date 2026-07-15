@@ -1,0 +1,28 @@
+[Unit]
+Description=Apply CriGestion staging migrations for release %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=crigestion-staging-migrator
+Group=crigestion-staging-migrator
+WorkingDirectory=/opt/crigestion-staging/releases/%i
+EnvironmentFile=/etc/crigestion-staging/migrator.env
+Environment=NODE_ENV=production
+ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/releases/%i/prisma/schema.prisma
+ExecStart=/opt/plesk/node/22/bin/node --import tsx scripts/deploy-staging-migrations.ts
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native

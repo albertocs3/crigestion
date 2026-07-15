@@ -1,6 +1,7 @@
 import "server-only";
 
 import { existsSync, readFileSync } from "node:fs";
+import QRCode from "qrcode";
 import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
 import { getBillingConfiguration } from "@/modules/billing/application/configuration";
@@ -57,6 +58,17 @@ type JpegImage = {
   height: number;
 };
 
+type MonochromeImage = {
+  data: Buffer;
+  width: number;
+  height: number;
+};
+
+const allowedVerifactuQrHosts = new Set([
+  "prewww2.aeat.es",
+  "www2.agenciatributaria.gob.es"
+]);
+
 export async function generateInvoicePdf(
   invoiceId: string,
   actor: SessionUser
@@ -100,10 +112,35 @@ export async function generateInvoicePdf(
     };
   }
 
+  const fiscalRecord = invoice.verifactuStatus === "NOT_APPLICABLE"
+    ? null
+    : await prisma.verifactuFiscalRecord.findFirst({
+        where: {
+          invoiceId: invoice.id,
+          recordType: "ALTA",
+          qrUrl: { not: null }
+        },
+        orderBy: [{ chainPosition: "desc" }],
+        select: { qrUrl: true }
+      });
+  const verifactuQrUrl = fiscalRecord?.qrUrl ?? null;
+
+  if (invoice.verifactuStatus !== "NOT_APPLICABLE" && !isAllowedVerifactuQrUrl(verifactuQrUrl)) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_PDF_NOT_AVAILABLE",
+        message: "El PDF VeriFactu no esta disponible porque falta un QR fiscal valido."
+      }
+    };
+  }
+
   const bytes = renderInvoicePdf({
     invoice,
     company: platformConfiguration.company,
-    configuration: billingConfiguration
+    configuration: billingConfiguration,
+    verifactuQrUrl
   });
 
   await prisma.auditEvent.create({
@@ -131,15 +168,19 @@ export async function generateInvoicePdf(
 function renderInvoicePdf({
   invoice,
   company,
-  configuration
+  configuration,
+  verifactuQrUrl
 }: {
   invoice: InvoiceDetail;
   company: PdfCompany;
   configuration: PdfConfiguration;
+  verifactuQrUrl: string | null;
 }): Uint8Array {
   const document = new PdfDocument();
   const issuerImage = loadIssuerImage();
   const issuerImageName = issuerImage ? document.addJpegImage(issuerImage) : null;
+  const qrImage = verifactuQrUrl ? createVerifactuQrImage(verifactuQrUrl) : null;
+  const qrImageName = qrImage ? document.addMonochromeImage(qrImage) : null;
   const linesPerFirstPage = 8;
   const linesPerNextPage = 20;
   const chunks = chunkInvoiceLines(invoice.lines, linesPerFirstPage, linesPerNextPage);
@@ -161,7 +202,8 @@ function renderInvoicePdf({
       configuration,
       pageIndex + 1,
       chunks.length,
-      issuerImageName
+      issuerImageName,
+      qrImageName
     );
     drawCustomerBox(content, invoice, configuration);
     drawLinesTable(content, lines, isFirstPage ? 10 : 6.5, configuration);
@@ -186,7 +228,8 @@ function drawHeader(
   configuration: PdfConfiguration,
   pageNumber: number,
   pageCount: number,
-  issuerImageName: string | null
+  issuerImageName: string | null,
+  qrImageName: string | null
 ): void {
   const accent = rgb(configuration.invoiceAccentColor);
 
@@ -201,8 +244,8 @@ function drawHeader(
     content.text("DATOS FISCALES", cm(2.7), yText(3.95), 15, regularFont, accent);
   }
 
-  if (pageNumber === 1) {
-    drawVerifactuQr(content, configuration);
+  if (pageNumber === 1 && qrImageName) {
+    drawVerifactuQr(content, qrImageName);
   }
 
   content.rect(cm(1.5), yFromTop(6.5, 3), cm(8), cm(3), {
@@ -221,19 +264,12 @@ function drawHeader(
 
 function drawVerifactuQr(
   content: PdfPageContent,
-  configuration: PdfConfiguration
+  qrImageName: string
 ): void {
-  const accent = rgb(configuration.invoiceAccentColor);
   const x = cm(13.25);
   const y = yFromTop(1.5, 3.5);
-  const centerX = x + verifactuQrSize / 2;
-  const centerY = y + verifactuQrSize / 2;
-
-  content.rect(x, y, verifactuQrSize, verifactuQrSize, {
-    stroke: accent,
-    lineWidth: 1.2
-  });
-  content.text("QR", centerX - 8, centerY - 4, 14, boldFont, accent);
+  content.rect(x, y, verifactuQrSize, verifactuQrSize, { fill: [1, 1, 1] });
+  content.image(qrImageName, x, y, verifactuQrSize, verifactuQrSize);
 
   content.text(
     "Factura verificable en la sede electronica de la AEAT",
@@ -241,7 +277,7 @@ function drawVerifactuQr(
     yText(5.65),
     8,
     regularFont,
-    isRealVerifactuMode() ? [0.05, 0.09, 0.16] : [0.7, 0.7, 0.7]
+    [0.05, 0.09, 0.16]
   );
 }
 
@@ -557,11 +593,36 @@ function lighten(
   ];
 }
 
-function isRealVerifactuMode(): boolean {
-  const enabled = process.env.VERIFACTU_ENABLED === "true";
-  const environment = process.env.VERIFACTU_ENVIRONMENT?.trim().toLowerCase();
+function isAllowedVerifactuQrUrl(value: string | null): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:"
+      && allowedVerifactuQrHosts.has(url.hostname)
+      && url.pathname === "/wlpl/TIKE-CONT/ValidarQR";
+  } catch {
+    return false;
+  }
+}
 
-  return enabled && (environment === "real" || environment === "production");
+function createVerifactuQrImage(value: string): MonochromeImage {
+  const qr = QRCode.create(value, { errorCorrectionLevel: "M" });
+  const quietZoneModules = 4;
+  const size = qr.modules.size + quietZoneModules * 2;
+  const bytesPerRow = Math.ceil(size / 8);
+  const data = Buffer.alloc(bytesPerRow * size, 0xff);
+
+  for (let row = 0; row < qr.modules.size; row += 1) {
+    for (let column = 0; column < qr.modules.size; column += 1) {
+      if (!qr.modules.get(row, column)) continue;
+      const imageRow = row + quietZoneModules;
+      const imageColumn = column + quietZoneModules;
+      const byteIndex = imageRow * bytesPerRow + Math.floor(imageColumn / 8);
+      data[byteIndex] &= ~(1 << (7 - (imageColumn % 8)));
+    }
+  }
+
+  return { data, width: size, height: size };
 }
 
 function loadIssuerImage(): JpegImage | null {
@@ -734,6 +795,28 @@ class PdfDocument {
       `<< /Type /XObject /Subtype /Image /Width ${image.width}`,
       `/Height ${image.height}`,
       "/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode",
+      `/Length ${image.data.length} >>`,
+      "stream\n"
+    ].join(" ");
+    const object = Buffer.concat([
+      Buffer.from(header, "binary"),
+      image.data,
+      Buffer.from("\nendstream", "binary")
+    ]);
+
+    this.objects.set(objectId, object);
+    this.imageResources.set(imageName, objectId);
+
+    return imageName;
+  }
+
+  addMonochromeImage(image: MonochromeImage): string {
+    const imageName = `Im${this.imageResources.size + 1}`;
+    const objectId = this.reserveObject();
+    const header = [
+      `<< /Type /XObject /Subtype /Image /Width ${image.width}`,
+      `/Height ${image.height}`,
+      "/ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false",
       `/Length ${image.data.length} >>`,
       "stream\n"
     ].join(" ");

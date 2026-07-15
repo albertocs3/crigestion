@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sfR:RespuestaRegFactuSistemaFacturacion xmlns:sfR="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/RespuestaSuministro.xsd" xmlns:sf="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd">
+  <sfR:CSV>FIXTURE-CSV</sfR:CSV>
+  <sfR:Cabecera>
+    <sf:ObligadoEmision>
+      <sf:NombreRazon>CriGestion Ejemplo SL</sf:NombreRazon>
+      <sf:NIF>B12345678</sf:NIF>
+    </sf:ObligadoEmision>
+  </sfR:Cabecera>
+  <sfR:TiempoEsperaEnvio>60</sfR:TiempoEsperaEnvio>
+  <sfR:EstadoEnvio>Correcto</sfR:EstadoEnvio>
+</sfR:RespuestaRegFactuSistemaFacturacion>

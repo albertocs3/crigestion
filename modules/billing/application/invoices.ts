@@ -12,9 +12,14 @@ import type {
   RequestContext,
   SessionUser
 } from "@/modules/platform/application/auth";
+import { commitPreparedVerifactuAltaInTransaction } from "@/modules/billing/application/verifactuPersistence";
+import { hashIdempotencyPayload } from "@/modules/platform/application/http";
+import { isVerifactuPreparationAllowed } from "@/modules/platform/application/operationalEnvironment";
 
 const defaultLimit = 25;
 const maxLimit = 100;
+
+class VerifactuPreparationUnavailableError extends Error {}
 
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
@@ -83,13 +88,14 @@ export const createInvoiceRectificationSchema = z.object({
       "OTHER"
     ])
     .default("OTHER"),
+  fiscalClassification: z.literal("R4_OTHER").optional(),
   notes: z.string().trim().min(1).max(1000).nullable().default(null)
 }).strict();
 export const listInvoicesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(maxLimit).default(defaultLimit),
   cursor: z.string().uuid().optional(),
   status: z.enum(["DRAFT", "ISSUED", "RECTIFIED", "VOIDED"]).optional(),
-  paymentStatus: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "UNPAID"]).optional(),
+  paymentStatus: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "PARTIALLY_SETTLED", "SETTLED", "NOT_APPLICABLE", "UNPAID", "CANCELLED"]).optional(),
   customerId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(120).optional()
 });
@@ -102,6 +108,114 @@ export type CreateInvoiceRectificationCommand = z.infer<
   typeof createInvoiceRectificationSchema
 >;
 export type ListInvoicesCommand = z.infer<typeof listInvoicesSchema>;
+
+export type VerifactuAltaPreparationInput = {
+  idempotencyKey: string;
+  correction?: {
+    rejectedRecordId: string;
+    subsanacion: "S";
+    rechazoPrevio: "X";
+  };
+  invoice: {
+    id: string;
+    companyId: string;
+    documentType: "STANDARD" | "RECTIFICATION";
+    rectification?: null | {
+      originalInvoiceNumber: string;
+      originalIssueDate: string;
+    };
+    issuerName: string;
+    issuerTaxId: string;
+    series: string;
+    number: string;
+    issueDate: string;
+    operationDate: string;
+    customerCode: string;
+    customerLegalName: string;
+    customerTaxId: string;
+    customerFiscalTreatment: string;
+    customerFiscalAddress: Prisma.JsonValue;
+    subtotal: string;
+    discountTotal: string;
+    taxableBase: string;
+    taxAmount: string;
+    total: string;
+    lines: Array<{
+      position: number;
+      description: string;
+      lineTaxableBase: string;
+      lineTaxAmount: string;
+      lineTotal: string;
+    }>;
+    taxSummaries: Array<{
+      taxRateCode: string;
+      taxRate: string;
+      taxableBase: string;
+      taxAmount: string;
+      total: string;
+    }>;
+  };
+  installation: {
+    id: string;
+    environment: "TEST" | "PRODUCTION";
+    contractVersion: string;
+    schemaVersion: string;
+    artifactManifestVersion: string;
+    artifactManifestSha256: string;
+    nextPosition: bigint;
+    previousRecordId: string | null;
+    previousRecordHash: string | null;
+    previousInvoiceNumber: string | null;
+    previousInvoiceIssueDate: string | null;
+    producerTaxId: string;
+    producerName: string;
+    systemName: string;
+    systemId: string;
+    systemVersion: string;
+    installationNumber: string;
+  };
+};
+
+export type VerifactuAltaPreparer = (input: VerifactuAltaPreparationInput) =>
+  | {
+      ok: true;
+      value: {
+        preparationKey: string;
+        generatedAt: Date;
+        canonicalizationVersion: string;
+        recordHash: string;
+        payloadCiphertext: Uint8Array;
+        payloadSha256: string;
+        encryptionKeyId: string;
+        qrUrl: string | null;
+      };
+    }
+  | { ok: false; error: { code: string } };
+
+export type IssueInvoiceDependencies = {
+  prepareVerifactuAlta?: VerifactuAltaPreparer;
+  verifactuEnabled?: boolean;
+  verifactuEnvironment?: "TEST" | "PRODUCTION";
+};
+
+type IssueInvoiceRequestContext = Pick<RequestContext, "correlationId"> & {
+  idempotencyKey?: string;
+  requestHash?: string;
+};
+
+export function hashInvoiceRectificationBody(command: CreateInvoiceRectificationCommand): string {
+  return hashIdempotencyPayload("invoice-rectification:v2", command);
+}
+
+export async function readInvoiceRectificationReplay(key: string, requestHash: string): Promise<CreateInvoiceRectificationResult | null> {
+  const stored = await prisma.idempotencyRecord.findUnique({ where: { key } });
+  if (!stored) return null;
+  if (stored.requestHash !== requestHash) return idempotencyKeyReused();
+  const invoiceId = readStoredInvoiceId(stored.responseBody);
+  const invoice = invoiceId ? await prisma.invoice.findUnique({ where: { id: invoiceId }, select: invoiceDetailSelect }) : null;
+  if (!invoice) return idempotencyReplayInvalid();
+  return { ok: true, status: 200, value: mapInvoiceDetail(invoice) };
+}
 
 export type InvoiceListItem = {
   id: string;
@@ -155,14 +269,34 @@ export type InvoiceDetail = {
     id: string;
     number: string | null;
   }>;
-  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "UNPAID";
+  accountingEntry: {
+    id: string;
+    number: string;
+  } | null;
+  voidingAccountingEntry: {
+    id: string;
+    number: string;
+  } | null;
+  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "PARTIALLY_SETTLED" | "SETTLED" | "NOT_APPLICABLE" | "UNPAID" | "CANCELLED";
   verifactuStatus:
     | "NOT_APPLICABLE"
     | "PENDING"
     | "SENT"
     | "ACCEPTED"
     | "ACCEPTED_WITH_ERRORS"
-    | "REJECTED";
+    | "REJECTED"
+    | "CANCELLED";
+  verifactuTrace: null | {
+    recordType: "ALTA" | "ANULACION";
+    cancellationReasonCode: "ISSUED_BY_MISTAKE" | "DUPLICATE_INVOICE" | "WRONG_FISCAL_IDENTITY" | null;
+    chainPosition: string;
+    generatedAt: string;
+    installationCode: string;
+    environment: "TEST" | "PRODUCTION";
+    operationalStatus: "PENDING" | "PROCESSING" | "RECONCILIATION_REQUIRED" | "ACTION_REQUIRED" | "COMPLETED";
+    queue: null | { id: string; operation: "SUBMIT" | "RECONCILE"; status: "PENDING" | "CLAIMED" | "PROCESSED" | "DEAD"; attemptCount: number; maxAttempts: number; nextAttemptAt: string; lastErrorCode: string | null };
+    latestAttempt: null | { kind: "SUBMIT" | "RECONCILE"; outcome: "ACCEPTED" | "ACCEPTED_WITH_ERRORS" | "REJECTED" | "RETRYABLE_FAILURE" | "UNKNOWN"; completedAt: string; stableErrorCode: string | null };
+  };
   lines: Array<{
     id: string;
     position: number;
@@ -199,9 +333,15 @@ export type InvoiceDetail = {
     dueDate: string;
     amount: string;
     paidAmount: string;
+    creditAppliedAmount: string;
     pendingAmount: string;
     paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
-    status: "PENDING" | "PAID" | "RETURNED" | "UNPAID";
+    status: "PENDING" | "PAID" | "SETTLED" | "RETURNED" | "UNPAID" | "CANCELLED";
+    remittance: {
+      id: string;
+      number: string;
+      status: string;
+    } | null;
   }>;
   payments: Array<{
     id: string;
@@ -213,6 +353,10 @@ export type InvoiceDetail = {
     netAmount: string;
     reference: string | null;
     createdAt: string;
+    accountingEntry: {
+      id: string;
+      number: string;
+    } | null;
   }>;
   paymentReturns: Array<{
     id: string;
@@ -222,6 +366,10 @@ export type InvoiceDetail = {
     amount: string;
     reasonCode: string | null;
     createdAt: string;
+    accountingEntry: {
+      id: string;
+      number: string;
+    } | null;
   }>;
   totals: {
     subtotal: string;
@@ -279,6 +427,15 @@ type InvoiceNotIssuableResult = {
   };
 };
 
+type InvoiceVerifactuUnavailableResult = {
+  ok: false;
+  status: 503;
+  error: {
+    code: "INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE";
+    message: string;
+  };
+};
+
 type CatalogItemNotFoundResult = {
   ok: false;
   status: 422;
@@ -318,7 +475,8 @@ export type ReplaceInvoiceDueDatesResult =
 export type IssueInvoiceResult =
   | { ok: true; status: 200; value: InvoiceDetail }
   | InvoiceNotFoundResult
-  | InvoiceNotIssuableResult;
+  | InvoiceNotIssuableResult
+  | InvoiceVerifactuUnavailableResult;
 
 type InvoiceNotRectifiableResult = {
   ok: false;
@@ -327,13 +485,17 @@ type InvoiceNotRectifiableResult = {
     code:
       | "INVOICE_NOT_RECTIFIABLE"
       | "INVOICE_ALREADY_RECTIFIED"
-      | "INVOICE_RECTIFICATION_CHRONOLOGY_VIOLATION";
+      | "INVOICE_RECTIFICATION_CHRONOLOGY_VIOLATION"
+      | "INVOICE_RECTIFICATION_FINANCIAL_ACTIVITY"
+      | "INVOICE_RECTIFICATION_VERIFACTU_UNAVAILABLE"
+      | "IDEMPOTENCY_KEY_REUSED"
+      | "IDEMPOTENCY_REPLAY_INVALID";
     message: string;
   };
 };
 
 export type CreateInvoiceRectificationResult =
-  | { ok: true; status: 201; value: InvoiceDetail }
+  | { ok: true; status: 200 | 201; value: InvoiceDetail }
   | InvoiceNotFoundResult
   | InvoiceNotRectifiableResult
   | InvoiceNotIssuableResult;
@@ -407,6 +569,19 @@ export async function getInvoiceDetail(
     return null;
   }
 
+  const latestFiscalRecord = invoice.verifactuFiscalRecords[0] ?? null;
+  let cancellationReasonCode = latestFiscalRecord ? readCancellationReason(latestFiscalRecord.fiscalSnapshot) : null;
+  if (latestFiscalRecord?.recordType === "ANULACION" && !cancellationReasonCode) {
+    cancellationReasonCode = (await prisma.$queryRaw<Array<{ reasonCode: string | null }>>`
+      SELECT "payload"->>'reasonCode' AS "reasonCode"
+      FROM "audit_events"
+      WHERE "eventType" = 'VERIFACTU_CANCELLATION_PREPARED'
+        AND "payload"->>'fiscalRecordId' = ${latestFiscalRecord.id}
+      ORDER BY "createdAt" DESC, "id" DESC
+      LIMIT 1
+    `)[0]?.reasonCode ?? null;
+  }
+
   await prisma.auditEvent.create({
     data: {
       eventType: "INVOICE_VIEWED",
@@ -420,7 +595,7 @@ export async function getInvoiceDetail(
     }
   });
 
-  return mapInvoiceDetail(invoice);
+  return mapInvoiceDetailForTreasury(invoice, cancellationReasonCode);
 }
 
 export async function createInvoiceDraft(
@@ -429,6 +604,10 @@ export async function createInvoiceDraft(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<CreateInvoiceDraftResult> {
   const result = await prisma.$transaction(async (tx) => {
+    const installation = await tx.installation.findFirst({
+      where: { companyId: { not: null } },
+      select: { companyId: true }
+    });
     const customer = await tx.customer.findUnique({
       where: { id: command.customerId },
       select: invoiceCustomerSelect
@@ -445,6 +624,7 @@ export async function createInvoiceDraft(
     const issueDate = parseDateOnly(command.issueDate);
     const invoice = await tx.invoice.create({
       data: {
+        companyId: installation?.companyId,
         year: issueDate.getUTCFullYear(),
         customerId: customer.id,
         customerCodeSnapshot: customer.code,
@@ -651,6 +831,9 @@ export async function replaceInvoiceDueDates(
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
     );
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "invoice_due_dates" WHERE "invoiceId" = ${invoiceId}::uuid ORDER BY "id" FOR UPDATE`
+    );
     const invoice = await tx.invoice.findUnique({
       where: { id: invoiceId },
       select: { id: true, documentType: true, status: true, issueDate: true, total: true }
@@ -703,7 +886,8 @@ export async function issueInvoice(
   invoiceId: string,
   command: IssueInvoiceCommand,
   actor: SessionUser,
-  context: Pick<RequestContext, "correlationId"> = {}
+  context: IssueInvoiceRequestContext = {},
+  dependencies: IssueInvoiceDependencies = {}
 ): Promise<IssueInvoiceResult> {
   const result = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw(
@@ -713,7 +897,12 @@ export async function issueInvoice(
       where: { id: invoiceId },
       select: {
         id: true,
+        companyId: true,
+        documentType: true,
+        company: { select: { legalName: true, taxId: true } },
         status: true,
+        paymentStatus: true,
+        verifactuStatus: true,
         series: true,
         year: true,
         issueDate: true,
@@ -722,11 +911,35 @@ export async function issueInvoice(
         customerId: true,
         customerCodeSnapshot: true,
         customerLegalNameSnapshot: true,
+        customerTaxIdSnapshot: true,
+        customerFiscalTreatmentSnapshot: true,
+        customerFiscalAddressSnapshot: true,
+        operationDate: true,
+        subtotal: true,
+        discountTotal: true,
+        taxableBase: true,
         lines: {
           select: {
+            position: true,
             catalogItemKindSnapshot: true,
-            lineTaxableBase: true
+            catalogItemCodeSnapshot: true,
+            description: true,
+            quantity: true,
+            unitPrice: true,
+            discountPercent: true,
+            discountAmount: true,
+            taxRateCodeSnapshot: true,
+            taxRateNameSnapshot: true,
+            taxRateSnapshot: true,
+            lineSubtotal: true,
+            lineDiscountTotal: true,
+            lineTaxableBase: true,
+            lineTaxAmount: true,
+            lineTotal: true
           }
+        },
+        taxSummaries: {
+          select: { taxRateCode: true, taxRate: true, taxableBase: true, taxAmount: true, total: true }
         },
         dueDates: { select: { dueDate: true, amount: true } },
         _count: {
@@ -886,12 +1099,124 @@ export async function issueInvoice(
       }
     });
 
-    await tx.invoiceVerifactuRecord.create({
-      data: {
-        invoiceId,
-        status: "PENDING"
+    const verifactuEnabled = dependencies.verifactuEnabled ?? readVerifactuEnabled();
+    const verifactuEnvironment = dependencies.verifactuEnvironment ?? readVerifactuEnvironment();
+    if (verifactuEnabled && !verifactuEnvironment) throw new VerifactuPreparationUnavailableError();
+    const activeSif = verifactuEnabled && invoice.companyId
+      ? (await tx.$queryRaw<Array<{
+          id: string;
+          contractVersion: string;
+          schemaVersion: string;
+          artifactManifestVersion: string;
+          artifactManifestSha256: string;
+          environment: "TEST" | "PRODUCTION";
+          nextPosition: bigint;
+          lastRecordId: string | null;
+          lastRecordHash: string | null;
+          previousInvoiceNumber: string | null;
+          previousInvoiceIssueDate: Date | null;
+          producerTaxId: string;
+          producerName: string;
+          systemName: string;
+          systemId: string;
+          systemVersion: string;
+          installationNumber: string;
+        }>>(Prisma.sql`
+          SELECT installation."id", installation."contractVersion", installation."schemaVersion", installation."artifactManifestVersion",
+            installation."artifactManifestSha256", installation."environment", installation."nextPosition", installation."lastRecordId", installation."lastRecordHash",
+            installation."producerTaxId", installation."producerName", installation."systemName", installation."systemId", installation."systemVersion", installation."installationNumber",
+            previous."invoiceNumber" AS "previousInvoiceNumber", previous."invoiceIssueDate" AS "previousInvoiceIssueDate"
+          FROM "verifactu_sif_installations" installation
+          LEFT JOIN "verifactu_fiscal_records" previous ON previous."id" = installation."lastRecordId"
+          WHERE installation."companyId" = ${invoice.companyId}::uuid
+            AND installation."environment" = CAST(${verifactuEnvironment} AS "VerifactuEnvironment")
+            AND installation."status" = 'ACTIVE'
+          FOR UPDATE OF installation
+        `))[0]
+      : undefined;
+
+    if (verifactuEnabled) {
+      if (!activeSif) throw new VerifactuPreparationUnavailableError();
+      if (!dependencies.prepareVerifactuAlta || !invoice.companyId || !context.idempotencyKey) {
+        throw new VerifactuPreparationUnavailableError();
       }
-    });
+      const prepared = dependencies.prepareVerifactuAlta({
+        idempotencyKey: context.idempotencyKey,
+        invoice: {
+          id: invoice.id,
+          companyId: invoice.companyId,
+          documentType: invoice.documentType,
+          rectification: null,
+          issuerName: invoice.company!.legalName,
+          issuerTaxId: invoice.company!.taxId,
+          series: invoice.series,
+          number,
+          issueDate: formatDateOnly(issueDate),
+          operationDate: formatDateOnly(invoice.operationDate),
+          customerCode: invoice.customerCodeSnapshot,
+          customerLegalName: invoice.customerLegalNameSnapshot,
+          customerTaxId: invoice.customerTaxIdSnapshot,
+          customerFiscalTreatment: invoice.customerFiscalTreatmentSnapshot,
+          customerFiscalAddress: invoice.customerFiscalAddressSnapshot,
+          subtotal: invoice.subtotal.toFixed(2),
+          discountTotal: invoice.discountTotal.toFixed(2),
+          taxableBase: invoice.taxableBase.toFixed(2),
+          taxAmount: invoice.taxAmount.toFixed(2),
+          total: invoice.total.toFixed(2),
+          lines: invoice.lines.map((line) => ({
+            position: line.position,
+            description: line.description,
+            lineTaxableBase: line.lineTaxableBase.toFixed(2),
+            lineTaxAmount: line.lineTaxAmount.toFixed(2),
+            lineTotal: line.lineTotal.toFixed(2)
+          })),
+          taxSummaries: invoice.taxSummaries.map((summary) => ({
+            taxRateCode: summary.taxRateCode,
+            taxRate: summary.taxRate.toFixed(2),
+            taxableBase: summary.taxableBase.toFixed(2),
+            taxAmount: summary.taxAmount.toFixed(2),
+            total: summary.total.toFixed(2)
+          }))
+        },
+        installation: {
+          id: activeSif.id,
+          environment: activeSif.environment,
+          contractVersion: activeSif.contractVersion,
+          schemaVersion: activeSif.schemaVersion,
+          artifactManifestVersion: activeSif.artifactManifestVersion,
+          artifactManifestSha256: activeSif.artifactManifestSha256,
+          nextPosition: activeSif.nextPosition,
+          previousRecordId: activeSif.lastRecordId,
+          previousRecordHash: activeSif.lastRecordHash,
+          previousInvoiceNumber: activeSif.previousInvoiceNumber,
+          previousInvoiceIssueDate: activeSif.previousInvoiceIssueDate ? formatDateOnly(activeSif.previousInvoiceIssueDate) : null,
+          producerTaxId: activeSif.producerTaxId,
+          producerName: activeSif.producerName,
+          systemName: activeSif.systemName,
+          systemId: activeSif.systemId,
+          systemVersion: activeSif.systemVersion,
+          installationNumber: activeSif.installationNumber
+        }
+      });
+      if (!prepared.ok) throw new VerifactuPreparationUnavailableError();
+      const committed = await commitPreparedVerifactuAltaInTransaction(tx, {
+        invoiceId,
+        sifInstallationId: activeSif.id,
+        preparationKey: prepared.value.preparationKey,
+        generatedAt: prepared.value.generatedAt,
+        canonicalizationVersion: prepared.value.canonicalizationVersion,
+        expectedPreviousRecordId: activeSif.lastRecordId,
+        expectedPreviousHash: activeSif.lastRecordHash,
+        recordHash: prepared.value.recordHash,
+        payloadCiphertext: prepared.value.payloadCiphertext,
+        payloadSha256: prepared.value.payloadSha256,
+        encryptionKeyId: prepared.value.encryptionKeyId,
+        qrUrl: prepared.value.qrUrl
+      }, actor, context);
+      if (!committed.ok) throw new VerifactuPreparationUnavailableError();
+    } else {
+      await tx.invoiceVerifactuRecord.create({ data: { invoiceId, status: "PENDING" } });
+    }
 
     await tx.auditEvent.create({
       data: {
@@ -914,6 +1239,11 @@ export async function issueInvoice(
       kind: "issued" as const,
       invoice: await findInvoiceDetail(tx, invoiceId)
     };
+  }).catch((error: unknown) => {
+    if (error instanceof VerifactuPreparationUnavailableError) {
+      return { kind: "verifactu-preparation-unavailable" as const };
+    }
+    throw error;
   });
 
   if (result.kind === "invoice-not-found") {
@@ -946,6 +1276,9 @@ export async function issueInvoice(
   if (result.kind === "accounting-entry-unbalanced") {
     return invoiceAccountingEntryUnbalanced();
   }
+  if (result.kind === "verifactu-preparation-unavailable") {
+    return invoiceVerifactuPreparationUnavailable();
+  }
 
   return {
     ok: true,
@@ -958,9 +1291,26 @@ export async function createInvoiceRectification(
   invoiceId: string,
   command: CreateInvoiceRectificationCommand,
   actor: SessionUser,
-  context: Pick<RequestContext, "correlationId"> = {}
+  context: IssueInvoiceRequestContext = {},
+  dependencies: IssueInvoiceDependencies = {}
 ): Promise<CreateInvoiceRectificationResult> {
+  if (context.idempotencyKey && context.requestHash) {
+    const replay = await readInvoiceRectificationReplay(context.idempotencyKey, context.requestHash);
+    if (replay) return replay;
+  }
   const result = await prisma.$transaction(async (tx) => {
+    if (context.idempotencyKey && context.requestHash) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${context.idempotencyKey}, 0))`;
+      const stored = await tx.idempotencyRecord.findUnique({ where: { key: context.idempotencyKey } });
+      if (stored) {
+        if (stored.requestHash !== context.requestHash) return { kind: "idempotency-key-reused" as const };
+        const storedInvoiceId = readStoredInvoiceId(stored.responseBody);
+        if (!storedInvoiceId) return { kind: "idempotency-replay-invalid" as const };
+        const storedInvoice = await tx.invoice.findUnique({ where: { id: storedInvoiceId }, select: invoiceDetailSelect });
+        if (!storedInvoice) return { kind: "idempotency-replay-invalid" as const };
+        return { kind: "replayed" as const, invoice: mapInvoiceDetail(storedInvoice) };
+      }
+    }
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
     );
@@ -968,8 +1318,12 @@ export async function createInvoiceRectification(
       where: { id: invoiceId },
       select: {
         id: true,
+        companyId: true,
+        company: { select: { legalName: true, taxId: true } },
         documentType: true,
         status: true,
+        paymentStatus: true,
+        verifactuStatus: true,
         series: true,
         year: true,
         number: true,
@@ -1024,11 +1378,33 @@ export async function createInvoiceRectification(
             position: true,
             dueDate: true,
             amount: true,
-            paymentMethod: true
+            paymentMethod: true,
+            status: true,
+            payments: {
+              select: {
+                amount: true,
+                returns: { select: { amount: true } }
+              }
+            },
+            paymentReturns: { select: { amount: true } },
+            remittanceLines: { where: { status: "ACTIVE" }, select: { id: true }, take: 1 }
           }
         },
         rectificationInvoices: {
           select: { id: true }
+        },
+        verifactuFiscalRecords: {
+          orderBy: [{ chainPosition: "desc" }, { createdAt: "desc" }],
+          take: 1,
+          select: {
+            recordType: true,
+            issuerTaxId: true,
+            invoiceNumber: true,
+            invoiceIssueDate: true,
+            sifInstallation: { select: { environment: true } },
+            attempts: { orderBy: { attemptNumber: "desc" }, take: 1, select: { outcome: true } },
+            outboxMessages: { select: { status: true } }
+          }
         }
       }
     });
@@ -1044,6 +1420,85 @@ export async function createInvoiceRectification(
     if (original.rectificationInvoices.length > 0) {
       return { kind: "invoice-already-rectified" as const };
     }
+    if (!original.companyId) {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+
+    const cleanUnpaid = original.paymentStatus === "PENDING" && original.dueDates.every((dueDate) =>
+      dueDate.status === "PENDING"
+      && dueDate.payments.length === 0
+      && dueDate.paymentReturns.length === 0
+      && dueDate.remittanceLines.length === 0
+    );
+    const netPaidAmount = original.dueDates.reduce(
+      (invoiceTotal, dueDate) => invoiceTotal.plus(dueDate.payments.reduce(
+        (dueTotal, payment) => dueTotal.plus(payment.amount).minus(
+          payment.returns.reduce((returnTotal, paymentReturn) => returnTotal.plus(paymentReturn.amount), new Prisma.Decimal(0))
+        ),
+        new Prisma.Decimal(0)
+      )),
+      new Prisma.Decimal(0)
+    );
+    const cleanPaid = original.paymentStatus === "PAID"
+      && original.dueDates.every((dueDate) =>
+        dueDate.status === "PAID"
+        && dueDate.paymentReturns.length === 0
+        && dueDate.remittanceLines.length === 0
+      )
+      && netPaidAmount.equals(original.total);
+    if (!cleanUnpaid && !cleanPaid) {
+      return { kind: "rectification-financial-activity" as const };
+    }
+
+    const verifactuEnabled = dependencies.verifactuEnabled ?? readVerifactuEnabled();
+    const verifactuEnvironment = dependencies.verifactuEnvironment ?? readVerifactuEnvironment();
+    if (verifactuEnabled && (!verifactuEnvironment || !context.idempotencyKey || !dependencies.prepareVerifactuAlta)) {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+    if (verifactuEnabled && original.verifactuStatus !== "ACCEPTED" && original.verifactuStatus !== "ACCEPTED_WITH_ERRORS") {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+    if (verifactuEnabled && (command.reason === "UNPAID" || command.fiscalClassification !== "R4_OTHER")) {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+    const originalFiscalAlta = original.verifactuFiscalRecords[0];
+    const originalFiscalOutcome = originalFiscalAlta?.attempts[0]?.outcome;
+    if (verifactuEnabled && (
+      !originalFiscalAlta
+      || originalFiscalAlta.recordType !== "ALTA"
+      || (originalFiscalOutcome !== "ACCEPTED" && originalFiscalOutcome !== "ACCEPTED_WITH_ERRORS")
+      || originalFiscalAlta.outboxMessages.length === 0
+      || originalFiscalAlta.outboxMessages.some((message) => message.status !== "PROCESSED")
+      || originalFiscalAlta.sifInstallation.environment !== verifactuEnvironment
+      || originalFiscalAlta.issuerTaxId !== original.company?.taxId
+    )) {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+    if (!verifactuEnabled && original.verifactuStatus !== "NOT_APPLICABLE") {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+
+    const activeSif = verifactuEnabled && original.companyId && verifactuEnvironment
+      ? (await tx.$queryRaw<Array<{
+          id: string; contractVersion: string; schemaVersion: string; artifactManifestVersion: string;
+          artifactManifestSha256: string; environment: "TEST" | "PRODUCTION"; nextPosition: bigint;
+          lastRecordId: string | null; lastRecordHash: string | null; previousInvoiceNumber: string | null;
+          previousInvoiceIssueDate: Date | null; producerTaxId: string; producerName: string; systemName: string;
+          systemId: string; systemVersion: string; installationNumber: string;
+        }>>(Prisma.sql`
+          SELECT installation."id", installation."contractVersion", installation."schemaVersion", installation."artifactManifestVersion",
+            installation."artifactManifestSha256", installation."environment", installation."nextPosition", installation."lastRecordId", installation."lastRecordHash",
+            installation."producerTaxId", installation."producerName", installation."systemName", installation."systemId", installation."systemVersion", installation."installationNumber",
+            previous."invoiceNumber" AS "previousInvoiceNumber", previous."invoiceIssueDate" AS "previousInvoiceIssueDate"
+          FROM "verifactu_sif_installations" installation
+          LEFT JOIN "verifactu_fiscal_records" previous ON previous."id" = installation."lastRecordId"
+          WHERE installation."companyId" = ${original.companyId}::uuid
+            AND installation."environment" = CAST(${verifactuEnvironment} AS "VerifactuEnvironment")
+            AND installation."status" = 'ACTIVE'
+          FOR UPDATE OF installation
+        `))[0]
+      : undefined;
+    if (verifactuEnabled && !activeSif) return { kind: "rectification-verifactu-unavailable" as const };
 
     const issueDate = parseDateOnly(command.issueDate);
     const chronologyViolation = await hasChronologyViolation(tx, "R", issueDate);
@@ -1107,11 +1562,12 @@ export async function createInvoiceRectification(
     const journalNumber = `${issueDate.getUTCFullYear()}/${journalSequence.toString().padStart(6, "0")}`;
     const rectification = await tx.invoice.create({
       data: {
+        companyId: original.companyId,
         documentType: "RECTIFICATION",
         origin: "MANUAL",
         status: "ISSUED",
-        paymentStatus: "PAID",
-        verifactuStatus: "PENDING",
+        paymentStatus: "NOT_APPLICABLE",
+        verifactuStatus: verifactuEnabled ? "PENDING" : "NOT_APPLICABLE",
         series: "R",
         year: sequence.year,
         numberSequence: sequence.value,
@@ -1221,33 +1677,118 @@ export async function createInvoiceRectification(
       select: { id: true, number: true }
     });
 
-    const dueDateTemplate = original.dueDates[0];
-
-    await tx.invoiceDueDate.create({
-      data: {
-        invoiceId: rectification.id,
-        position: 1,
-        dueDate: issueDate,
-        amount: original.total.neg(),
-        paymentMethod: dueDateTemplate?.paymentMethod ?? "BANK_TRANSFER",
-        status: "PAID"
+    if (verifactuEnabled) {
+      if (!activeSif || !original.company || !original.number || !dependencies.prepareVerifactuAlta || !context.idempotencyKey) {
+        throw new VerifactuPreparationUnavailableError();
       }
-    });
-
-    await tx.invoiceVerifactuRecord.create({
-      data: {
+      const prepared = dependencies.prepareVerifactuAlta({
+        idempotencyKey: context.idempotencyKey,
+        invoice: {
+          id: rectification.id,
+          companyId: original.companyId!,
+          documentType: "RECTIFICATION",
+          rectification: {
+            originalInvoiceNumber: originalFiscalAlta!.invoiceNumber,
+            originalIssueDate: formatDateOnly(originalFiscalAlta!.invoiceIssueDate)
+          },
+          issuerName: original.company.legalName,
+          issuerTaxId: originalFiscalAlta!.issuerTaxId,
+          series: "R",
+          number,
+          issueDate: formatDateOnly(issueDate),
+          operationDate: formatDateOnly(original.operationDate),
+          customerCode: original.customerCodeSnapshot,
+          customerLegalName: original.customerLegalNameSnapshot,
+          customerTaxId: original.customerTaxIdSnapshot,
+          customerFiscalTreatment: original.customerFiscalTreatmentSnapshot,
+          customerFiscalAddress: original.customerFiscalAddressSnapshot,
+          subtotal: original.subtotal.neg().toFixed(2),
+          discountTotal: original.discountTotal.neg().toFixed(2),
+          taxableBase: original.taxableBase.neg().toFixed(2),
+          taxAmount: original.taxAmount.neg().toFixed(2),
+          total: original.total.neg().toFixed(2),
+          lines: original.lines.map((line) => ({
+            position: line.position,
+            description: line.description,
+            lineTaxableBase: line.lineTaxableBase.neg().toFixed(2),
+            lineTaxAmount: line.lineTaxAmount.neg().toFixed(2),
+            lineTotal: line.lineTotal.neg().toFixed(2)
+          })),
+          taxSummaries: original.taxSummaries.map((summary) => ({
+            taxRateCode: summary.taxRateCode,
+            taxRate: summary.taxRate.toFixed(2),
+            taxableBase: summary.taxableBase.neg().toFixed(2),
+            taxAmount: summary.taxAmount.neg().toFixed(2),
+            total: summary.total.neg().toFixed(2)
+          }))
+        },
+        installation: {
+          id: activeSif.id,
+          environment: activeSif.environment,
+          contractVersion: activeSif.contractVersion,
+          schemaVersion: activeSif.schemaVersion,
+          artifactManifestVersion: activeSif.artifactManifestVersion,
+          artifactManifestSha256: activeSif.artifactManifestSha256,
+          nextPosition: activeSif.nextPosition,
+          previousRecordId: activeSif.lastRecordId,
+          previousRecordHash: activeSif.lastRecordHash,
+          previousInvoiceNumber: activeSif.previousInvoiceNumber,
+          previousInvoiceIssueDate: activeSif.previousInvoiceIssueDate ? formatDateOnly(activeSif.previousInvoiceIssueDate) : null,
+          producerTaxId: activeSif.producerTaxId,
+          producerName: activeSif.producerName,
+          systemName: activeSif.systemName,
+          systemId: activeSif.systemId,
+          systemVersion: activeSif.systemVersion,
+          installationNumber: activeSif.installationNumber
+        }
+      });
+      if (!prepared.ok) throw new VerifactuPreparationUnavailableError();
+      const committed = await commitPreparedVerifactuAltaInTransaction(tx, {
         invoiceId: rectification.id,
-        status: "PENDING"
-      }
-    });
+        sifInstallationId: activeSif.id,
+        preparationKey: prepared.value.preparationKey,
+        generatedAt: prepared.value.generatedAt,
+        canonicalizationVersion: prepared.value.canonicalizationVersion,
+        expectedPreviousRecordId: activeSif.lastRecordId,
+        expectedPreviousHash: activeSif.lastRecordHash,
+        recordHash: prepared.value.recordHash,
+        payloadCiphertext: prepared.value.payloadCiphertext,
+        payloadSha256: prepared.value.payloadSha256,
+        encryptionKeyId: prepared.value.encryptionKeyId,
+        qrUrl: prepared.value.qrUrl
+      }, actor, context);
+      if (!committed.ok) throw new VerifactuPreparationUnavailableError();
+    } else {
+      await tx.invoiceVerifactuRecord.create({ data: { invoiceId: rectification.id, status: "PENDING" } });
+    }
+
+    const customerCredit = cleanPaid
+      ? await tx.customerCredit.create({
+          data: {
+            companyId: original.companyId,
+            customerId: original.customerId,
+            sourceRectificationInvoiceId: rectification.id,
+            originalAmount: original.total,
+            createdById: actor.id
+          },
+          select: { id: true }
+        })
+      : null;
 
     await tx.invoice.update({
       where: { id: original.id },
       data: {
         status: "RECTIFIED",
+        paymentStatus: cleanUnpaid ? "CANCELLED" : "PAID",
         updatedById: actor.id
       }
     });
+    if (cleanUnpaid) {
+      await tx.invoiceDueDate.updateMany({
+        where: { invoiceId: original.id, status: "PENDING" },
+        data: { status: "CANCELLED" }
+      });
+    }
 
     await tx.auditEvent.create({
       data: {
@@ -1265,20 +1806,40 @@ export async function createInvoiceRectification(
           issueDate: command.issueDate,
           accountingJournalEntryId: accountingEntry.id,
           accountingJournalEntryNumber: accountingEntry.number,
+          customerCreditId: customerCredit?.id ?? null,
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
     });
 
+    if (context.idempotencyKey && context.requestHash) {
+      await tx.idempotencyRecord.create({
+        data: {
+          key: context.idempotencyKey,
+          requestHash: context.requestHash,
+          responseStatus: 201,
+          responseBody: { invoiceId: rectification.id }
+        }
+      });
+    }
+
     return {
       kind: "created" as const,
       invoice: await findInvoiceDetail(tx, rectification.id)
     };
+  }).catch((error: unknown) => {
+    if (error instanceof VerifactuPreparationUnavailableError) {
+      return { kind: "rectification-verifactu-unavailable" as const };
+    }
+    throw error;
   });
 
   if (result.kind === "invoice-not-found") {
     return invoiceNotFound();
   }
+  if (result.kind === "idempotency-key-reused") return idempotencyKeyReused();
+  if (result.kind === "idempotency-replay-invalid") return idempotencyReplayInvalid();
+  if (result.kind === "replayed") return { ok: true, status: 200, value: result.invoice };
 
   if (result.kind === "invoice-not-rectifiable") {
     return {
@@ -1312,6 +1873,26 @@ export async function createInvoiceRectification(
       }
     };
   }
+  if (result.kind === "rectification-financial-activity") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_RECTIFICATION_FINANCIAL_ACTIVITY",
+        message: "La factura tiene actividad financiera. La rectificacion permanece bloqueada hasta disponer de creditos y reembolsos."
+      }
+    };
+  }
+  if (result.kind === "rectification-verifactu-unavailable") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_RECTIFICATION_VERIFACTU_UNAVAILABLE",
+        message: "La rectificativa VeriFactu permanece bloqueada hasta que pueda generar y encolar su ALTA real."
+      }
+    };
+  }
   if (result.kind === "accounting-fiscal-year-not-open") {
     return invoiceAccountingFiscalYearNotOpen();
   }
@@ -1327,6 +1908,19 @@ export async function createInvoiceRectification(
     status: 201,
     value: mapInvoiceDetail(result.invoice)
   };
+}
+
+function readStoredInvoiceId(body: Prisma.JsonValue): string | null {
+  if (!body || Array.isArray(body) || typeof body !== "object") return null;
+  return typeof body.invoiceId === "string" ? body.invoiceId : null;
+}
+
+function idempotencyKeyReused(): CreateInvoiceRectificationResult {
+  return { ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED", message: "La clave de idempotencia ya se uso con otra peticion." } };
+}
+
+function idempotencyReplayInvalid(): CreateInvoiceRectificationResult {
+  return { ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID", message: "La respuesta idempotente almacenada no es valida." } };
 }
 
 const invoiceCustomerSelect = {
@@ -1376,8 +1970,30 @@ const invoiceDetailSelect = {
       number: true
     }
   },
+  accountingEntry: {
+    select: {
+      id: true,
+      number: true
+    }
+  },
+  voidingAccountingEntry: {
+    select: {
+      id: true,
+      number: true
+    }
+  },
   paymentStatus: true,
   verifactuStatus: true,
+  verifactuFiscalRecords: {
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 1,
+    select: {
+      id: true, recordType: true, chainPosition: true, generatedAt: true, fiscalSnapshot: true,
+      sifInstallation: { select: { installationCode: true, environment: true } },
+      outboxMessages: { orderBy: [{ updatedAt: "desc" }, { id: "desc" }], take: 2, select: { id: true, operation: true, status: true, attemptCount: true, maxAttempts: true, nextAttemptAt: true, lastErrorCode: true } },
+      attempts: { orderBy: [{ attemptNumber: "desc" }], take: 1, select: { kind: true, outcome: true, completedAt: true, stableErrorCode: true } }
+    }
+  },
   subtotal: true,
   discountTotal: true,
   taxableBase: true,
@@ -1424,6 +2040,19 @@ const invoiceDetailSelect = {
       amount: true,
       paymentMethod: true,
       status: true,
+      remittanceLines: {
+        where: { status: "ACTIVE" },
+        take: 1,
+        select: {
+          remittance: {
+            select: {
+              id: true,
+              number: true,
+              status: true
+            }
+          }
+        }
+      },
       payments: {
         select: {
           amount: true,
@@ -1433,7 +2062,8 @@ const invoiceDetailSelect = {
             }
           }
         }
-      }
+      },
+      creditApplications: { select: { amount: true } }
     }
   },
   payments: {
@@ -1446,6 +2076,12 @@ const invoiceDetailSelect = {
       amount: true,
       reference: true,
       createdAt: true,
+      accountingEntry: {
+        select: {
+          id: true,
+          number: true
+        }
+      },
       returns: {
         select: {
           amount: true
@@ -1462,7 +2098,13 @@ const invoiceDetailSelect = {
       returnDate: true,
       amount: true,
       reasonCode: true,
-      createdAt: true
+      createdAt: true,
+      accountingEntry: {
+        select: {
+          id: true,
+          number: true
+        }
+      }
     }
   },
   createdAt: true,
@@ -1636,7 +2278,7 @@ async function reserveInvoiceNumber(
   return { year, value };
 }
 
-export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): InvoiceDetail {
+export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord, cancellationReasonOverride: string | null = null): InvoiceDetail {
   return {
     id: invoice.id,
     documentType: invoice.documentType,
@@ -1665,8 +2307,11 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
       id: rectification.id,
       number: rectification.number
     })),
+    accountingEntry: invoice.accountingEntry,
+    voidingAccountingEntry: invoice.voidingAccountingEntry,
     paymentStatus: invoice.paymentStatus,
     verifactuStatus: invoice.verifactuStatus,
+    verifactuTrace: mapVerifactuTrace(invoice.verifactuFiscalRecords[0] ?? null, cancellationReasonOverride),
     lines: invoice.lines.map((line) => ({
       id: line.id,
       position: line.position,
@@ -1702,7 +2347,13 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
         (total, payment) => total.plus(netPaymentAmount(payment)),
         new Prisma.Decimal(0)
       );
-      const pendingAmount = dueDate.amount.minus(paidAmount);
+      const creditAppliedAmount = dueDate.creditApplications.reduce(
+        (total, application) => total.plus(application.amount),
+        new Prisma.Decimal(0)
+      );
+      const pendingAmount = dueDate.status === "CANCELLED"
+        ? new Prisma.Decimal(0)
+        : Prisma.Decimal.max(new Prisma.Decimal(0), dueDate.amount.minus(paidAmount).minus(creditAppliedAmount));
 
       return {
         id: dueDate.id,
@@ -1710,9 +2361,11 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
         dueDate: formatDateOnly(dueDate.dueDate),
         amount: dueDate.amount.toFixed(2),
         paidAmount: paidAmount.toFixed(2),
+        creditAppliedAmount: creditAppliedAmount.toFixed(2),
         pendingAmount: pendingAmount.toFixed(2),
         paymentMethod: dueDate.paymentMethod,
-        status: dueDate.status
+        status: dueDate.status,
+        remittance: dueDate.remittanceLines[0]?.remittance ?? null
       };
     }),
     payments: invoice.payments.map((payment) => {
@@ -1728,7 +2381,8 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
         returnedAmount: returnedAmount.toFixed(2),
         netAmount: netAmount.toFixed(2),
         reference: payment.reference,
-        createdAt: payment.createdAt.toISOString()
+        createdAt: payment.createdAt.toISOString(),
+        accountingEntry: payment.accountingEntry
       };
     }),
     paymentReturns: invoice.paymentReturns.map((paymentReturn) => ({
@@ -1738,7 +2392,8 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
       returnDate: formatDateOnly(paymentReturn.returnDate),
       amount: paymentReturn.amount.toFixed(2),
       reasonCode: paymentReturn.reasonCode,
-      createdAt: paymentReturn.createdAt.toISOString()
+      createdAt: paymentReturn.createdAt.toISOString(),
+      accountingEntry: paymentReturn.accountingEntry
     })),
     totals: {
       subtotal: invoice.subtotal.toFixed(2),
@@ -1753,6 +2408,42 @@ export function mapInvoiceDetailForTreasury(invoice: InvoiceDetailRecord): Invoi
 }
 
 const mapInvoiceDetail = mapInvoiceDetailForTreasury;
+
+function mapVerifactuTrace(record: InvoiceDetailRecord["verifactuFiscalRecords"][number] | null, cancellationReasonOverride: string | null = null): InvoiceDetail["verifactuTrace"] {
+  if (!record) return null;
+  const queue = [...record.outboxMessages].sort((left, right) => queuePriority(right) - queuePriority(left))[0] ?? null;
+  const attempt = record.attempts[0] ?? null;
+  const operationalStatus = queue?.status === "DEAD" ? "ACTION_REQUIRED"
+    : queue?.operation === "RECONCILE" && (queue.status === "PENDING" || queue.status === "CLAIMED") ? "RECONCILIATION_REQUIRED"
+      : queue?.status === "CLAIMED" ? "PROCESSING"
+        : queue?.status === "PENDING" ? "PENDING"
+          : "COMPLETED";
+  return {
+    recordType: record.recordType,
+    cancellationReasonCode: normalizeCancellationReason(cancellationReasonOverride ?? readCancellationReason(record.fiscalSnapshot)),
+    chainPosition: record.chainPosition.toString(), generatedAt: record.generatedAt.toISOString(),
+    installationCode: record.sifInstallation.installationCode, environment: record.sifInstallation.environment, operationalStatus,
+    queue: queue ? { id: queue.id, operation: queue.operation, status: queue.status, attemptCount: queue.attemptCount, maxAttempts: queue.maxAttempts, nextAttemptAt: queue.nextAttemptAt.toISOString(), lastErrorCode: queue.lastErrorCode } : null,
+    latestAttempt: attempt ? { kind: attempt.kind, outcome: attempt.outcome, completedAt: attempt.completedAt.toISOString(), stableErrorCode: attempt.stableErrorCode } : null
+  };
+}
+
+function readCancellationReason(snapshot: Prisma.JsonValue): string | null {
+  if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") return null;
+  return typeof snapshot.reasonCode === "string" ? snapshot.reasonCode : null;
+}
+
+function normalizeCancellationReason(value: string | null): "ISSUED_BY_MISTAKE" | "DUPLICATE_INVOICE" | "WRONG_FISCAL_IDENTITY" | null {
+  return value === "ISSUED_BY_MISTAKE" || value === "DUPLICATE_INVOICE" || value === "WRONG_FISCAL_IDENTITY" ? value : null;
+}
+
+function queuePriority(message: InvoiceDetailRecord["verifactuFiscalRecords"][number]["outboxMessages"][number]): number {
+  if (message.status === "DEAD") return 5;
+  if (message.operation === "RECONCILE" && (message.status === "PENDING" || message.status === "CLAIMED")) return 4;
+  if (message.status === "CLAIMED") return 3;
+  if (message.status === "PENDING") return 2;
+  return 1;
+}
 
 function mapInvoiceListItem(invoice: InvoiceListRecord): InvoiceListItem {
   return {
@@ -1946,6 +2637,33 @@ function invoiceAccountingAccountNotAvailable(): InvoiceNotIssuableResult {
 
 function invoiceAccountingEntryUnbalanced(): InvoiceNotIssuableResult {
   return { ok: false, status: 409, error: { code: "INVOICE_ACCOUNTING_ENTRY_UNBALANCED", message: "El asiento de la factura no esta cuadrado." } };
+}
+
+function invoiceVerifactuPreparationUnavailable(): InvoiceVerifactuUnavailableResult {
+  return {
+    ok: false,
+    status: 503,
+    error: {
+      code: "INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE",
+      message: "No se pudo preparar el registro VeriFactu; la factura no se ha emitido."
+    }
+  };
+}
+
+function readVerifactuEnvironment(): "TEST" | "PRODUCTION" | null {
+  if (!isVerifactuPreparationAllowed(process.env)) return null;
+  const value = process.env.VERIFACTU_ENVIRONMENT?.trim().toLowerCase();
+  if (value === "production") return "PRODUCTION";
+  if (value === "test" && process.env.APP_ENV !== "production") return "TEST";
+  return null;
+}
+
+function readVerifactuEnabled(): boolean {
+  const value = process.env.VERIFACTU_ENABLED?.trim().toLowerCase();
+  if (value === "true") return true;
+  if (value === "false" || (!value && process.env.APP_ENV !== "production")) return false;
+  if (process.env.APP_ENV === "production") throw new VerifactuPreparationUnavailableError();
+  return false;
 }
 
 function invoiceEmpty(): InvoiceNotIssuableResult {

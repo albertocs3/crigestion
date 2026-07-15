@@ -104,7 +104,11 @@ export default async function InvoicesPage({ searchParams }: InvoicesPageProps) 
                 <option value="PENDING">Pendiente</option>
                 <option value="PARTIALLY_PAID">Parcial</option>
                 <option value="PAID">Pagada</option>
+                <option value="PARTIALLY_SETTLED">Parcialmente compensada</option>
+                <option value="SETTLED">Compensada</option>
+                <option value="NOT_APPLICABLE">No sujeta a cobro (abono)</option>
                 <option value="UNPAID">Impagada</option>
+                <option value="CANCELLED">Cancelada</option>
               </select>
             </label>
             <label>
@@ -259,8 +263,16 @@ function paymentStatusLabel(status: InvoiceListItem["paymentStatus"]): string {
       return "Parcial";
     case "PAID":
       return "Pagada";
+    case "PARTIALLY_SETTLED":
+      return "Parcialmente compensada";
+    case "SETTLED":
+      return "Compensada";
+    case "NOT_APPLICABLE":
+      return "No sujeta a cobro (abono)";
     case "UNPAID":
       return "Impagada";
+    case "CANCELLED":
+      return "Cancelada";
   }
 }
 
@@ -278,6 +290,8 @@ function verifactuStatusLabel(status: InvoiceListItem["verifactuStatus"]): strin
       return "Aceptada con errores";
     case "REJECTED":
       return "Rechazada";
+    case "CANCELLED":
+      return "Anulada en AEAT";
   }
 }
 

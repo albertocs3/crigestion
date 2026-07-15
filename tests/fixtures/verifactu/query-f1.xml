@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sfLRC:ConsultaFactuSistemaFacturacion xmlns:sfLRC="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/ConsultaLR.xsd" xmlns:sf="https://www2.agenciatributaria.gob.es/static_files/common/internet/dep/aplicaciones/es/aeat/tike/cont/ws/SuministroInformacion.xsd">
+  <sfLRC:Cabecera>
+    <sf:IDVersion>1.0</sf:IDVersion>
+    <sf:ObligadoEmision>
+      <sf:NombreRazon>CriGestion Ejemplo SL</sf:NombreRazon>
+      <sf:NIF>B12345678</sf:NIF>
+    </sf:ObligadoEmision>
+  </sfLRC:Cabecera>
+  <sfLRC:FiltroConsulta>
+    <sfLRC:PeriodoImputacion>
+      <sf:Ejercicio>2026</sf:Ejercicio>
+      <sf:Periodo>07</sf:Periodo>
+    </sfLRC:PeriodoImputacion>
+    <sfLRC:NumSerieFactura>F2600001</sfLRC:NumSerieFactura>
+    <sfLRC:FechaExpedicionFactura>
+      <sf:FechaExpedicionFactura>13-07-2026</sf:FechaExpedicionFactura>
+    </sfLRC:FechaExpedicionFactura>
+  </sfLRC:FiltroConsulta>
+</sfLRC:ConsultaFactuSistemaFacturacion>

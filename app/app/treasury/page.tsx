@@ -75,6 +75,17 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
       <header className="topbar">
         <div className="brand">CriGestión</div>
         <div className="button-row">
+          {authorization.user.permissions.includes("Treasury.ViewCustomerCredits") ? (
+            <Link className="button button-secondary" href="/app/treasury/credits">
+              Saldos a favor
+            </Link>
+          ) : null}
+          <Link className="button button-secondary" href="/app/treasury/banking">
+            Conciliacion bancaria
+          </Link>
+          <Link className="button button-secondary" href="/app/treasury/banking/import">
+            Importar Norma 43
+          </Link>
           <Link className="button button-secondary" href="/app/treasury/remittances">
             Remesas
           </Link>
@@ -219,6 +230,11 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
                         <span className="cell-detail">
                           Cobrado {formatMoney(dueDate.paidAmount)}
                         </span>
+                        {Number(dueDate.creditAppliedAmount) > 0 ? (
+                          <span className="cell-detail">
+                            Compensado {formatMoney(dueDate.creditAppliedAmount)}
+                          </span>
+                        ) : null}
                         {Number(dueDate.returnedAmount) > 0 ? (
                           <span className="cell-detail">
                             Devuelto {formatMoney(dueDate.returnedAmount)}
@@ -280,10 +296,14 @@ function dueDateStatusLabel(status: CustomerDueDateListItem["status"]): string {
       return "Pendiente";
     case "PAID":
       return "Pagado";
+    case "SETTLED":
+      return "Compensado";
     case "RETURNED":
       return "Devuelto";
     case "UNPAID":
       return "Impagado";
+    case "CANCELLED":
+      return "Cancelado";
   }
 }
 
@@ -295,8 +315,16 @@ function paymentStatusLabel(status: CustomerDueDateListItem["paymentStatus"]): s
       return "Parcial";
     case "PAID":
       return "Pagada";
+    case "PARTIALLY_SETTLED":
+      return "Parcialmente compensada";
+    case "SETTLED":
+      return "Compensada";
+    case "NOT_APPLICABLE":
+      return "No sujeta a cobro (abono)";
     case "UNPAID":
       return "Impagada";
+    case "CANCELLED":
+      return "Cancelada";
   }
 }
 

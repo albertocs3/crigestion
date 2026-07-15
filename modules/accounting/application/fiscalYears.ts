@@ -258,6 +258,11 @@ export async function closeAccountingFiscalYear(
     }
 
     const now = new Date();
+    const closed = await tx.accountingFiscalYear.update({
+      where: { id: source.id },
+      data: { status: "CLOSED", closedAt: now, closedById: actor.id },
+      select: fiscalYearSelect
+    });
     const next = await tx.accountingFiscalYear.create({
       data: {
         companyId: source.companyId,
@@ -313,12 +318,6 @@ export async function closeAccountingFiscalYear(
         lines: openingLines
       });
     }
-    const closed = await tx.accountingFiscalYear.update({
-      where: { id: source.id },
-      data: { status: "CLOSED", closedAt: now, closedById: actor.id },
-      select: fiscalYearSelect
-    });
-
     await tx.auditEvent.create({
       data: {
         eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED",

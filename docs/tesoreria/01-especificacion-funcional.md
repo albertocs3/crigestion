@@ -29,12 +29,16 @@ El módulo permitirá:
 - Preparar previsiones mensuales y anuales de cobros y pagos.
 - Consultar indicadores de tesorería.
 
-## 2. Alcance
+## 2. Alcance objetivo por fases
+
+La lista siguiente describe el alcance funcional objetivo. La disponibilidad
+del corte vigente se concreta en cada apartado; Norma 43 y las propuestas
+automaticas de cobros ya disponen de un primer perfil implementado.
 
 ### Incluido
 
 - Registro manual basico de cobros de clientes sobre vencimientos emitidos.
-- Una cuenta bancaria en euros.
+- Una o varias cuentas bancarias en euros.
 - Mandatos SEPA CORE.
 - Remesas de cobros de clientes.
 - Varios vencimientos por cliente y remesa.
@@ -52,7 +56,6 @@ El módulo permitirá:
 
 ### Fuera de alcance
 
-- Varias cuentas bancarias.
 - Monedas distintas del euro.
 - Remesas de pagos a proveedores.
 - Envío directo de ficheros al banco.
@@ -83,7 +86,8 @@ Todas las acciones quedan sujetas al sistema general de permisos y auditoría.
 
 ## 4. Cuenta bancaria
 
-El sistema tendrá una única cuenta bancaria operativa.
+El sistema admite una o varias cuentas bancarias operativas en euros. El IBAN
+es unico dentro de la empresa.
 
 ### Datos
 
@@ -274,7 +278,10 @@ rechazos y reimporta el mismo fichero.
 
 Las remesas en `DRAFT`, `GENERATED` o `SENT` pueden procesarse manualmente para
 registrar cobros de origen `SEPA_REMITTANCE` y actualizar vencimientos y
-facturas; los asientos automaticos quedan para un corte posterior. El listado
+facturas. Cada cobro confirmado crea en la misma transaccion su asiento
+`CUSTOMER_PAYMENT` contra la subcuenta 430 del cliente y la cuenta 572. Si no
+existe ejercicio abierto o faltan cuentas, no se registra el cobro ni cambia la
+remesa. El listado
 de remesas puede exportarse a CSV con sus lineas, sin IBAN ni datos bancarios
 completos, y deja auditoria de la descarga. Cada remesa dispone de una vista de
 detalle para revisar cabecera, estado, lineas, vencimientos, importes
@@ -282,8 +289,14 @@ remesados, cobros, devoluciones y netos antes de procesarla o cerrarla.
 Una remesa procesada puede cerrarse manualmente para indicar que su ciclo
 operativo queda finalizado. Si se registra una devolucion manual sobre un cobro
 creado por remesa SEPA, la remesa pasa a `Parcialmente devuelta` y queda
-trazado el cambio. La devolucion puede registrarse desde el detalle de la
+trazado el cambio. Cada devolucion genera en la misma transaccion un asiento
+`CUSTOMER_PAYMENT_RETURN`: debe en la 430 del cliente y haber en 570 o 572,
+segun la cuenta usada por el asiento del cobro original. La fecha de devolucion
+no puede ser anterior al cobro. La devolucion puede registrarse desde el detalle de la
 remesa para evitar saltar manualmente a la factura asociada.
+
+La factura muestra la secuencia visible factura, vencimientos, cobro o remesa y
+contabilidad, con enlaces condicionados por los permisos del usuario.
 
 También se podrá procesar cada vencimiento como:
 
@@ -364,11 +377,15 @@ Los extractos se importan manualmente.
 
 No será obligatorio conservar el fichero original, pero sí sus metadatos, hash y movimientos importados durante el plazo legal aplicable.
 
-### Estados
+### Estados objetivo
 
 - Importado.
 - Parcialmente conciliado.
 - Conciliado.
+
+El corte vigente no persiste un estado propio del extracto. Su grado de
+conciliacion puede derivarse de los movimientos importados; la consulta
+operativa de ese estado agregado queda para un corte posterior.
 
 ### Validaciones
 
@@ -386,9 +403,25 @@ Un movimiento se identifica inicialmente mediante:
 - Referencia.
 - Número de movimiento.
 
+### 12.1 Perfil implementado
+
+El corte vigente implementa el perfil `AEB43_2012` conforme al Cuaderno 43
+publicado por AEB y entidades bancarias: registros ASCII de 80 bytes y secuencia
+`11`, uno o varios `22` con hasta cinco `23`, `33` y `88`.
+
+En este corte se admite una cuenta y moneda EUR (`978`) por fichero. Se valida
+la cuenta contra el IBAN seleccionado, rango y fechas, signos, conteos, totales,
+ecuacion de saldos y numero global de registros. La vista previa no persiste el
+fichero; la confirmacion conserva hash SHA-256 de los bytes originales,
+metadatos y movimientos. Se bloquean hashes repetidos y periodos solapados.
+Las fechas `AAMMDD` se interpretan dentro de 2000-2099; extractos anteriores
+requieren un perfil historico futuro y se rechazan en este corte.
+
+Fuente de formato: [Cuaderno 43 AEB, junio de 2012](https://docs.bankinter.com/file_source/empresas/estaticos/stf/plataformas/empresas/gestion/ficheros/formatos_fichero/norma_43_castellano.pdf).
+
 ## 13. Movimientos bancarios
 
-### Estados
+### Estados objetivo
 
 - Pendiente.
 - Propuesto.
@@ -398,6 +431,10 @@ Un movimiento se identifica inicialmente mediante:
 Un movimiento ignorado no exige motivo.
 
 Un movimiento parcialmente conciliado mantiene pendiente la diferencia.
+
+En el corte vigente se derivan `Pendiente`, `Parcialmente conciliado` y
+`Conciliado`. Las propuestas son lecturas orientativas no persistidas y la
+accion de ignorar queda para un corte posterior.
 
 No se podrán dividir movimientos en movimientos bancarios nuevos.
 
@@ -415,6 +452,22 @@ El sistema propondrá coincidencias utilizando:
 La coincidencia de referencia e identidad del tercero aumentará la prioridad de la propuesta.
 
 La propuesta nunca se confirma automáticamente.
+
+### 14.1 Primer corte implementado
+
+Para entradas bancarias pendientes, el sistema consulta cobros con saldo cuya
+fecha difiere como maximo 30 dias y calcula una puntuacion explicable:
+
+- El importe disponible debe coincidir exactamente con el pendiente del
+  movimiento; esta coincidencia aporta 60 puntos.
+- Hasta 20 puntos por proximidad de fechas.
+- 15 puntos si la referencia contiene el numero de factura.
+- 5 puntos por codigo o nombre significativo del cliente.
+
+La confianza es alta desde 80 puntos cuando existe señal de factura o identidad,
+media desde 65 y baja en el resto. La UI
+muestra motivos e importe sugerido, pero la propuesta no se persiste ni produce
+efectos hasta que el usuario confirma la conciliacion manual.
 
 ## 15. Conciliación manual
 
@@ -436,6 +489,21 @@ Se admite:
 - Se puede deshacer una conciliación.
 - Al deshacerla, todas sus aplicaciones vuelven a quedar pendientes.
 - Toda operación queda auditada.
+
+### 15.1 Primer corte implementado
+
+El primer corte permite dar de alta cuentas y movimientos bancarios manuales,
+consultar su saldo pendiente y conciliarlos total o parcialmente contra cobros
+de clientes ya registrados. Una conciliacion puede deshacerse conservando su
+historial y auditoria.
+
+- Solo se concilian entradas bancarias positivas contra cobros de clientes.
+- Un movimiento puede aplicarse a varios cobros y un cobro puede recibir
+  aplicaciones desde varios movimientos.
+- La suma activa no puede superar el movimiento ni el cobro neto de sus
+  devoluciones.
+- La operacion usa bloqueo transaccional y no crea cobros ni asientos.
+- Proveedores y conciliacion directa de remesas quedan para cortes posteriores.
 
 ## 16. Conciliación de remesas
 
@@ -572,7 +640,9 @@ Mostrará:
 - Remesas procesadas.
 - Remesas con devoluciones.
 
-El saldo real se obtiene del último extracto importado.
+Como objetivo, el saldo real se obtendra del ultimo extracto importado. El
+corte vigente conserva el saldo inicial y final, pero todavia no expone el
+saldo del ultimo extracto en el panel.
 
 ## 22. Historial y auditoría
 
@@ -618,7 +688,7 @@ Cada registro incluirá:
 
 ## 24. Criterios de aceptación
 
-1. Solo existe una cuenta bancaria operativa en euros.
+1. Cada empresa puede tener una o varias cuentas bancarias operativas en euros, con IBAN unico por empresa.
 2. Una cuenta inactiva no admite remesas ni extractos.
 3. Solo se remesan vencimientos domiciliados, pendientes y con mandato activo.
 4. Un vencimiento no puede estar en dos remesas activas.
@@ -636,7 +706,7 @@ Cada registro incluirá:
 16. Los vencidos aparecen en el mes actual.
 17. Los cambios de simulación no alteran documentos origen.
 18. Las exclusiones permanecen hasta restablecerse.
-19. El saldo real procede del último extracto.
+19. El saldo real procedera del ultimo extracto cuando se incorpore esa lectura al panel.
 20. Toda operación relevante queda auditada.
 
 ## 25. Decisiones pendientes para el diseño técnico
@@ -644,10 +714,31 @@ Cada registro incluirá:
 - Versión exacta del esquema SEPA CORE y formato XML.
 - Plazo legal concreto de conservación.
 - Catálogo de motivos bancarios de devolución.
-- Estructura exacta de Norma 43 admitida.
 - Algoritmo de detección de duplicados y solapamientos.
-- Ponderación de propuestas de conciliación.
 - Tratamiento de diferencias de redondeo.
 - Conversión transaccional de gastos previstos en reales.
 - Actualización del saldo si existen extractos solapados.
 - Política de cifrado y acceso a IBAN, XML y datos bancarios.
+
+## 26. Saldos a favor por facturas rectificativas
+
+Una rectificativa total de una factura completamente cobrada origina un saldo
+a favor del mismo cliente. El origen es unico y trazable; no se admiten
+creditos manuales. Mientras la rectificativa VeriFactu no este aceptada, el
+saldo permanece `HELD` y no puede utilizarse.
+
+El saldo es un sublibro append-only y su disponible se deriva como importe
+original menos compensaciones y reembolsos no cancelados. Una compensacion:
+
+- solo puede aplicarse a un vencimiento pendiente de la misma empresa y cliente;
+- no puede coexistir con una linea de remesa activa;
+- reduce el pendiente sin crear un cobro ni un asiento adicional;
+- deja factura y vencimiento `PARTIALLY_SETTLED`/`SETTLED` cuando corresponda.
+
+El reembolso sigue `REQUESTED -> APPROVED -> POSTED`. La persona solicitante no
+puede aprobarlo. La solicitud reserva saldo; cancelarla lo libera. Al
+contabilizar, se crea Debe 430 / Haber 572 y queda vinculado al reembolso.
+Todas las mutaciones exigen idempotencia, bloqueo transaccional y auditoria.
+
+La pantalla operativa es `/app/treasury/credits` y diferencia expresamente
+este saldo del limite de credito comercial del cliente.

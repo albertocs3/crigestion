@@ -5,8 +5,13 @@ import {
   readPlatformEnvironment,
   shouldTrustProxyHeaders
 } from "@/modules/platform/application/environment";
+import {
+  isVerifactuPreparationAllowed,
+  readOperationalEnvironment
+} from "@/modules/platform/application/operationalEnvironment";
 
 const validSecret = "0123456789abcdef0123456789abcdef";
+const validCredentialSecret = "verifactu-idempotency-secret-32-bytes";
 
 describe("platform environment validation", () => {
   const originalEnv = { ...process.env };
@@ -38,6 +43,18 @@ describe("platform environment validation", () => {
     });
   });
 
+  it("normalizes an empty VeriFactu idempotency secret in development and requires it in production", () => {
+    expect(readPlatformEnvironment({
+      NODE_ENV: "development", APP_ENV: "development", APP_SESSION_SECRET: validSecret,
+      VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: ""
+    }).VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET).toBeUndefined();
+
+    expect(() => readPlatformEnvironment({
+      NODE_ENV: "production", APP_ENV: "production", APP_SESSION_SECRET: validSecret,
+      APP_BASE_URL: "https://app.example.test"
+    })).toThrow("VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET is required in deployed environments");
+  });
+
   it("rejects missing or placeholder session secrets", () => {
     expect(() =>
       readPlatformEnvironment({
@@ -60,6 +77,7 @@ describe("platform environment validation", () => {
         NODE_ENV: "production",
         APP_ENV: "production",
         APP_SESSION_SECRET: validSecret,
+        VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: validCredentialSecret,
         APP_BASE_URL: "http://app.example.test"
       })
     ).toThrow("APP_BASE_URL must use HTTPS");
@@ -69,6 +87,7 @@ describe("platform environment validation", () => {
         NODE_ENV: "production",
         APP_ENV: "production",
         APP_SESSION_SECRET: validSecret,
+        VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: validCredentialSecret,
         APP_BASE_URL: "https://app.example.test",
         AUTH_COOKIE_SECURE: "false"
       })
@@ -79,6 +98,7 @@ describe("platform environment validation", () => {
     const config = readPlatformEnvironment({
       NODE_ENV: "production",
       APP_SESSION_SECRET: validSecret,
+      VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: validCredentialSecret,
       APP_BASE_URL: "https://app.example.test"
     });
 
@@ -89,9 +109,39 @@ describe("platform environment validation", () => {
         NODE_ENV: "production",
         APP_ENV: "development",
         APP_SESSION_SECRET: validSecret,
+        VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: validCredentialSecret,
         APP_BASE_URL: "https://app.example.test"
       })
-    ).toThrow("APP_ENV must be production");
+    ).toThrow("APP_ENV must be staging or production");
+  });
+
+  it("treats staging as a production-grade HTTPS deployment", () => {
+    const config = readPlatformEnvironment({
+      NODE_ENV: "production",
+      APP_ENV: "staging",
+      APP_BASE_URL: "https://gestion-test.crisoft.es",
+      APP_SESSION_SECRET: validSecret,
+      VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: validCredentialSecret,
+      AUTH_COOKIE_SECURE: "true",
+      TRUST_PROXY_HEADERS: "true"
+    });
+
+    expect(config.APP_ENV).toBe("staging");
+
+    expect(() => readPlatformEnvironment({
+      ...config,
+      APP_BASE_URL: "http://gestion-test.crisoft.es"
+    })).toThrow("APP_BASE_URL must use HTTPS in deployed environments");
+
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("APP_ENV", "staging");
+    vi.stubEnv("APP_BASE_URL", "https://gestion-test.crisoft.es");
+    vi.stubEnv("APP_SESSION_SECRET", validSecret);
+    vi.stubEnv("VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET", validCredentialSecret);
+    vi.stubEnv("AUTH_COOKIE_SECURE", "true");
+    vi.stubEnv("TRUST_PROXY_HEADERS", "false");
+    expect(isSessionCookieSecure()).toBe(true);
+    expect(shouldTrustProxyHeaders()).toBe(false);
   });
 
   it("keeps cookie and proxy settings explicit", () => {
@@ -131,5 +181,104 @@ describe("platform environment validation", () => {
         AUTH_COOKIE_NAME: "bad cookie=name"
       })
     ).toThrow("Invalid platform environment");
+  });
+
+  it("recognizes only the exact isolated TEST database and VeriFactu configuration", () => {
+    const summary = readOperationalEnvironment({
+      NODE_ENV: "test", APP_ENV: "test",
+      DATABASE_URL: "postgresql://secret-user:secret-password@localhost:5432/crigestion_test?schema=public",
+      VERIFACTU_ENABLED: "true", VERIFACTU_ENVIRONMENT: "TEST", VERIFACTU_WORKER_ENVIRONMENT: "TEST",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false", VERIFACTU_ALLOW_PRODUCTION: "false"
+    });
+    expect(summary).toMatchObject({ appEnvironment: "TEST", isTestMode: true, databaseConfiguredAsTest: true,
+      verifactuEnvironment: "TEST", workerEnvironment: "TEST", testIsolationConfigured: true });
+    expect(JSON.stringify(summary)).not.toContain("secret-user");
+    expect(JSON.stringify(summary)).not.toContain("secret-password");
+  });
+
+  it("recognizes staging only with its exact database and AEAT TEST gates", () => {
+    const summary = readOperationalEnvironment({
+      NODE_ENV: "production", APP_ENV: "staging",
+      DATABASE_URL: "postgresql://crigestion_staging_app:hidden@127.0.0.1:5432/crigestion_staging?schema=public",
+      VERIFACTU_ENABLED: "true", VERIFACTU_ENVIRONMENT: "TEST", VERIFACTU_WORKER_ENVIRONMENT: "TEST",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false", VERIFACTU_ALLOW_PRODUCTION: "false"
+    });
+    expect(summary).toMatchObject({
+      appEnvironment: "STAGING", isTestMode: true, expectedDatabaseName: "crigestion_staging",
+      databaseConfiguredAsTest: true, testIsolationConfigured: true
+    });
+    expect(readOperationalEnvironment({
+      NODE_ENV: "production", APP_ENV: "staging",
+      DATABASE_URL: "postgresql://crigestion_staging_app:hidden@127.0.0.1:5432/crigestion_staging?schema=public",
+      VERIFACTU_ENABLED: "false", VERIFACTU_ENVIRONMENT: "TEST", VERIFACTU_WORKER_ENVIRONMENT: "TEST",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false", VERIFACTU_ALLOW_PRODUCTION: "false"
+    }).testIsolationConfigured).toBe(true);
+    expect(isVerifactuPreparationAllowed({
+      APP_ENV: "staging", VERIFACTU_ENABLED: "true", VERIFACTU_ENVIRONMENT: "TEST",
+      VERIFACTU_ALLOW_PRODUCTION: "false"
+    })).toBe(true);
+    expect(readOperationalEnvironment({
+      NODE_ENV: "production", APP_ENV: "staging",
+      DATABASE_URL: "postgresql://hidden:hidden@127.0.0.1:5432/crigestion_test",
+      VERIFACTU_ENABLED: "false"
+    }).testIsolationConfigured).toBe(false);
+  });
+
+  it("keeps production fiscal preparation behind an independent release gate", () => {
+    const production = {
+      APP_ENV: "production",
+      VERIFACTU_ENABLED: "true",
+      VERIFACTU_ENVIRONMENT: "PRODUCTION",
+      VERIFACTU_WORKER_ENVIRONMENT: "PRODUCTION",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "true"
+    };
+    expect(isVerifactuPreparationAllowed(production)).toBe(false);
+    expect(isVerifactuPreparationAllowed({
+      ...production,
+      VERIFACTU_ALLOW_PRODUCTION: "true",
+      VERIFACTU_PRODUCTION_RELEASE_ID: "release-2026.07.15"
+    })).toBe(true);
+    expect(isVerifactuPreparationAllowed({
+      ...production,
+      APP_ENV: "test",
+      VERIFACTU_ALLOW_PRODUCTION: "true",
+      VERIFACTU_PRODUCTION_RELEASE_ID: "release-2026.07.15"
+    })).toBe(false);
+  });
+
+  it("marks missing, malformed and non-test database declarations as unverified", () => {
+    for (const databaseUrl of [undefined, "not-a-url", "postgresql://localhost/crigestion", "mysql://localhost/crigestion_test"]) {
+      expect(readOperationalEnvironment({ NODE_ENV: "test", APP_ENV: "test", DATABASE_URL: databaseUrl,
+        VERIFACTU_ENABLED: "false" })).toMatchObject({ isTestMode: true, databaseConfiguredAsTest: false,
+        testIsolationConfigured: false });
+    }
+  });
+
+  it("does not expose the TEST banner mode outside APP_ENV test", () => {
+    expect(readOperationalEnvironment({ NODE_ENV: "development", APP_ENV: "development",
+      DATABASE_URL: "postgresql://localhost/crigestion_test" }).isTestMode).toBe(false);
+    expect(readOperationalEnvironment({ NODE_ENV: "production", APP_ENV: "production",
+      DATABASE_URL: "postgresql://localhost/crigestion_test" }).isTestMode).toBe(false);
+  });
+
+  it("fails closed for non-canonical environment and boolean flag values", () => {
+    for (const appEnv of ["TEST", " test "]) {
+      expect(readOperationalEnvironment({ NODE_ENV: "test", APP_ENV: appEnv,
+        DATABASE_URL: "postgresql://localhost/crigestion_test", VERIFACTU_ENABLED: "false" }))
+        .toMatchObject({ isTestMode: false, testIsolationConfigured: false });
+    }
+    for (const invalidFlag of ["TRUE", "yes"]) {
+      expect(readOperationalEnvironment({ NODE_ENV: "test", APP_ENV: "test",
+        DATABASE_URL: "postgresql://localhost/crigestion_test", VERIFACTU_ENABLED: invalidFlag }))
+        .toMatchObject({ configurationFlagsValid: false, testIsolationConfigured: false });
+      expect(readOperationalEnvironment({ NODE_ENV: "test", APP_ENV: "test",
+        DATABASE_URL: "postgresql://localhost/crigestion_test", VERIFACTU_ENABLED: "false",
+        VERIFACTU_WORKER_ALLOW_PRODUCTION: invalidFlag }))
+        .toMatchObject({ configurationFlagsValid: false, testIsolationConfigured: false });
+      expect(readOperationalEnvironment({ NODE_ENV: "test", APP_ENV: "test",
+        DATABASE_URL: "postgresql://localhost/crigestion_test", VERIFACTU_ENABLED: "false",
+        VERIFACTU_ALLOW_PRODUCTION: invalidFlag }))
+        .toMatchObject({ configurationFlagsValid: false, testIsolationConfigured: false });
+    }
   });
 });

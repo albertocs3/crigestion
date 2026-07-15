@@ -51,6 +51,7 @@ export default async function TreasuryRemittanceDetailPage({
   }
 
   const activeLines = remittance.lines.filter((line) => line.status === "ACTIVE");
+  const canViewAccounting = authorization.user.permissions.includes("Accounting.View");
 
   return (
     <main className="shell">
@@ -248,8 +249,15 @@ export default async function TreasuryRemittanceDetailPage({
                         Remesado {formatMoney(line.amount)}
                       </span>
                       <span className="cell-detail">
-                        Cobrado {formatMoney(line.paymentAmount)}
-                      </span>
+                           Cobrado {formatMoney(line.paymentAmount)}
+                          </span>
+                          {line.accountingEntry ? (
+                            canViewAccounting ? (
+                              <Link href={`/app/accounting?entryId=${line.accountingEntry.id}`}>
+                                Asiento {line.accountingEntry.number}
+                              </Link>
+                            ) : null
+                          ) : null}
                       {Number(line.returnedAmount) > 0 ? (
                         <span className="cell-detail">
                           Devuelto {formatMoney(line.returnedAmount)}

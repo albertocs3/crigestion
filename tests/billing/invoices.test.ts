@@ -7,10 +7,23 @@ import {
   createInvoiceRectification,
   createInvoiceDraft,
   createInvoiceDraftSchema,
+  getInvoiceDetail,
   issueInvoice,
+  hashInvoiceRectificationBody,
   issueInvoiceSchema,
   replaceInvoiceDueDates
 } from "@/modules/billing/application/invoices";
+import { processNextVerifactuOutboxMessage } from "@/modules/billing/application/verifactuOutboxWorker";
+import { getVerifactuOperations } from "@/modules/billing/application/verifactuOperations";
+import {
+  createVerifactuRejectionCorrection,
+  hashVerifactuRejectionCorrectionBody
+} from "@/modules/billing/application/verifactuRejectionCorrections";
+import {
+  createAeatF1AltaPreparer,
+  supportedVerifactuManifestSha256
+} from "@/modules/billing/infrastructure/verifactu/aeatF1Preparer";
+import { createVerifactuPayloadCipher } from "@/modules/billing/infrastructure/verifactu/payloadCipher";
 import { createCatalogItem } from "@/modules/catalog/application/items";
 import { login } from "@/modules/platform/application/auth";
 import {
@@ -20,6 +33,17 @@ import {
 } from "@/modules/treasury/application/payments";
 import { listCustomerDueDates } from "@/modules/treasury/application/dueDates";
 import { getCustomerCollectionForecast } from "@/modules/treasury/application/forecast";
+import {
+  applyCustomerCredit,
+  approveCustomerCreditRefund,
+  getCustomerCredit,
+  hashCustomerCreditApplication,
+  hashCustomerCreditRefundAction,
+  hashCustomerCreditRefundRequest,
+  postCustomerCreditRefund,
+  requestCustomerCreditRefund
+} from "@/modules/treasury/application/customerCredits";
+import { assertDisposableTestDatabase } from "@/tests/helpers/disposableTestDatabase";
 import {
   hashRequestBody,
   initializePlatform,
@@ -226,6 +250,407 @@ describe("billing invoices application service", () => {
     });
     expect(auditPayload).not.toContain(customer.taxId);
     expect(auditPayload).not.toContain("Nota interna");
+  });
+
+  it("persists and orchestrates the VeriFactu cycle with a simulated AEAT acceptance", async () => {
+    const actor = await loginAsAdmin();
+    const draftId = await createDraftWithOneLine(actor);
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+    if (!installation.companyId) throw new Error("COMPANY_NOT_AVAILABLE");
+    const credential = await prisma.verifactuMtlsCredential.create({
+      data: { companyId: installation.companyId, ref: `vfcred:e2e:${randomUUID()}`, alias: "Simulated AEAT credential" }
+    });
+    const sif = await prisma.verifactuSifInstallation.create({
+      data: {
+        ...testSifInstallation(installation.companyId),
+        artifactManifestSha256: supportedVerifactuManifestSha256,
+        credentialRef: credential.ref
+      }
+    });
+    const cipher = createVerifactuPayloadCipher({
+      keyId: "invoice-cycle-key",
+      key: Buffer.alloc(32, 7),
+      random: () => Buffer.alloc(12, 8)
+    });
+    const prepareAlta = createAeatF1AltaPreparer({
+      cipher,
+      nowWithOffset: () => "2026-07-12T12:00:00+02:00"
+    });
+
+    const issued = await issueInvoice(
+      draftId,
+      { issueDate: "2026-07-07" },
+      actor,
+      { correlationId: "invoice-vf-enabled", idempotencyKey: "invoice-vf-enabled-key" },
+      {
+        verifactuEnabled: true,
+        verifactuEnvironment: "TEST",
+        prepareVerifactuAlta: (input) => {
+          expect(input.invoice).toMatchObject({ id: draftId, number: "F2600001", total: "121.00" });
+          expect(input.installation).toMatchObject({ id: sif.id, nextPosition: 1n, previousRecordId: null });
+          return prepareAlta(input);
+        }
+      }
+    );
+
+    expect(issued).toMatchObject({ ok: true, value: { status: "ISSUED", number: "F2600001" } });
+    const fiscalRecord = await prisma.verifactuFiscalRecord.findFirstOrThrow({ where: { invoiceId: draftId } });
+    expect(fiscalRecord).toMatchObject({
+      sifInstallationId: sif.id,
+      chainPosition: 1n,
+      canonicalizationVersion: "AEAT_HASH_0.1.2",
+      encryptionKeyId: cipher.keyId
+    });
+    expect(fiscalRecord.recordHash).toMatch(/^[0-9A-F]{64}$/);
+    expect(fiscalRecord.qrUrl).toContain("https://prewww2.aeat.es/wlpl/TIKE-CONT/ValidarQR?");
+    expect(await prisma.verifactuFiscalRecord.count({ where: { invoiceId: draftId } })).toBe(1);
+    expect(await prisma.verifactuOutboxMessage.count({ where: { fiscalRecordId: fiscalRecord.id } })).toBe(1);
+    expect(await prisma.verifactuOutboxMessage.findFirstOrThrow({ where: { fiscalRecordId: fiscalRecord.id } })).toMatchObject({
+      operation: "SUBMIT",
+      status: "PENDING",
+      attemptCount: 0
+    });
+    expect(await prisma.invoiceVerifactuRecord.count({ where: { invoiceId: draftId } })).toBe(0);
+    expect(await prisma.accountingJournalEntry.count({ where: { invoiceId: draftId } })).toBe(1);
+
+    let submittedXml = "";
+    const processed = await processNextVerifactuOutboxMessage({
+      workerId: "invoice-cycle-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:05:00.000Z"),
+      transport: {
+        submit: async (input) => {
+          submittedXml = Buffer.from(input.xml).toString("utf8");
+          expect(input).toMatchObject({
+            credentialRef: credential.ref,
+            environment: "TEST",
+            context: { companyId: installation.companyId, sifInstallationId: sif.id, invoiceId: draftId }
+          });
+          return { outcome: "ACCEPTED", stableCode: null, externalSubmissionId: "AEAT-SIMULATED-1", aeatCsv: "CSV-SIMULATED-1" };
+        },
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    });
+
+    expect(processed).toEqual({ kind: "processed", outcome: "ACCEPTED" });
+    expect(submittedXml).toContain("<sfLR:RegFactuSistemaFacturacion");
+    expect(submittedXml).toContain("<sf:RegistroAlta>");
+    expect(submittedXml).toContain("<sf:NumSerieFactura>F2600001</sf:NumSerieFactura>");
+    expect(submittedXml).toContain("<sf:NombreRazon>CriGestion Test SL</sf:NombreRazon>");
+    expect(await prisma.verifactuOutboxMessage.findFirstOrThrow({ where: { fiscalRecordId: fiscalRecord.id } })).toMatchObject({
+      status: "PROCESSED",
+      attemptCount: 1,
+      lastErrorCode: null
+    });
+    expect(await prisma.verifactuSubmissionAttempt.findFirstOrThrow({ where: { fiscalRecordId: fiscalRecord.id } })).toMatchObject({
+      kind: "SUBMIT",
+      outcome: "ACCEPTED",
+      attemptNumber: 1,
+      aeatCsv: "CSV-SIMULATED-1"
+    });
+    expect(await prisma.verifactuSubmissionAttempt.count({ where: { fiscalRecordId: fiscalRecord.id } })).toBe(1);
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: draftId } })).toMatchObject({ verifactuStatus: "ACCEPTED" });
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "VERIFACTU_SUBMISSION_ATTEMPTED" } });
+    expect(audit.payload).toMatchObject({ invoiceId: draftId, operation: "SUBMIT", outcome: "ACCEPTED", attemptNumber: 1 });
+    expect(JSON.stringify(audit.payload)).not.toContain("RegFactuSistemaFacturacion");
+    expect(JSON.stringify(audit.payload)).not.toContain("CSV-SIMULATED-1");
+
+    const rectificationCommand = { issueDate: "2026-07-08", reason: "AMOUNT_ERROR" as const, fiscalClassification: "R4_OTHER" as const, notes: null };
+    await prisma.verifactuSifInstallation.create({
+      data: { ...testSifInstallation(installation.companyId), installationCode: "PROD-SIF", environment: "PRODUCTION", installationNumber: "PROD-1" }
+    });
+    const crossEnvironment = await createInvoiceRectification(
+      draftId,
+      rectificationCommand,
+      actor,
+      { idempotencyKey: "invoice-r4-cross-environment", requestHash: hashInvoiceRectificationBody(rectificationCommand) },
+      { verifactuEnabled: true, verifactuEnvironment: "PRODUCTION", prepareVerifactuAlta: prepareAlta }
+    );
+    expect(crossEnvironment).toMatchObject({ ok: false, error: { code: "INVOICE_RECTIFICATION_VERIFACTU_UNAVAILABLE" } });
+    expect(await prisma.invoice.count({ where: { rectifiesInvoiceId: draftId } })).toBe(0);
+
+    const rectificationContext = {
+      correlationId: "invoice-r4-enabled",
+      idempotencyKey: "invoice-r4-enabled-key",
+      requestHash: hashInvoiceRectificationBody(rectificationCommand)
+    };
+    const rectification = await createInvoiceRectification(
+      draftId,
+      rectificationCommand,
+      actor,
+      rectificationContext,
+      { verifactuEnabled: true, verifactuEnvironment: "TEST", prepareVerifactuAlta: prepareAlta }
+    );
+    expect(rectification).toMatchObject({ ok: true, status: 201, value: { number: "R2600001", verifactuStatus: "PENDING" } });
+    if (!rectification.ok) throw new Error(rectification.error.code);
+    const rectificationRecord = await prisma.verifactuFiscalRecord.findFirstOrThrow({ where: { invoiceId: rectification.value.id } });
+    expect(rectificationRecord).toMatchObject({ recordType: "ALTA", chainPosition: 2n, previousRecordId: fiscalRecord.id });
+    expect(await prisma.verifactuOutboxMessage.count({ where: { fiscalRecordId: rectificationRecord.id } })).toBe(1);
+
+    let submittedRectificationXml = "";
+    const processedRectification = await processNextVerifactuOutboxMessage({
+      workerId: "invoice-r4-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:06:00.000Z"),
+      transport: {
+        submit: async (input) => {
+          submittedRectificationXml = Buffer.from(input.xml).toString("utf8");
+          return { outcome: "ACCEPTED", stableCode: null, externalSubmissionId: "AEAT-R4-1", aeatCsv: "CSV-R4-1" };
+        },
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    });
+    expect(processedRectification).toEqual({ kind: "processed", outcome: "ACCEPTED" });
+    expect(submittedRectificationXml).toContain("<sf:TipoFactura>R4</sf:TipoFactura><sf:TipoRectificativa>I</sf:TipoRectificativa>");
+    expect(submittedRectificationXml).toContain("<sf:NumSerieFactura>F2600001</sf:NumSerieFactura>");
+    expect(submittedRectificationXml).toContain("<sf:ImporteTotal>-121.00</sf:ImporteTotal>");
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: rectification.value.id } })).toMatchObject({ verifactuStatus: "ACCEPTED" });
+
+    const replay = await createInvoiceRectification(
+      draftId,
+      rectificationCommand,
+      actor,
+      rectificationContext,
+      { verifactuEnabled: true, verifactuEnvironment: "TEST", prepareVerifactuAlta: prepareAlta }
+    );
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { id: rectification.value.id } });
+    expect(await prisma.invoice.count({ where: { rectifiesInvoiceId: draftId } })).toBe(1);
+  });
+
+  it("creates an immutable ALTA por rechazo and lets the worker continue in chain order", async () => {
+    const actor = await loginAsAdmin();
+    const draftId = await createDraftWithOneLine(actor);
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+    if (!installation.companyId) throw new Error("COMPANY_NOT_AVAILABLE");
+    const credential = await prisma.verifactuMtlsCredential.create({
+      data: { companyId: installation.companyId, ref: `vfcred:correction:${randomUUID()}`, alias: "Correction fixture" }
+    });
+    const sif = await prisma.verifactuSifInstallation.create({
+      data: {
+        ...testSifInstallation(installation.companyId),
+        artifactManifestSha256: supportedVerifactuManifestSha256,
+        credentialRef: credential.ref
+      }
+    });
+    const cipher = createVerifactuPayloadCipher({ keyId: "correction-key", key: Buffer.alloc(32, 13), random: () => Buffer.alloc(12, 14) });
+    const prepareOriginal = createAeatF1AltaPreparer({ cipher, nowWithOffset: () => "2026-07-12T12:00:00+02:00" });
+    const issued = await issueInvoice(
+      draftId,
+      { issueDate: "2026-07-07" },
+      actor,
+      { correlationId: "vf-rejection", idempotencyKey: "vf-rejection-issue" },
+      { verifactuEnabled: true, verifactuEnvironment: "TEST", prepareVerifactuAlta: prepareOriginal }
+    );
+    expect(issued.ok).toBe(true);
+    const rejectedRecord = await prisma.verifactuFiscalRecord.findFirstOrThrow({ where: { invoiceId: draftId } });
+    await expect(processNextVerifactuOutboxMessage({
+      workerId: "vf-rejection-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:05:00.000Z"),
+      transport: {
+        submit: async () => ({ outcome: "REJECTED", stableCode: "VERIFACTU_AEAT_RECORD_ERROR", aeatCodes: ["1239"] }),
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    })).resolves.toMatchObject({ kind: "processed", outcome: "REJECTED" });
+    const rejectedAttempt = await prisma.verifactuSubmissionAttempt.findFirstOrThrow({ where: { fiscalRecordId: rejectedRecord.id } });
+    const incidents = await getVerifactuOperations({ status: "INCIDENTS", operation: "ALL", environment: "TEST", search: "" });
+    expect(incidents?.messages).toMatchObject([{
+      invoice: { id: draftId },
+      status: "PROCESSED",
+      latestAttempt: { id: rejectedAttempt.id, outcome: "REJECTED", aeatCodes: ["1239"] },
+      rejectionCorrection: { rejectedRecordId: rejectedRecord.id, expectedRejectedAttemptId: rejectedAttempt.id }
+    }]);
+    const command = {
+      expectedRejectedAttemptId: rejectedAttempt.id,
+      recipientName: "Cliente corregido TEST",
+      recipientTaxId: "89890001K",
+      reasonCode: "RECIPIENT_IDENTIFICATION_CORRECTED" as const,
+      rectificationNotRequired: true as const
+    };
+    const idempotencyKey = `vf-correction:${randomUUID()}`;
+    const prepareCorrection = createAeatF1AltaPreparer({ cipher, nowWithOffset: () => "2026-07-12T12:10:00+02:00" });
+    const correction = await createVerifactuRejectionCorrection({
+      rejectedRecordId: rejectedRecord.id,
+      command,
+      actor,
+      correlationId: "vf-correction",
+      idempotencyKey,
+      requestHash: hashVerifactuRejectionCorrectionBody(command),
+      prepare: prepareCorrection
+    });
+    expect(correction).toMatchObject({ ok: true, status: 202, value: { rejectedRecordId: rejectedRecord.id, chainPosition: "2", status: "PENDING" } });
+    expect(await createVerifactuRejectionCorrection({
+      rejectedRecordId: rejectedRecord.id,
+      command,
+      actor,
+      idempotencyKey,
+      requestHash: hashVerifactuRejectionCorrectionBody(command),
+      prepare: prepareCorrection
+    })).toEqual(correction);
+    const correctionRecord = await prisma.verifactuFiscalRecord.findFirstOrThrow({ where: { correctedRecordId: rejectedRecord.id } });
+    expect(correctionRecord).toMatchObject({ invoiceId: draftId, previousRecordId: rejectedRecord.id, chainPosition: 2n });
+    expect(await prisma.verifactuFiscalRecord.count({ where: { invoiceId: draftId } })).toBe(2);
+
+    let submittedXml = "";
+    await expect(processNextVerifactuOutboxMessage({
+      workerId: "vf-correction-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:15:00.000Z"),
+      transport: {
+        submit: async ({ xml }) => { submittedXml = Buffer.from(xml).toString("utf8"); return { outcome: "ACCEPTED", stableCode: null }; },
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    })).resolves.toMatchObject({ kind: "processed", outcome: "ACCEPTED" });
+    expect(submittedXml).toContain("<sf:Subsanacion>S</sf:Subsanacion><sf:RechazoPrevio>X</sf:RechazoPrevio>");
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: draftId } })).toMatchObject({ verifactuStatus: "ACCEPTED" });
+    expect(await prisma.auditEvent.count({ where: { eventType: "VERIFACTU_REJECTION_CORRECTION_PREPARED" } })).toBe(1);
+    expect(await prisma.verifactuOutboxMessage.findFirstOrThrow({ where: { fiscalRecordId: rejectedRecord.id } })).toMatchObject({ status: "PROCESSED", attemptCount: 1 });
+    expect(sif.id).toBe(correctionRecord.sifInstallationId);
+  });
+
+  it("subsanates a rejected rectification without changing its R4 fiscal identity", async () => {
+    const actor = await loginAsAdmin();
+    const draftId = await createDraftWithOneLine(actor);
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+    if (!installation.companyId) throw new Error("COMPANY_NOT_AVAILABLE");
+    const credential = await prisma.verifactuMtlsCredential.create({
+      data: { companyId: installation.companyId, ref: `vfcred:r4-correction:${randomUUID()}`, alias: "R4 correction fixture" }
+    });
+    await prisma.verifactuSifInstallation.create({
+      data: {
+        ...testSifInstallation(installation.companyId),
+        artifactManifestSha256: supportedVerifactuManifestSha256,
+        credentialRef: credential.ref
+      }
+    });
+    const cipher = createVerifactuPayloadCipher({
+      keyId: "r4-correction-key",
+      key: Buffer.alloc(32, 15),
+      random: () => Buffer.alloc(12, 16)
+    });
+    const prepareOriginal = createAeatF1AltaPreparer({ cipher, nowWithOffset: () => "2026-07-12T12:00:00+02:00" });
+    expect(await issueInvoice(
+      draftId,
+      { issueDate: "2026-07-07" },
+      actor,
+      { idempotencyKey: "vf-r4-original" },
+      { verifactuEnabled: true, verifactuEnvironment: "TEST", prepareVerifactuAlta: prepareOriginal }
+    )).toMatchObject({ ok: true });
+    await expect(processNextVerifactuOutboxMessage({
+      workerId: "vf-r4-original-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:05:00.000Z"),
+      transport: {
+        submit: async () => ({ outcome: "ACCEPTED", stableCode: null }),
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    })).resolves.toMatchObject({ kind: "processed", outcome: "ACCEPTED" });
+
+    const rectificationCommand = {
+      issueDate: "2026-07-08",
+      reason: "AMOUNT_ERROR" as const,
+      fiscalClassification: "R4_OTHER" as const,
+      notes: null
+    };
+    const rectification = await createInvoiceRectification(
+      draftId,
+      rectificationCommand,
+      actor,
+      {
+        idempotencyKey: "vf-r4-rejected",
+        requestHash: hashInvoiceRectificationBody(rectificationCommand)
+      },
+      { verifactuEnabled: true, verifactuEnvironment: "TEST", prepareVerifactuAlta: prepareOriginal }
+    );
+    expect(rectification).toMatchObject({ ok: true, value: { number: "R2600001" } });
+    if (!rectification.ok) throw new Error(rectification.error.code);
+    const rejectedRecord = await prisma.verifactuFiscalRecord.findFirstOrThrow({ where: { invoiceId: rectification.value.id } });
+    await expect(processNextVerifactuOutboxMessage({
+      workerId: "vf-r4-rejection-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:06:00.000Z"),
+      transport: {
+        submit: async () => ({ outcome: "REJECTED", stableCode: "VERIFACTU_AEAT_RECORD_ERROR", aeatCodes: ["1239"] }),
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    })).resolves.toMatchObject({ kind: "processed", outcome: "REJECTED" });
+    const rejectedAttempt = await prisma.verifactuSubmissionAttempt.findFirstOrThrow({ where: { fiscalRecordId: rejectedRecord.id } });
+    const command = {
+      expectedRejectedAttemptId: rejectedAttempt.id,
+      recipientName: "Cliente corregido TEST",
+      recipientTaxId: "89890001K",
+      reasonCode: "RECIPIENT_IDENTIFICATION_CORRECTED" as const,
+      rectificationNotRequired: true as const
+    };
+    const prepareCorrection = createAeatF1AltaPreparer({ cipher, nowWithOffset: () => "2026-07-12T12:10:00+02:00" });
+    const correction = await createVerifactuRejectionCorrection({
+      rejectedRecordId: rejectedRecord.id,
+      command,
+      actor,
+      idempotencyKey: "vf-r4-rejection-correction",
+      requestHash: hashVerifactuRejectionCorrectionBody(command),
+      prepare: prepareCorrection
+    });
+    expect(correction).toMatchObject({ ok: true, status: 202, value: { rejectedRecordId: rejectedRecord.id, status: "PENDING" } });
+
+    let submittedXml = "";
+    await expect(processNextVerifactuOutboxMessage({
+      workerId: "vf-r4-correction-worker",
+      companyId: installation.companyId,
+      environment: "TEST",
+      cipher,
+      now: () => new Date("2026-07-12T10:15:00.000Z"),
+      transport: {
+        submit: async ({ xml }) => {
+          submittedXml = Buffer.from(xml).toString("utf8");
+          return { outcome: "ACCEPTED", stableCode: null };
+        },
+        reconcile: async () => ({ outcome: "ACCEPTED", stableCode: null })
+      }
+    })).resolves.toMatchObject({ kind: "processed", outcome: "ACCEPTED" });
+    expect(submittedXml).toContain("<sf:Subsanacion>S</sf:Subsanacion><sf:RechazoPrevio>X</sf:RechazoPrevio>");
+    expect(submittedXml).toContain("<sf:TipoFactura>R4</sf:TipoFactura><sf:TipoRectificativa>I</sf:TipoRectificativa>");
+    expect(submittedXml).toContain("<sf:NumSerieFactura>F2600001</sf:NumSerieFactura>");
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: rectification.value.id } })).toMatchObject({ verifactuStatus: "ACCEPTED" });
+  });
+
+  it("rolls back invoice numbering and accounting when enabled VeriFactu preparation is unavailable", async () => {
+    const actor = await loginAsAdmin();
+    const draftId = await createDraftWithOneLine(actor);
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+    if (!installation.companyId) throw new Error("COMPANY_NOT_AVAILABLE");
+    await prisma.verifactuSifInstallation.create({ data: testSifInstallation(installation.companyId) });
+
+    const failed = await issueInvoice(
+      draftId,
+      { issueDate: "2026-07-07" },
+      actor,
+      {},
+      { verifactuEnabled: true, verifactuEnvironment: "TEST" }
+    );
+
+    expect(failed).toMatchObject({
+      ok: false,
+      status: 503,
+      error: { code: "INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE" }
+    });
+    expect(await prisma.invoice.findUniqueOrThrow({ where: { id: draftId } })).toMatchObject({ status: "DRAFT", number: null });
+    expect(await prisma.invoiceNumberSequence.count()).toBe(0);
+    expect(await prisma.accountingJournalEntry.count({ where: { invoiceId: draftId } })).toBe(0);
+    expect(await prisma.verifactuFiscalRecord.count()).toBe(0);
+    expect(await prisma.verifactuOutboxMessage.count()).toBe(0);
   });
 
   it("rejects inactive customers and non-editable invoices", async () => {
@@ -437,6 +862,10 @@ describe("billing invoices application service", () => {
       issueDate: "2026-07-07",
       legalName: "Cliente Rectificativa SL"
     });
+    await prisma.invoice.update({
+      where: { id: original.issued.value.id },
+      data: { verifactuStatus: "NOT_APPLICABLE" }
+    });
 
     const rectification = await createInvoiceRectification(
       original.issued.value.id,
@@ -461,8 +890,10 @@ describe("billing invoices application service", () => {
       where: { id: original.issued.value.id },
       select: {
         status: true,
+        paymentStatus: true,
         number: true,
         total: true,
+        dueDates: { select: { status: true } },
         lines: {
           select: {
             quantity: true,
@@ -481,6 +912,7 @@ describe("billing invoices application service", () => {
       where: { invoiceId: rectification.value.id },
       include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
     });
+    const originalDetail = await getInvoiceDetail(original.issued.value.id, actor);
 
     expect(rectification).toMatchObject({
       ok: true,
@@ -490,7 +922,7 @@ describe("billing invoices application service", () => {
         status: "ISSUED",
         series: "R",
         number: "R2600001",
-        paymentStatus: "PAID",
+        paymentStatus: "NOT_APPLICABLE",
         rectificationReason: "AMOUNT_ERROR",
         rectifiesInvoice: {
           id: original.issued.value.id,
@@ -509,15 +941,15 @@ describe("billing invoices application service", () => {
             }
           }
         ],
-        dueDates: [
-          {
-            amount: "-121.00",
-            status: "PAID"
-          }
-        ]
+        dueDates: []
       }
     });
     expect(storedOriginal.status).toBe("RECTIFIED");
+    expect(storedOriginal.paymentStatus).toBe("CANCELLED");
+    expect(storedOriginal.dueDates).toEqual([{ status: "CANCELLED" }]);
+    expect(originalDetail?.dueDates).toMatchObject([
+      { amount: "121.00", paidAmount: "0.00", pendingAmount: "0.00", status: "CANCELLED" }
+    ]);
     expect(storedOriginal.number).toBe("F2600001");
     expect(storedOriginal.total.toFixed(2)).toBe("121.00");
     expect(storedOriginal.lines[0]?.quantity.toFixed(3)).toBe("1.000");
@@ -559,11 +991,182 @@ describe("billing invoices application service", () => {
     });
   });
 
+  it("blocks rectification when the original invoice has financial activity", async () => {
+    const actor = await loginAsAdmin();
+    const original = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Rectificativa Cobrada SL"
+    });
+    await prisma.invoice.update({
+      where: { id: original.issued.value.id },
+      data: { verifactuStatus: "NOT_APPLICABLE", paymentStatus: "PAID" }
+    });
+    await prisma.invoiceDueDate.updateMany({
+      where: { invoiceId: original.issued.value.id },
+      data: { status: "PAID" }
+    });
+
+    const result = await createInvoiceRectification(
+      original.issued.value.id,
+      { issueDate: "2026-07-08", reason: "AMOUNT_ERROR", notes: null },
+      actor
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      error: {
+        code: "INVOICE_RECTIFICATION_FINANCIAL_ACTIVITY",
+        message: "La factura tiene actividad financiera. La rectificacion permanece bloqueada hasta disponer de creditos y reembolsos."
+      }
+    });
+    expect(await prisma.invoice.count({ where: { documentType: "RECTIFICATION" } })).toBe(0);
+  });
+
+  it("creates a credit for a fully paid rectification and safely applies and refunds it", async () => {
+    const actor = await loginAsAdmin();
+    const original = await createIssuedInvoiceWithOneLine(actor, {
+      issueDate: "2026-07-07",
+      legalName: "Cliente Saldo a Favor SL"
+    });
+    const taxRate = await defaultTaxRate();
+    const targetDraft = await createInvoiceDraft({
+      customerId: original.customer.id,
+      issueDate: "2026-07-08",
+      operationDate: "2026-07-08",
+      notes: null
+    }, actor);
+    if (!targetDraft.ok) throw new Error(targetDraft.error.code);
+    const targetLine = await addInvoiceLine(targetDraft.value.id, {
+      description: "Servicio posterior",
+      quantity: "1.000",
+      unitPrice: "100.00",
+      discountPercent: "0.00",
+      discountAmount: "0.00",
+      taxRateId: taxRate.id
+    }, actor);
+    if (!targetLine.ok) throw new Error(targetLine.error.code);
+    const target = await issueInvoice(targetDraft.value.id, { issueDate: "2026-07-08" }, actor);
+    if (!target.ok) throw new Error(target.error.code);
+
+    const originalDueDateId = original.issued.value.dueDates[0]?.id;
+    const targetDueDateId = target.value.dueDates[0]?.id;
+    if (!originalDueDateId || !targetDueDateId) throw new Error("Missing due date.");
+    const payment = await registerCustomerPayment(original.issued.value.id, {
+      dueDateId: originalDueDateId,
+      paymentDate: "2026-07-08",
+      amount: "121.00",
+      reference: null,
+      notes: null
+    }, actor);
+    if (!payment.ok) throw new Error(payment.error.code);
+    await prisma.invoice.update({
+      where: { id: original.issued.value.id },
+      data: { verifactuStatus: "NOT_APPLICABLE" }
+    });
+
+    const rectification = await createInvoiceRectification(original.issued.value.id, {
+      issueDate: "2026-07-09",
+      reason: "OPERATION_CANCELLED",
+      notes: null
+    }, actor);
+    if (!rectification.ok) throw new Error(rectification.error.code);
+    const storedCredit = await prisma.customerCredit.findUniqueOrThrow({
+      where: { sourceRectificationInvoiceId: rectification.value.id }
+    });
+    const initialCredit = await getCustomerCredit(storedCredit.id);
+    expect(initialCredit).toMatchObject({
+      originalAmount: "121.00",
+      availableAmount: "121.00",
+      status: "AVAILABLE"
+    });
+
+    const applicationCommand = {
+      targetDueDateId,
+      applicationDate: "2026-07-09",
+      amount: "50.00",
+      notes: null
+    } as const;
+    const applied = await applyCustomerCredit(storedCredit.id, applicationCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerCreditApplication(storedCredit.id, applicationCommand)
+    });
+    expect(applied).toMatchObject({ ok: true, status: 201, value: {
+      appliedAmount: "50.00", availableAmount: "71.00", status: "PARTIALLY_USED"
+    } });
+    const targetAfterApplication = await getInvoiceDetail(target.value.id, actor);
+    expect(targetAfterApplication).toMatchObject({
+      paymentStatus: "PARTIALLY_SETTLED",
+      dueDates: [{ creditAppliedAmount: "50.00", pendingAmount: "71.00" }]
+    });
+
+    const company = await prisma.company.findFirstOrThrow();
+    const bankAccount = await prisma.bankAccount.create({ data: {
+      companyId: company.id,
+      name: "Banco de pruebas",
+      iban: "ES9121000418450200051332",
+      createdById: actor.id
+    } });
+    const refundCommand = {
+      bankAccountId: bankAccount.id,
+      requestedDate: "2026-07-10",
+      amount: "71.00",
+      reasonCode: "CUSTOMER_REQUEST",
+      reference: null,
+      notes: null
+    } as const;
+    const requested = await requestCustomerCreditRefund(storedCredit.id, refundCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerCreditRefundRequest(storedCredit.id, refundCommand)
+    });
+    if (!requested.ok) throw new Error(requested.error.code);
+    const refundId = requested.value.refunds[0]?.id;
+    if (!refundId) throw new Error("Missing refund.");
+    const selfApproval = await approveCustomerCreditRefund(refundId, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerCreditRefundAction(refundId, "approve")
+    });
+    expect(selfApproval).toMatchObject({ ok: false, error: { code: "CUSTOMER_CREDIT_REFUND_SELF_APPROVAL_FORBIDDEN" } });
+
+    const adminUser = await prisma.user.findUniqueOrThrow({ where: { id: actor.id } });
+    const approverUser = await prisma.user.create({ data: {
+      displayName: "Aprobador",
+      userName: "approver",
+      normalizedUserName: "approver",
+      passwordHash: adminUser.passwordHash,
+      roleId: adminUser.roleId
+    } });
+    const approver = { ...actor, id: approverUser.id, displayName: approverUser.displayName, userName: approverUser.userName };
+    const approved = await approveCustomerCreditRefund(refundId, approver, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerCreditRefundAction(refundId, "approve")
+    });
+    expect(approved).toMatchObject({ ok: true, value: { refunds: [{ status: "APPROVED" }] } });
+    const posted = await postCustomerCreditRefund(refundId, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerCreditRefundAction(refundId, "post")
+    });
+    expect(posted).toMatchObject({ ok: true, value: { availableAmount: "0.00", status: "EXHAUSTED" } });
+    const entry = await prisma.accountingJournalEntry.findUniqueOrThrow({
+      where: { customerCreditRefundId: refundId },
+      include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
+    });
+    expect(entry.origin).toBe("CUSTOMER_CREDIT_REFUND");
+    expect(entry.lines.map((line) => ({ code: line.account.code, debit: line.debit.toFixed(2), credit: line.credit.toFixed(2) }))).toEqual([
+      { code: `430${original.customer.code.padStart(6, "0")}`, debit: "71.00", credit: "0.00" },
+      { code: "572000000", debit: "0.00", credit: "71.00" }
+    ]);
+  });
+
   it("rolls back a rectification when a required accounting account is unavailable", async () => {
     const actor = await loginAsAdmin();
     const original = await createIssuedInvoiceWithOneLine(actor, {
       issueDate: "2026-07-07",
       legalName: "Cliente Rollback Rectificativa SL"
+    });
+    await prisma.invoice.update({
+      where: { id: original.issued.value.id },
+      data: { verifactuStatus: "NOT_APPLICABLE" }
     });
     await prisma.accountingAccount.updateMany({
       where: { code: "477000000" },
@@ -818,6 +1421,18 @@ describe("billing invoices application service", () => {
       throw new Error("Missing payment.");
     }
 
+    const earlyReturn = await registerCustomerPaymentReturn(
+      issued.value.id,
+      {
+        paymentId,
+        returnDate: "2026-07-09",
+        amount: "1.00",
+        reasonCode: "BANK_RETURN",
+        notes: null
+      },
+      actor
+    );
+
     const partialReturn = await registerCustomerPaymentReturn(
       issued.value.id,
       {
@@ -854,7 +1469,12 @@ describe("billing invoices application service", () => {
     );
     const storedReturns = await prisma.customerPaymentReturn.findMany({
       where: { paymentId },
-      orderBy: { returnDate: "asc" }
+      orderBy: { returnDate: "asc" },
+      include: {
+        accountingEntry: {
+          include: { lines: { orderBy: { position: "asc" }, include: { account: true } } }
+        }
+      }
     });
     const dueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
       where: { id: dueDateId }
@@ -887,6 +1507,11 @@ describe("billing invoices application service", () => {
         ]
       }
     });
+    expect(earlyReturn).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "PAYMENT_RETURN_DATE_BEFORE_PAYMENT" }
+    });
     expect(fullReturn).toMatchObject({
       ok: true,
       status: 201,
@@ -914,6 +1539,21 @@ describe("billing invoices application service", () => {
       "50.00",
       "71.00"
     ]);
+    expect(storedReturns.map((paymentReturn) => paymentReturn.accountingEntry?.origin)).toEqual([
+      "CUSTOMER_PAYMENT_RETURN",
+      "CUSTOMER_PAYMENT_RETURN"
+    ]);
+    expect(storedReturns[0]?.accountingEntry?.lines.map((line) => line.account.code)).toEqual([
+      `430${customer.code.padStart(6, "0")}`,
+      "572000000"
+    ]);
+    expect(storedReturns[0]?.accountingEntry?.lines.map((line) => ({
+      debit: line.debit.toFixed(2),
+      credit: line.credit.toFixed(2)
+    }))).toEqual([
+      { debit: "50.00", credit: "0.00" },
+      { debit: "0.00", credit: "50.00" }
+    ]);
     expect(dueDate.status).toBe("RETURNED");
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
@@ -924,7 +1564,9 @@ describe("billing invoices application service", () => {
       amount: "50.00",
       returnDate: "2026-07-12",
       resultingPaymentStatus: "PARTIALLY_PAID",
-      correlationId: "customer-payment-return-0001"
+      correlationId: "customer-payment-return-0001",
+      accountingJournalEntryId: storedReturns[0]?.accountingEntry?.id,
+      accountingJournalEntryNumber: storedReturns[0]?.accountingEntry?.number
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain("Texto interno");
   });
@@ -1550,14 +2192,16 @@ async function initializeForBilling(): Promise<void> {
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await assertDisposableTestDatabase();
+  await prisma.$executeRaw`TRUNCATE TABLE "customer_credit_refunds", "customer_credit_applications", "customer_credits", "verifactu_worker_runs", "verifactu_submission_attempts", "verifactu_outbox_messages", "verifactu_fiscal_records", "verifactu_sif_installations", "verifactu_mtls_credential_versions", "verifactu_mtls_credentials" CASCADE`;
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
-
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
+    prisma.bankAccount.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoiceTaxSummary.deleteMany(),
     prisma.invoiceLine.deleteMany(),
@@ -1591,6 +2235,47 @@ async function resetPlatformTables(): Promise<void> {
     prisma.role.deleteMany(),
     prisma.company.deleteMany()
   ]);
+}
+
+async function createDraftWithOneLine(actor: Awaited<ReturnType<typeof loginAsAdmin>>): Promise<string> {
+  const customer = await createCustomer(actor.id);
+  const taxRate = await defaultTaxRate();
+  const draft = await createInvoiceDraft({
+    customerId: customer.id,
+    issueDate: "2026-07-07",
+    operationDate: "2026-07-07",
+    notes: null
+  }, actor);
+  if (!draft.ok) throw new Error(draft.error.code);
+  const line = await addInvoiceLine(draft.value.id, {
+    description: "Servicio VeriFactu",
+    quantity: "1.000",
+    unitPrice: "100.00",
+    discountPercent: "0.00",
+    discountAmount: "0.00",
+    taxRateId: taxRate.id
+  }, actor);
+  if (!line.ok) throw new Error(line.error.code);
+  return draft.value.id;
+}
+
+function testSifInstallation(companyId: string) {
+  return {
+    companyId,
+    installationCode: "BILLING-TEST-SIF",
+    environment: "TEST" as const,
+    contractVersion: "VF_V1",
+    schemaVersion: "tikeV1.0",
+    artifactManifestVersion: "AEAT_VERIFACTU_ARTIFACTS_V1",
+    artifactManifestSha256: "a".repeat(64),
+    producerTaxId: "B12345678",
+    producerName: "CriGestion Test SL",
+    systemName: "CriGestion",
+    systemId: "CG",
+    systemVersion: "0.1.0",
+    installationNumber: "TEST-1",
+    activatedAt: new Date("2026-07-12T09:00:00.000Z")
+  };
 }
 
 async function resetCatalogItemCodeSequence(): Promise<void> {

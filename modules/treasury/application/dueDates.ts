@@ -57,11 +57,12 @@ export type CustomerDueDateListItem = {
   dueDate: string;
   amount: string;
   paidAmount: string;
+  creditAppliedAmount: string;
   returnedAmount: string;
   pendingAmount: string;
   paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
-  status: "PENDING" | "PAID" | "RETURNED" | "UNPAID";
-  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "UNPAID";
+  status: "PENDING" | "PAID" | "SETTLED" | "RETURNED" | "UNPAID" | "CANCELLED";
+  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PAID" | "PARTIALLY_SETTLED" | "SETTLED" | "NOT_APPLICABLE" | "UNPAID" | "CANCELLED";
 };
 
 export type CustomerDueDateList = {
@@ -109,7 +110,8 @@ const customerDueDateSelect = {
     select: {
       amount: true
     }
-  }
+  },
+  creditApplications: { select: { amount: true } }
 } satisfies Prisma.InvoiceDueDateSelect;
 
 type CustomerDueDateRecord = Prisma.InvoiceDueDateGetPayload<{
@@ -200,7 +202,7 @@ async function findCustomerDueDates(
         : {})
     },
     ...(command.scope === "OPEN"
-      ? { status: { not: "PAID" } }
+      ? { status: { in: ["PENDING", "RETURNED", "UNPAID"] } }
       : command.scope === "ALL"
         ? {}
         : { status: command.scope }),
@@ -246,6 +248,7 @@ function customerDueDatesCsv(dueDates: CustomerDueDateListItem[]): string {
     "estado_factura",
     "importe",
     "cobrado_neto",
+    "compensado",
     "devuelto",
     "pendiente"
   ];
@@ -262,6 +265,7 @@ function customerDueDatesCsv(dueDates: CustomerDueDateListItem[]): string {
     dueDate.paymentStatus,
     dueDate.amount,
     dueDate.paidAmount,
+    dueDate.creditAppliedAmount,
     dueDate.returnedAmount,
     dueDate.pendingAmount
   ]);
@@ -285,7 +289,10 @@ function mapCustomerDueDate(record: CustomerDueDateRecord): CustomerDueDateListI
     new Prisma.Decimal(0)
   );
   const returnedAmount = sumAmounts(record.paymentReturns);
-  const pendingAmount = record.amount.minus(paidAmount);
+  const creditAppliedAmount = sumAmounts(record.creditApplications);
+  const pendingAmount = record.status === "CANCELLED"
+    ? new Prisma.Decimal(0)
+    : Prisma.Decimal.max(new Prisma.Decimal(0), record.amount.minus(paidAmount).minus(creditAppliedAmount));
 
   return {
     id: record.id,
@@ -302,6 +309,7 @@ function mapCustomerDueDate(record: CustomerDueDateRecord): CustomerDueDateListI
     dueDate: formatDateOnly(record.dueDate),
     amount: record.amount.toFixed(2),
     paidAmount: paidAmount.toFixed(2),
+    creditAppliedAmount: creditAppliedAmount.toFixed(2),
     returnedAmount: returnedAmount.toFixed(2),
     pendingAmount: pendingAmount.toFixed(2),
     paymentMethod: record.paymentMethod,

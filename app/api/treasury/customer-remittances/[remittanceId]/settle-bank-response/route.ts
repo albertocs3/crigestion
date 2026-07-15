@@ -6,6 +6,8 @@ import {
 } from "@/modules/platform/application/auth";
 import {
   getCorrelationId,
+  hashIdempotencyPayload,
+  idempotencyStorageKey,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
@@ -89,11 +91,28 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const params = await context.params;
+  const idempotencyScope = "treasury.remittances.settle-bank-response.v1";
   const result = await settleCustomerRemittanceBankResponse(
     params.remittanceId,
     payload.data,
     authorization.user,
-    { correlationId }
+    {
+      correlationId,
+      idempotencyKey: idempotencyStorageKey(
+        authorization.user.id,
+        idempotencyScope,
+        params.remittanceId,
+        idempotency.key
+      ),
+      requestHash: hashIdempotencyPayload(idempotencyScope, {
+        remittanceId: params.remittanceId,
+        command: {
+          ...payload.data,
+          paidLineIds: [...payload.data.paidLineIds].sort(),
+          rejectedLineIds: [...payload.data.rejectedLineIds].sort()
+        }
+      })
+    }
   );
 
   if (!result.ok) {

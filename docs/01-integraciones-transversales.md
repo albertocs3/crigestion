@@ -405,7 +405,7 @@ Esto permite demostrar qué datos y configuración intervinieron, aunque no se c
 - Plan de cuentas definitivo para anticipos.
 - Representación de anticipos en la factura final.
 - Modelo extensible para rectificaciones por diferencias y agrupadas.
-- Modalidad exacta y versionado de servicios VeriFactu.
-- Modelo legal-operativo final para remision propia o en representacion de terceros.
-- Declaración responsable del productor.
+- Versiones y huellas concretas de WSDL, XSD, validaciones, errores, hash y QR de AEAT para cada release.
+- Modelo legal-operativo final para remision propia o en representacion de terceros antes de activar cada empresa.
+- Contenido y archivo de la declaracion responsable de cada version del producto.
 - Política final sobre conservación del PDF original.

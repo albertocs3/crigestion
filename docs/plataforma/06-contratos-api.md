@@ -36,9 +36,18 @@ Respuesta `200`:
 {
   "status": "ok",
   "database": "ok",
+  "verifactu": "disabled",
+  "worker": "not_required",
   "timestamp": "2026-06-26T10:00:00.000Z"
 }
 ```
+
+`status` puede ser `ok`, `degraded` o `unavailable`. La ruta responde `200`
+para `ok` y `degraded`, y `503` cuando PostgreSQL no responde o la base
+declarada no coincide con el aislamiento exigido. `verifactu` solo publica
+`disabled`, `ok` o `degraded`; `worker`, `not_required`, `ok` o `degraded`.
+La respuesta usa `Cache-Control: no-store` y no expone nombres de base, host,
+puerto, identificadores, endpoints, versiones, contadores ni codigos internos.
 
 ## 4. Estado de instalacion
 

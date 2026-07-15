@@ -296,6 +296,14 @@ Al emitir una factura:
 
 Una factura emitida no se modifica. Cualquier corrección se realiza mediante factura rectificativa.
 
+Excepcion cerrada: cuando la factura y su `ALTA` se emitieron por error y una
+`ANULACION` VeriFactu ya fue aceptada, un usuario con permiso especifico puede
+finalizar la anulacion tecnica. La operacion conserva factura, ALTA, ANULACION y
+asiento original; crea un contraasiento enlazado, cancela vencimientos y marca
+el documento `VOIDED`. Se rechaza si hubo cobros, devoluciones, remesas,
+rectificativas o evidencia AEAT no terminal. No aplica a una operacion real ni
+sustituye la rectificativa para cambios, devoluciones o cancelaciones comerciales.
+
 Los cambios posteriores del cliente, catálogo, suscripción o configuración no alterarán los datos económicos del documento emitido.
 
 ## 12. Presupuestos
@@ -394,6 +402,11 @@ total de la factura. Ninguna fecha puede ser anterior a la emision.
 Los vencimientos quedan bloqueados al emitir. Si se modifican lineas despues de
 repartir varias cuotas, la emision se rechaza hasta volver a cuadrar el reparto.
 Rectificativas, cobros y remesas conservan sus reglas actuales y referencias.
+El detalle de factura identifica la remesa activa de cada vencimiento y permite
+seguir, segun permisos, el asiento de emision y los asientos de sus cobros sin
+exponer datos bancarios.
+Las devoluciones parciales o totales muestran tambien su asiento inverso y cada
+devolucion conserva una relacion contable independiente.
 
 Los vencimientos:
 
@@ -558,6 +571,11 @@ Si el envío falla:
 - Se conservará cada intento.
 
 Los formatos, plazos, estados y reglas exactas deberán ajustarse a la normativa y especificaciones técnicas vigentes.
+
+La modalidad inicial, invariantes y frontera del adaptador quedan fijadas en
+[Contrato VeriFactu V1](06-contrato-verifactu-v1.md) y ADR-0023. El envio real
+continua bloqueado hasta fijar y validar los artefactos tecnicos AEAT indicados
+en ese contrato.
 
 ## 20. Listados
 

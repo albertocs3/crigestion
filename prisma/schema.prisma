@@ -137,7 +137,11 @@ enum InvoicePaymentStatus {
   PENDING
   PARTIALLY_PAID
   PAID
+  PARTIALLY_SETTLED
+  SETTLED
+  NOT_APPLICABLE
   UNPAID
+  CANCELLED
 }
 
 enum InvoiceVerifactuStatus {
@@ -147,6 +151,75 @@ enum InvoiceVerifactuStatus {
   ACCEPTED
   ACCEPTED_WITH_ERRORS
   REJECTED
+  CANCELLED
+}
+
+enum VerifactuEnvironment {
+  TEST
+  PRODUCTION
+}
+
+enum VerifactuSifStatus {
+  ACTIVE
+  RETIRED
+}
+
+enum VerifactuRecordType {
+  ALTA
+  ANULACION
+}
+
+enum VerifactuAttemptKind {
+  SUBMIT
+  RECONCILE
+}
+
+enum VerifactuAttemptOutcome {
+  ACCEPTED
+  ACCEPTED_WITH_ERRORS
+  REJECTED
+  RETRYABLE_FAILURE
+  UNKNOWN
+}
+
+enum VerifactuOutboxStatus {
+  PENDING
+  CLAIMED
+  PROCESSED
+  DEAD
+}
+
+enum VerifactuWorkerStatus {
+  RUNNING
+  STOPPING
+  STOPPED
+  FAILED
+}
+
+enum VerifactuMtlsCredentialStatus {
+  ACTIVE
+  DISABLED
+  REVOKED
+}
+
+enum VerifactuMtlsCredentialVersionStatus {
+  STAGED
+  TESTED
+  ACTIVE
+  RETIRED
+  REVOKED
+}
+
+enum VerifactuMtlsTestOutcome {
+  RUNNING
+  PASSED
+  FAILED
+  UNKNOWN
+}
+
+enum VerifactuMtlsEndpointKind {
+  STANDARD
+  SEAL
 }
 
 enum InvoiceOrigin {
@@ -157,8 +230,10 @@ enum InvoiceOrigin {
 enum InvoiceDueDateStatus {
   PENDING
   PAID
+  SETTLED
   RETURNED
   UNPAID
+  CANCELLED
 }
 
 enum CustomerPaymentSource {
@@ -183,6 +258,25 @@ enum CustomerRemittanceLineStatus {
   CANCELLED
 }
 
+enum BankAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BankMovementSource {
+  MANUAL
+  NORMA43
+}
+
+enum BankStatementFormat {
+  AEB43_2012
+}
+
+enum BankReconciliationStatus {
+  ACTIVE
+  UNDONE
+}
+
 enum AccountingAccountStatus {
   ACTIVE
   INACTIVE
@@ -196,10 +290,20 @@ enum AccountingFiscalYearStatus {
 enum AccountingEntryOrigin {
   MANUAL
   INVOICE
+  INVOICE_VOIDING
   CUSTOMER_PAYMENT
+  CUSTOMER_PAYMENT_RETURN
+  CUSTOMER_CREDIT_REFUND
   REGULARIZATION
   CLOSING
   OPENING
+}
+
+enum CustomerCreditRefundStatus {
+  REQUESTED
+  APPROVED
+  POSTED
+  CANCELLED
 }
 
 enum AccountingEntryStatus {
@@ -237,8 +341,17 @@ model Company {
   createdAt              DateTime @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime @updatedAt @db.Timestamptz(3)
 
-  installation          Installation?
-  accountingFiscalYears AccountingFiscalYear[]
+  installation             Installation?
+  accountingFiscalYears    AccountingFiscalYear[]
+  bankAccounts             BankAccount[]
+  bankStatements           BankStatement[]
+  invoices                 Invoice[]
+  customerCredits          CustomerCredit[]
+  customerCreditRefunds    CustomerCreditRefund[]
+  verifactuInstallations   VerifactuSifInstallation[]
+  verifactuFiscalRecords   VerifactuFiscalRecord[]
+  verifactuMtlsCredentials VerifactuMtlsCredential[]
+  verifactuWorkerRuns      VerifactuWorkerRun[]
 
   @@map("companies")
 }
@@ -279,6 +392,8 @@ model Customer {
   sepaMandates    CustomerSepaMandate[]
   remittanceLines CustomerRemittanceLine[]
   invoices        Invoice[]
+  credits         CustomerCredit[]
+  creditRefunds   CustomerCreditRefund[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -287,7 +402,7 @@ model Customer {
 }
 
 model CustomerSepaMandate {
-  id                  String                    @id @default(uuid()) @db.Uuid
+  id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   customerId          String                    @db.Uuid
   reference           String                    @db.VarChar(80)
   referenceNormalized String                    @unique @db.VarChar(80)
@@ -310,7 +425,7 @@ model CustomerSepaMandate {
 }
 
 model CustomerAddress {
-  id          String                @id @default(uuid()) @db.Uuid
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   customerId  String                @db.Uuid
   type        CustomerAddressType
   status      CustomerAddressStatus @default(ACTIVE)
@@ -393,42 +508,54 @@ model User {
   createdAt          DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
 
-  role                          Role                       @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  role                          Role                                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
   sessions                      Session[]
   requestedBackups              BackupOperation[]
   requestedRestores             RestoreOperation[]
-  enabledMaintenances           PlatformMaintenanceState[] @relation("MaintenanceEnabledBy")
-  disabledMaintenances          PlatformMaintenanceState[] @relation("MaintenanceDisabledBy")
-  createdCustomers              Customer[]                 @relation("CustomersCreatedBy")
-  updatedCustomers              Customer[]                 @relation("CustomersUpdatedBy")
-  createdCustomerAddresses      CustomerAddress[]          @relation("CustomerAddressesCreatedBy")
-  updatedCustomerAddresses      CustomerAddress[]          @relation("CustomerAddressesUpdatedBy")
-  createdCustomerSepaMandates   CustomerSepaMandate[]      @relation("CustomerSepaMandatesCreatedBy")
-  revokedCustomerSepaMandates   CustomerSepaMandate[]      @relation("CustomerSepaMandatesRevokedBy")
-  createdCustomerStores         CustomerStore[]            @relation("CustomerStoresCreatedBy")
-  updatedCustomerStores         CustomerStore[]            @relation("CustomerStoresUpdatedBy")
-  createdCatalogItems           CatalogItem[]              @relation("CatalogItemsCreatedBy")
-  updatedCatalogItems           CatalogItem[]              @relation("CatalogItemsUpdatedBy")
-  createdCatalogStockMovements  CatalogStockMovement[]     @relation("CatalogStockMovementsCreatedBy")
-  createdInvoices               Invoice[]                  @relation("InvoicesCreatedBy")
-  updatedInvoices               Invoice[]                  @relation("InvoicesUpdatedBy")
-  issuedInvoices                Invoice[]                  @relation("InvoicesIssuedBy")
-  createdCustomerPayments       CustomerPayment[]          @relation("CustomerPaymentsCreatedBy")
-  createdCustomerPaymentReturns CustomerPaymentReturn[]    @relation("CustomerPaymentReturnsCreatedBy")
-  createdCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesCreatedBy")
-  updatedCustomerRemittances    CustomerRemittance[]       @relation("CustomerRemittancesUpdatedBy")
-  createdAccountingAccounts     AccountingAccount[]        @relation("AccountingAccountsCreatedBy")
-  createdAccountingFiscalYears  AccountingFiscalYear[]     @relation("AccountingFiscalYearsCreatedBy")
-  closedAccountingFiscalYears   AccountingFiscalYear[]     @relation("AccountingFiscalYearsClosedBy")
-  createdAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesCreatedBy")
-  updatedAccountingEntries      AccountingJournalEntry[]   @relation("AccountingEntriesUpdatedBy")
+  enabledMaintenances           PlatformMaintenanceState[]           @relation("MaintenanceEnabledBy")
+  disabledMaintenances          PlatformMaintenanceState[]           @relation("MaintenanceDisabledBy")
+  createdCustomers              Customer[]                           @relation("CustomersCreatedBy")
+  updatedCustomers              Customer[]                           @relation("CustomersUpdatedBy")
+  createdCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
+  updatedCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
+  createdCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
+  revokedCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesRevokedBy")
+  createdCustomerStores         CustomerStore[]                      @relation("CustomerStoresCreatedBy")
+  updatedCustomerStores         CustomerStore[]                      @relation("CustomerStoresUpdatedBy")
+  createdCatalogItems           CatalogItem[]                        @relation("CatalogItemsCreatedBy")
+  updatedCatalogItems           CatalogItem[]                        @relation("CatalogItemsUpdatedBy")
+  createdCatalogStockMovements  CatalogStockMovement[]               @relation("CatalogStockMovementsCreatedBy")
+  createdInvoices               Invoice[]                            @relation("InvoicesCreatedBy")
+  updatedInvoices               Invoice[]                            @relation("InvoicesUpdatedBy")
+  issuedInvoices                Invoice[]                            @relation("InvoicesIssuedBy")
+  createdCustomerPayments       CustomerPayment[]                    @relation("CustomerPaymentsCreatedBy")
+  createdCustomerPaymentReturns CustomerPaymentReturn[]              @relation("CustomerPaymentReturnsCreatedBy")
+  createdCustomerCredits        CustomerCredit[]                     @relation("CustomerCreditsCreatedBy")
+  createdCreditApplications     CustomerCreditApplication[]          @relation("CustomerCreditApplicationsCreatedBy")
+  requestedCreditRefunds        CustomerCreditRefund[]               @relation("CustomerCreditRefundsRequestedBy")
+  approvedCreditRefunds         CustomerCreditRefund[]               @relation("CustomerCreditRefundsApprovedBy")
+  postedCreditRefunds           CustomerCreditRefund[]               @relation("CustomerCreditRefundsPostedBy")
+  cancelledCreditRefunds        CustomerCreditRefund[]               @relation("CustomerCreditRefundsCancelledBy")
+  createdCustomerRemittances    CustomerRemittance[]                 @relation("CustomerRemittancesCreatedBy")
+  updatedCustomerRemittances    CustomerRemittance[]                 @relation("CustomerRemittancesUpdatedBy")
+  createdAccountingAccounts     AccountingAccount[]                  @relation("AccountingAccountsCreatedBy")
+  createdAccountingFiscalYears  AccountingFiscalYear[]               @relation("AccountingFiscalYearsCreatedBy")
+  closedAccountingFiscalYears   AccountingFiscalYear[]               @relation("AccountingFiscalYearsClosedBy")
+  createdAccountingEntries      AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
+  updatedAccountingEntries      AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
+  createdBankAccounts           BankAccount[]                        @relation("BankAccountsCreatedBy")
+  createdBankMovements          BankMovement[]                       @relation("BankMovementsCreatedBy")
+  createdBankReconciliations    BankReconciliation[]                 @relation("BankReconciliationsCreatedBy")
+  undoneBankReconciliations     BankReconciliation[]                 @relation("BankReconciliationsUndoneBy")
+  importedBankStatements        BankStatement[]                      @relation("BankStatementsImportedBy")
+  verifactuCredentialTests      VerifactuMtlsCredentialTestAttempt[]
   initialInstallation           Installation?
 
   @@map("users")
 }
 
 model CatalogItem {
-  id           String            @id @default(uuid()) @db.Uuid
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code         String            @unique @db.VarChar(20)
   categoryId   String?           @db.Uuid
   kind         CatalogItemKind
@@ -464,7 +591,7 @@ model CatalogItem {
 }
 
 model CatalogStockMovement {
-  id            String                   @id @default(uuid()) @db.Uuid
+  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   itemId        String                   @db.Uuid
   type          CatalogStockMovementType @default(ADJUSTMENT)
   quantity      Decimal                  @db.Decimal(12, 3)
@@ -483,7 +610,7 @@ model CatalogStockMovement {
 }
 
 model CatalogCategory {
-  id          String                @id @default(uuid()) @db.Uuid
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code        String                @unique @db.VarChar(20)
   name        String                @unique @db.VarChar(120)
   description String?               @db.VarChar(500)
@@ -498,7 +625,7 @@ model CatalogCategory {
 }
 
 model CatalogTaxRate {
-  id        String               @id @default(uuid()) @db.Uuid
+  id        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   code      String               @unique @db.VarChar(40)
   name      String               @db.VarChar(120)
   rate      Decimal              @db.Decimal(5, 2)
@@ -515,19 +642,19 @@ model CatalogTaxRate {
 }
 
 model BillingConfiguration {
-  id                 String   @id @default(uuid()) @db.Uuid
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   singletonKey       Int      @default(1)
   invoiceLegalFooter String   @default("") @db.Text
   invoiceAccentColor String   @default("#0f766e") @db.VarChar(7)
   createdAt          DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime @updatedAt @db.Timestamptz(3)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
   @@unique([singletonKey])
   @@map("billing_configurations")
 }
 
 model InvoiceNumberSequence {
-  id         String   @id @default(uuid()) @db.Uuid
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   series     String   @db.VarChar(8)
   year       Int
   nextNumber Int      @default(1)
@@ -538,7 +665,8 @@ model InvoiceNumberSequence {
 }
 
 model Invoice {
-  id                              String                  @id @default(uuid()) @db.Uuid
+  id                              String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                       String?                 @db.Uuid
   documentType                    InvoiceDocumentType     @default(STANDARD)
   origin                          InvoiceOrigin           @default(MANUAL)
   status                          InvoiceDocumentStatus   @default(DRAFT)
@@ -571,32 +699,39 @@ model Invoice {
   createdAt                       DateTime                @default(now()) @db.Timestamptz(3)
   updatedAt                       DateTime                @updatedAt @db.Timestamptz(3)
 
-  customer              Customer                 @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  rectifiesInvoice      Invoice?                 @relation("InvoiceRectifications", fields: [rectifiesInvoiceId], references: [id], onDelete: Restrict)
-  rectificationInvoices Invoice[]                @relation("InvoiceRectifications")
-  createdBy             User                     @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy             User?                    @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  issuedBy              User?                    @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
-  lines                 InvoiceLine[]
-  taxSummaries          InvoiceTaxSummary[]
-  dueDates              InvoiceDueDate[]
-  payments              CustomerPayment[]
-  paymentReturns        CustomerPaymentReturn[]
-  remittanceLines       CustomerRemittanceLine[]
-  verifactuRecord       InvoiceVerifactuRecord?
-  accountingEntry       AccountingJournalEntry?
+  customer               Customer                    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  company                Company?                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  rectifiesInvoice       Invoice?                    @relation("InvoiceRectifications", fields: [rectifiesInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices  Invoice[]                   @relation("InvoiceRectifications")
+  createdBy              User                        @relation("InvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy              User?                       @relation("InvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  issuedBy               User?                       @relation("InvoicesIssuedBy", fields: [issuedById], references: [id], onDelete: Restrict)
+  lines                  InvoiceLine[]
+  taxSummaries           InvoiceTaxSummary[]
+  dueDates               InvoiceDueDate[]
+  payments               CustomerPayment[]
+  paymentReturns         CustomerPaymentReturn[]
+  remittanceLines        CustomerRemittanceLine[]
+  verifactuRecord        InvoiceVerifactuRecord?
+  accountingEntry        AccountingJournalEntry?
+  voidingAccountingEntry AccountingJournalEntry?     @relation("InvoiceVoidingEntry")
+  verifactuFiscalRecords VerifactuFiscalRecord[]
+  sourceCustomerCredit   CustomerCredit?             @relation("CustomerCreditSource")
+  creditApplications     CustomerCreditApplication[] @relation("CreditApplicationTargetInvoice")
 
   @@unique([series, year, numberSequence])
+  @@unique([id, companyId])
   @@index([status, issueDate, id])
   @@index([customerId, issueDate, id])
   @@index([paymentStatus, issueDate, id])
   @@index([verifactuStatus, issueDate, id])
   @@index([createdById, createdAt])
+  @@index([companyId, issueDate, id])
   @@map("invoices")
 }
 
 model InvoiceLine {
-  id                      String           @id @default(uuid()) @db.Uuid
+  id                      String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   invoiceId               String           @db.Uuid
   position                Int
   catalogItemId           String?          @db.Uuid
@@ -630,7 +765,7 @@ model InvoiceLine {
 }
 
 model InvoiceTaxSummary {
-  id          String  @id @default(uuid()) @db.Uuid
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   invoiceId   String  @db.Uuid
   taxRateCode String  @db.VarChar(40)
   taxRate     Decimal @db.Decimal(5, 2)
@@ -645,7 +780,7 @@ model InvoiceTaxSummary {
 }
 
 model InvoiceDueDate {
-  id            String                @id @default(uuid()) @db.Uuid
+  id            String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   invoiceId     String                @db.Uuid
   position      Int
   dueDate       DateTime              @db.Date
@@ -653,10 +788,11 @@ model InvoiceDueDate {
   paymentMethod CustomerPaymentMethod
   status        InvoiceDueDateStatus  @default(PENDING)
 
-  invoice         Invoice                  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  payments        CustomerPayment[]
-  paymentReturns  CustomerPaymentReturn[]
-  remittanceLines CustomerRemittanceLine[]
+  invoice            Invoice                     @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  payments           CustomerPayment[]
+  paymentReturns     CustomerPaymentReturn[]
+  remittanceLines    CustomerRemittanceLine[]
+  creditApplications CustomerCreditApplication[]
 
   @@unique([invoiceId, position])
   @@index([status, dueDate, id])
@@ -730,7 +866,7 @@ model CustomerRemittanceLine {
 }
 
 model CustomerPayment {
-  id          String                @id @default(uuid()) @db.Uuid
+  id          String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   invoiceId   String                @db.Uuid
   dueDateId   String                @db.Uuid
   source      CustomerPaymentSource @default(MANUAL)
@@ -741,20 +877,22 @@ model CustomerPayment {
   createdById String                @db.Uuid
   createdAt   DateTime              @default(now()) @db.Timestamptz(3)
 
-  invoice   Invoice                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  dueDate   InvoiceDueDate          @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
-  createdBy User                    @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  returns   CustomerPaymentReturn[]
-  accountingEntry AccountingJournalEntry?
+  invoice                    Invoice                         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate                    InvoiceDueDate                  @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  createdBy                  User                            @relation("CustomerPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  returns                    CustomerPaymentReturn[]
+  accountingEntry            AccountingJournalEntry?
+  reconciliationApplications BankReconciliationApplication[]
 
   @@index([invoiceId, paymentDate, id])
+  @@index([paymentDate, id])
   @@index([dueDateId, paymentDate, id])
   @@index([createdById, createdAt])
   @@map("customer_payments")
 }
 
 model CustomerPaymentReturn {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   paymentId   String   @db.Uuid
   invoiceId   String   @db.Uuid
   dueDateId   String   @db.Uuid
@@ -765,16 +903,217 @@ model CustomerPaymentReturn {
   createdById String   @db.Uuid
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
-  payment   CustomerPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  invoice   Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  dueDate   InvoiceDueDate  @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
-  createdBy User            @relation("CustomerPaymentReturnsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  payment         CustomerPayment         @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoice         Invoice                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  dueDate         InvoiceDueDate          @relation(fields: [dueDateId], references: [id], onDelete: Restrict)
+  createdBy       User                    @relation("CustomerPaymentReturnsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  accountingEntry AccountingJournalEntry?
 
   @@index([paymentId, returnDate, id])
   @@index([invoiceId, returnDate, id])
   @@index([dueDateId, returnDate, id])
   @@index([createdById, createdAt])
   @@map("customer_payment_returns")
+}
+
+model CustomerCredit {
+  id                           String   @id @default(uuid()) @db.Uuid
+  companyId                    String   @db.Uuid
+  customerId                   String   @db.Uuid
+  sourceRectificationInvoiceId String   @unique @db.Uuid
+  currency                     String   @default("EUR") @db.Char(3)
+  originalAmount               Decimal  @db.Decimal(14, 2)
+  createdById                  String   @db.Uuid
+  createdAt                    DateTime @default(now()) @db.Timestamptz(3)
+
+  company                    Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer                   Customer                    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  sourceRectificationInvoice Invoice                     @relation("CustomerCreditSource", fields: [sourceRectificationInvoiceId], references: [id], onDelete: Restrict)
+  createdBy                  User                        @relation("CustomerCreditsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  applications               CustomerCreditApplication[]
+  refunds                    CustomerCreditRefund[]
+
+  @@unique([id, companyId, customerId], map: "customer_credits_id_company_customer_key")
+  @@index([customerId, createdAt, id])
+  @@index([companyId, createdAt, id])
+  @@map("customer_credits")
+}
+
+model CustomerCreditApplication {
+  id              String   @id @default(uuid()) @db.Uuid
+  creditId        String   @db.Uuid
+  targetInvoiceId String   @db.Uuid
+  targetDueDateId String   @db.Uuid
+  applicationDate DateTime @db.Date
+  amount          Decimal  @db.Decimal(14, 2)
+  notes           String?  @db.VarChar(500)
+  createdById     String   @db.Uuid
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  credit        CustomerCredit @relation(fields: [creditId], references: [id], onDelete: Restrict)
+  targetInvoice Invoice        @relation("CreditApplicationTargetInvoice", fields: [targetInvoiceId], references: [id], onDelete: Restrict)
+  targetDueDate InvoiceDueDate @relation(fields: [targetDueDateId], references: [id], onDelete: Restrict)
+  createdBy     User           @relation("CustomerCreditApplicationsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([creditId, applicationDate, id])
+  @@index([targetInvoiceId, applicationDate, id], map: "customer_credit_applications_targetInvoiceId_applicationDate_id")
+  @@index([targetDueDateId, createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("customer_credit_applications")
+}
+
+model CustomerCreditRefund {
+  id            String                     @id @default(uuid()) @db.Uuid
+  creditId      String                     @db.Uuid
+  companyId     String                     @db.Uuid
+  customerId    String                     @db.Uuid
+  bankAccountId String                     @db.Uuid
+  status        CustomerCreditRefundStatus @default(REQUESTED)
+  requestedDate DateTime                   @db.Date
+  amount        Decimal                    @db.Decimal(14, 2)
+  reasonCode    String                     @db.VarChar(80)
+  reference     String?                    @db.VarChar(120)
+  notes         String?                    @db.VarChar(500)
+  requestedById String                     @db.Uuid
+  approvedById  String?                    @db.Uuid
+  approvedAt    DateTime?                  @db.Timestamptz(3)
+  postedById    String?                    @db.Uuid
+  postedAt      DateTime?                  @db.Timestamptz(3)
+  cancelledById String?                    @db.Uuid
+  cancelledAt   DateTime?                  @db.Timestamptz(3)
+  createdAt     DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime                   @updatedAt @db.Timestamptz(3)
+
+  credit          CustomerCredit          @relation(fields: [creditId, companyId, customerId], references: [id, companyId, customerId], onDelete: Restrict, map: "customer_credit_refunds_credit_company_customer_fkey")
+  company         Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer        Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  bankAccount     BankAccount             @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  requestedBy     User                    @relation("CustomerCreditRefundsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy      User?                   @relation("CustomerCreditRefundsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  postedBy        User?                   @relation("CustomerCreditRefundsPostedBy", fields: [postedById], references: [id], onDelete: Restrict)
+  cancelledBy     User?                   @relation("CustomerCreditRefundsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  accountingEntry AccountingJournalEntry?
+
+  @@index([creditId, requestedDate, id])
+  @@index([companyId, status, requestedDate, id])
+  @@index([customerId, requestedDate, id])
+  @@index([bankAccountId, requestedDate, id])
+  @@index([requestedById, createdAt])
+  @@map("customer_credit_refunds")
+}
+
+model BankAccount {
+  id          String            @id @default(uuid()) @db.Uuid
+  companyId   String            @db.Uuid
+  name        String            @db.VarChar(120)
+  iban        String            @db.VarChar(34)
+  currency    String            @default("EUR") @db.Char(3)
+  status      BankAccountStatus @default(ACTIVE)
+  createdById String            @db.Uuid
+  createdAt   DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
+
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy     User                   @relation("BankAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  movements     BankMovement[]
+  statements    BankStatement[]
+  creditRefunds CustomerCreditRefund[]
+
+  @@unique([companyId, iban])
+  @@unique([id, companyId])
+  @@index([companyId, status, name, id])
+  @@map("bank_accounts")
+}
+
+model BankMovement {
+  id                      String             @id @default(uuid()) @db.Uuid
+  bankAccountId           String             @db.Uuid
+  bankStatementId         String?            @db.Uuid
+  statementOrdinal        Int?
+  bookingDate             DateTime           @db.Date
+  valueDate               DateTime?          @db.Date
+  amount                  Decimal            @db.Decimal(14, 2)
+  currency                String             @default("EUR") @db.Char(3)
+  reference               String?            @db.VarChar(140)
+  counterpartyName        String?            @db.VarChar(200)
+  externalMovementNumber  String?            @db.VarChar(120)
+  statementDocumentNumber String?            @db.VarChar(10)
+  source                  BankMovementSource @default(MANUAL)
+  createdById             String             @db.Uuid
+  createdAt               DateTime           @default(now()) @db.Timestamptz(3)
+
+  bankAccount     BankAccount          @relation(fields: [bankAccountId], references: [id], onDelete: Restrict)
+  bankStatement   BankStatement?       @relation(fields: [bankStatementId, bankAccountId], references: [id, bankAccountId], onDelete: Restrict)
+  createdBy       User                 @relation("BankMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  reconciliations BankReconciliation[]
+
+  @@unique([bankStatementId, statementOrdinal])
+  @@index([bankAccountId, bookingDate, id])
+  @@index([createdById, createdAt])
+  @@map("bank_movements")
+}
+
+model BankStatement {
+  id             String              @id @default(uuid()) @db.Uuid
+  companyId      String              @db.Uuid
+  bankAccountId  String              @db.Uuid
+  format         BankStatementFormat @default(AEB43_2012)
+  dateFrom       DateTime            @db.Date
+  dateTo         DateTime            @db.Date
+  openingBalance Decimal             @db.Decimal(14, 2)
+  closingBalance Decimal             @db.Decimal(14, 2)
+  currency       String              @default("EUR") @db.Char(3)
+  rawSha256      String              @db.Char(64)
+  recordCount    Int
+  movementCount  Int
+  importedById   String              @db.Uuid
+  importedAt     DateTime            @default(now()) @db.Timestamptz(3)
+
+  company     Company        @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  bankAccount BankAccount    @relation(fields: [bankAccountId, companyId], references: [id, companyId], onDelete: Restrict)
+  importedBy  User           @relation("BankStatementsImportedBy", fields: [importedById], references: [id], onDelete: Restrict)
+  movements   BankMovement[]
+
+  @@unique([companyId, rawSha256])
+  @@unique([id, bankAccountId])
+  @@index([bankAccountId, dateFrom, dateTo, id])
+  @@index([importedById, importedAt])
+  @@map("bank_statements")
+}
+
+model BankReconciliation {
+  id             String                   @id @default(uuid()) @db.Uuid
+  bankMovementId String                   @db.Uuid
+  status         BankReconciliationStatus @default(ACTIVE)
+  createdById    String                   @db.Uuid
+  undoneById     String?                  @db.Uuid
+  correlationId  String?                  @db.VarChar(120)
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  undoneAt       DateTime?                @db.Timestamptz(3)
+
+  bankMovement BankMovement                    @relation(fields: [bankMovementId], references: [id], onDelete: Restrict)
+  createdBy    User                            @relation("BankReconciliationsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  undoneBy     User?                           @relation("BankReconciliationsUndoneBy", fields: [undoneById], references: [id], onDelete: Restrict)
+  applications BankReconciliationApplication[]
+
+  @@index([bankMovementId, status, createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("bank_reconciliations")
+}
+
+model BankReconciliationApplication {
+  id                String   @id @default(uuid()) @db.Uuid
+  reconciliationId  String   @db.Uuid
+  customerPaymentId String   @db.Uuid
+  amount            Decimal  @db.Decimal(14, 2)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  reconciliation  BankReconciliation @relation(fields: [reconciliationId], references: [id], onDelete: Restrict)
+  customerPayment CustomerPayment    @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
+
+  @@unique([reconciliationId, customerPaymentId], map: "bank_reconciliation_applications_reconciliationId_customerPayme")
+  @@index([customerPaymentId, createdAt, id], map: "bank_reconciliation_applications_customerPaymentId_createdAt_id")
+  @@map("bank_reconciliation_applications")
 }
 
 model AccountingAccount {
@@ -804,7 +1143,7 @@ model AccountingAccount {
 }
 
 model AccountingFiscalYear {
-  id                 String                     @id @default(uuid()) @db.Uuid
+  id                 String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId          String                     @db.Uuid
   year               Int
   startDate          DateTime                   @db.Date
@@ -817,7 +1156,7 @@ model AccountingFiscalYear {
   closedById         String?                    @db.Uuid
   closedAt           DateTime?                  @db.Timestamptz(3)
   createdAt          DateTime                   @default(now()) @db.Timestamptz(3)
-  updatedAt          DateTime                   @updatedAt @db.Timestamptz(3)
+  updatedAt          DateTime                   @default(now()) @updatedAt @db.Timestamptz(3)
 
   company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
   sourceFiscalYear  AccountingFiscalYear?    @relation("AccountingFiscalYearCopies", fields: [sourceFiscalYearId], references: [id], onDelete: Restrict)
@@ -834,30 +1173,39 @@ model AccountingFiscalYear {
 }
 
 model AccountingJournalEntry {
-  id             String                @id @default(uuid()) @db.Uuid
-  fiscalYearId   String                @db.Uuid
-  invoiceId      String?               @unique @db.Uuid
-  customerPaymentId String?            @unique @db.Uuid
-  year           Int
-  sequence       Int
-  number         String                @unique @db.VarChar(20)
-  accountingDate DateTime              @db.Date
-  concept        String                @db.VarChar(240)
-  origin         AccountingEntryOrigin @default(MANUAL)
-  status         AccountingEntryStatus @default(POSTED)
-  totalDebit     Decimal               @db.Decimal(14, 2)
-  totalCredit    Decimal               @db.Decimal(14, 2)
-  createdById    String                @db.Uuid
-  updatedById    String?               @db.Uuid
-  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  id                      String                @id @default(uuid()) @db.Uuid
+  fiscalYearId            String                @db.Uuid
+  invoiceId               String?               @unique @db.Uuid
+  customerPaymentId       String?               @unique @db.Uuid
+  customerPaymentReturnId String?               @unique @db.Uuid
+  customerCreditRefundId  String?               @unique @db.Uuid
+  voidsInvoiceId          String?               @unique @db.Uuid
+  reversesEntryId         String?               @unique @db.Uuid
+  year                    Int
+  sequence                Int
+  number                  String                @unique @db.VarChar(20)
+  accountingDate          DateTime              @db.Date
+  concept                 String                @db.VarChar(240)
+  origin                  AccountingEntryOrigin @default(MANUAL)
+  status                  AccountingEntryStatus @default(POSTED)
+  totalDebit              Decimal               @db.Decimal(14, 2)
+  totalCredit             Decimal               @db.Decimal(14, 2)
+  createdById             String                @db.Uuid
+  updatedById             String?               @db.Uuid
+  createdAt               DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime              @updatedAt @db.Timestamptz(3)
 
-  fiscalYear AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
-  invoice    Invoice?                 @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  customerPayment CustomerPayment?    @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
-  createdBy  User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy  User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  lines      AccountingJournalLine[]
+  fiscalYear            AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  invoice               Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customerPayment       CustomerPayment?        @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
+  customerPaymentReturn CustomerPaymentReturn?  @relation(fields: [customerPaymentReturnId], references: [id], onDelete: Restrict)
+  customerCreditRefund  CustomerCreditRefund?   @relation(fields: [customerCreditRefundId], references: [id], onDelete: Restrict)
+  voidsInvoice          Invoice?                @relation("InvoiceVoidingEntry", fields: [voidsInvoiceId], references: [id], onDelete: Restrict)
+  reversesEntry         AccountingJournalEntry? @relation("AccountingEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedByEntry       AccountingJournalEntry? @relation("AccountingEntryReversal")
+  createdBy             User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy             User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  lines                 AccountingJournalLine[]
 
   @@unique([fiscalYearId, sequence])
   @@index([fiscalYearId, accountingDate, id])
@@ -886,7 +1234,7 @@ model AccountingJournalLine {
 }
 
 model InvoiceVerifactuRecord {
-  id            String                 @id @default(uuid()) @db.Uuid
+  id            String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   invoiceId     String                 @unique @db.Uuid
   status        InvoiceVerifactuStatus @default(PENDING)
   lastErrorCode String?                @db.VarChar(120)
@@ -897,6 +1245,261 @@ model InvoiceVerifactuRecord {
 
   @@index([status, createdAt])
   @@map("invoice_verifactu_records")
+}
+
+model VerifactuSifInstallation {
+  id                      String               @id @default(uuid()) @db.Uuid
+  companyId               String               @db.Uuid
+  installationCode        String               @db.VarChar(80)
+  environment             VerifactuEnvironment
+  status                  VerifactuSifStatus   @default(ACTIVE)
+  contractVersion         String               @db.VarChar(32)
+  schemaVersion           String               @db.VarChar(32)
+  artifactManifestVersion String               @db.VarChar(80)
+  artifactManifestSha256  String               @db.Char(64)
+  producerTaxId           String               @db.VarChar(32)
+  producerName            String               @db.VarChar(200)
+  systemName              String               @db.VarChar(120)
+  systemId                String               @db.VarChar(40)
+  systemVersion           String               @db.VarChar(40)
+  installationNumber      String               @db.VarChar(100)
+  credentialRef           String?              @db.VarChar(200)
+  nextPosition            BigInt               @default(1)
+  lastRecordId            String?              @db.Uuid
+  lastRecordHash          String?              @db.Char(64)
+  activatedAt             DateTime             @db.Timestamptz(3)
+  retiredAt               DateTime?            @db.Timestamptz(3)
+  createdAt               DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime             @updatedAt @db.Timestamptz(3)
+
+  company       Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  credential    VerifactuMtlsCredential? @relation("VerifactuSifCredential", fields: [credentialRef, companyId], references: [ref, companyId], onDelete: Restrict, map: "verifactu_sif_installations_credential_company_fkey")
+  fiscalRecords VerifactuFiscalRecord[]  @relation("VerifactuInstallationRecords")
+  lastRecord    VerifactuFiscalRecord?   @relation("VerifactuInstallationHead", fields: [lastRecordId, id], references: [id, sifInstallationId], onDelete: Restrict, map: "verifactu_sif_installations_last_record_fkey")
+
+  @@unique([companyId, installationCode, environment])
+  @@unique([id, companyId])
+  @@index([companyId, environment, status])
+  @@map("verifactu_sif_installations")
+}
+
+model VerifactuMtlsCredential {
+  id         String                        @id @default(uuid()) @db.Uuid
+  companyId  String                        @db.Uuid
+  ref        String                        @unique(map: "verifactu_mtls_credentials_ref_key") @db.VarChar(160)
+  alias      String                        @db.VarChar(120)
+  status     VerifactuMtlsCredentialStatus @default(ACTIVE)
+  disabledAt DateTime?                     @db.Timestamptz(3)
+  revokedAt  DateTime?                     @db.Timestamptz(3)
+  createdAt  DateTime                      @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime                      @updatedAt @db.Timestamptz(3)
+
+  company          Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  versions         VerifactuMtlsCredentialVersion[]
+  sifInstallations VerifactuSifInstallation[]       @relation("VerifactuSifCredential")
+
+  @@unique([id, companyId])
+  @@unique([ref, companyId], map: "verifactu_mtls_credentials_ref_company_key")
+  @@index([companyId, status, createdAt, id], map: "verifactu_mtls_credentials_company_status_created_idx")
+  @@map("verifactu_mtls_credentials")
+}
+
+model VerifactuMtlsCredentialVersion {
+  id                 String                               @id @default(uuid()) @db.Uuid
+  credentialId       String                               @db.Uuid
+  version            Int
+  status             VerifactuMtlsCredentialVersionStatus @default(STAGED)
+  endpointKind       VerifactuMtlsEndpointKind
+  allowTest          Boolean                              @default(true)
+  allowProduction    Boolean                              @default(false)
+  validFrom          DateTime                             @db.Timestamptz(3)
+  validUntil         DateTime                             @db.Timestamptz(3)
+  materialCiphertext Bytes
+  encryptionKeyId    String                               @db.VarChar(120)
+  envelopeVersion    Int                                  @default(1) @db.SmallInt
+  pfxSha256          String                               @db.Char(64)
+  testedPfxSha256    String?                              @db.Char(64)
+  testedAt           DateTime?                            @db.Timestamptz(3)
+  testedAttemptId    String?                              @unique(map: "verifactu_mtls_credential_versions_tested_attempt_key") @db.Uuid
+  activatedAt        DateTime?                            @db.Timestamptz(3)
+  retiredAt          DateTime?                            @db.Timestamptz(3)
+  revokedAt          DateTime?                            @db.Timestamptz(3)
+  createdAt          DateTime                             @default(now()) @db.Timestamptz(3)
+
+  credential    VerifactuMtlsCredential              @relation(fields: [credentialId], references: [id], onDelete: Restrict)
+  attempts      VerifactuSubmissionAttempt[]
+  testAttempts  VerifactuMtlsCredentialTestAttempt[] @relation("VerifactuCredentialTestAttempts")
+  testedAttempt VerifactuMtlsCredentialTestAttempt?  @relation("VerifactuCredentialPassedAttempt", fields: [testedAttemptId, id], references: [id, versionId], onDelete: Restrict, map: "verifactu_mtls_version_tested_attempt_version_fkey")
+
+  @@unique([credentialId, version], map: "verifactu_mtls_credential_versions_credential_version_key")
+  @@unique([id, credentialId], map: "verifactu_mtls_credential_versions_id_credential_key")
+  @@unique([testedAttemptId, id], map: "verifactu_mtls_credential_versions_tested_attempt_version_key")
+  @@index([credentialId, status, version], map: "verifactu_mtls_credential_versions_credential_status_version_id")
+  @@map("verifactu_mtls_credential_versions")
+}
+
+model VerifactuMtlsCredentialTestAttempt {
+  id             String                   @id @default(uuid()) @db.Uuid
+  versionId      String                   @db.Uuid
+  idempotencyKey String                   @unique(map: "verifactu_mtls_credential_test_attempts_idempotency_key") @db.VarChar(160)
+  requestHash    String                   @db.Char(64)
+  outcome        VerifactuMtlsTestOutcome @default(RUNNING)
+  pfxSha256      String                   @db.Char(64)
+  startedAt      DateTime                 @db.Timestamptz(3)
+  completedAt    DateTime?                @db.Timestamptz(3)
+  stableCode     String?                  @db.VarChar(120)
+  responseSha256 String?                  @db.Char(64)
+  actorUserId    String                   @db.Uuid
+  correlationId  String?                  @db.VarChar(160)
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(3)
+
+  version       VerifactuMtlsCredentialVersion  @relation("VerifactuCredentialTestAttempts", fields: [versionId], references: [id], onDelete: Restrict, map: "verifactu_mtls_credential_test_attempts_version_fkey")
+  testedVersion VerifactuMtlsCredentialVersion? @relation("VerifactuCredentialPassedAttempt")
+  actor         User                            @relation(fields: [actorUserId], references: [id], onDelete: Restrict, map: "verifactu_mtls_credential_test_attempts_actor_fkey")
+
+  @@unique([id, versionId], map: "verifactu_mtls_credential_test_attempts_id_version_key")
+  @@index([versionId, createdAt, id], map: "verifactu_mtls_credential_test_attempts_version_created_idx")
+  @@index([outcome, startedAt, id], map: "verifactu_mtls_credential_test_attempts_outcome_started_idx")
+  @@map("verifactu_mtls_credential_test_attempts")
+}
+
+model VerifactuFiscalRecord {
+  id                      String              @id @default(uuid()) @db.Uuid
+  companyId               String              @db.Uuid
+  sifInstallationId       String              @db.Uuid
+  invoiceId               String              @db.Uuid
+  recordType              VerifactuRecordType
+  chainPosition           BigInt
+  previousRecordId        String?             @db.Uuid
+  cancelledRecordId       String?             @db.Uuid
+  correctedRecordId       String?             @db.Uuid
+  issuerTaxId             String              @db.VarChar(32)
+  issuerName              String              @db.VarChar(200)
+  invoiceSeries           String              @db.VarChar(8)
+  invoiceNumber           String              @db.VarChar(20)
+  invoiceIssueDate        DateTime            @db.Date
+  generatedAt             DateTime            @db.Timestamptz(3)
+  contractVersion         String              @db.VarChar(32)
+  schemaVersion           String              @db.VarChar(32)
+  canonicalizationVersion String              @db.VarChar(32)
+  hashAlgorithm           String              @default("SHA-256") @db.VarChar(20)
+  previousHash            String?             @db.Char(64)
+  recordHash              String              @db.Char(64)
+  fiscalSnapshot          Json
+  payloadCiphertext       Bytes
+  encryptionKeyId         String              @db.VarChar(120)
+  payloadSha256           String              @db.Char(64)
+  qrUrl                   String?             @db.Text
+  preparationKey          String              @unique @db.VarChar(160)
+  createdAt               DateTime            @default(now()) @db.Timestamptz(3)
+
+  company           Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  sifInstallation   VerifactuSifInstallation     @relation("VerifactuInstallationRecords", fields: [sifInstallationId, companyId], references: [id, companyId], onDelete: Restrict, map: "verifactu_fiscal_records_installation_company_fkey")
+  installationHeads VerifactuSifInstallation[]   @relation("VerifactuInstallationHead")
+  invoice           Invoice                      @relation(fields: [invoiceId, companyId], references: [id, companyId], onDelete: Restrict, map: "verifactu_fiscal_records_invoice_company_fkey")
+  previousRecord    VerifactuFiscalRecord?       @relation("VerifactuRecordChain", fields: [previousRecordId, sifInstallationId], references: [id, sifInstallationId], onDelete: Restrict, map: "verifactu_fiscal_records_previous_chain_fkey")
+  nextRecord        VerifactuFiscalRecord?       @relation("VerifactuRecordChain")
+  cancelledRecord   VerifactuFiscalRecord?       @relation("VerifactuRecordCancellation", fields: [cancelledRecordId, sifInstallationId, invoiceId], references: [id, sifInstallationId, invoiceId], onDelete: Restrict, map: "verifactu_fiscal_records_cancelled_target_fkey")
+  cancellation      VerifactuFiscalRecord?       @relation("VerifactuRecordCancellation")
+  correctedRecord   VerifactuFiscalRecord?       @relation("VerifactuRecordCorrection", fields: [correctedRecordId, sifInstallationId, invoiceId], references: [id, sifInstallationId, invoiceId], onDelete: Restrict, map: "verifactu_fiscal_records_corrected_target_fkey")
+  correction        VerifactuFiscalRecord?       @relation("VerifactuRecordCorrection")
+  attempts          VerifactuSubmissionAttempt[]
+  outboxMessages    VerifactuOutboxMessage[]
+
+  @@unique([sifInstallationId, chainPosition])
+  @@unique([sifInstallationId, recordHash])
+  @@unique([previousRecordId, sifInstallationId])
+  @@unique([cancelledRecordId, sifInstallationId, invoiceId], map: "verifactu_fiscal_records_cancelledRecordId_sifInstallationId_in")
+  @@unique([correctedRecordId, sifInstallationId, invoiceId], map: "verifactu_fiscal_records_correctedRecordId_sifInstallationId_in")
+  @@unique([id, sifInstallationId])
+  @@unique([id, sifInstallationId, invoiceId])
+  @@index([companyId, invoiceIssueDate, id])
+  @@index([invoiceId, createdAt, id])
+  @@map("verifactu_fiscal_records")
+}
+
+model VerifactuSubmissionAttempt {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  fiscalRecordId       String                  @db.Uuid
+  attemptNumber        Int
+  kind                 VerifactuAttemptKind
+  idempotencyKey       String                  @unique @db.VarChar(160)
+  startedAt            DateTime                @db.Timestamptz(3)
+  completedAt          DateTime                @db.Timestamptz(3)
+  outcome              VerifactuAttemptOutcome
+  requestCiphertext    Bytes?
+  responseCiphertext   Bytes?
+  encryptionKeyId      String?                 @db.VarChar(120)
+  requestSha256        String                  @db.Char(64)
+  responseSha256       String?                 @db.Char(64)
+  externalSubmissionId String?                 @db.VarChar(160)
+  aeatCsv              String?                 @db.VarChar(160)
+  aeatCodes            Json?
+  stableErrorCode      String?                 @db.VarChar(120)
+  credentialVersionId  String?                 @db.Uuid
+  createdAt            DateTime                @default(now()) @db.Timestamptz(3)
+
+  fiscalRecord      VerifactuFiscalRecord           @relation(fields: [fiscalRecordId], references: [id], onDelete: Restrict)
+  credentialVersion VerifactuMtlsCredentialVersion? @relation(fields: [credentialVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([fiscalRecordId, attemptNumber])
+  @@index([fiscalRecordId, createdAt, id])
+  @@index([outcome, createdAt, id])
+  @@index([credentialVersionId, createdAt, id], map: "verifactu_submission_attempts_credential_version_created_idx")
+  @@map("verifactu_submission_attempts")
+}
+
+model VerifactuOutboxMessage {
+  id             String                @id @default(uuid()) @db.Uuid
+  fiscalRecordId String                @db.Uuid
+  operation      VerifactuAttemptKind
+  idempotencyKey String                @unique @db.VarChar(160)
+  bodySha256     String                @db.Char(64)
+  status         VerifactuOutboxStatus @default(PENDING)
+  attemptCount   Int                   @default(0)
+  maxAttempts    Int                   @default(20)
+  nextAttemptAt  DateTime              @default(now()) @db.Timestamptz(3)
+  leaseOwner     String?               @db.VarChar(160)
+  leaseToken     String?               @db.Uuid
+  leaseUntil     DateTime?             @db.Timestamptz(3)
+  lastErrorCode  String?               @db.VarChar(120)
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  processedAt    DateTime?             @db.Timestamptz(3)
+
+  fiscalRecord VerifactuFiscalRecord @relation(fields: [fiscalRecordId], references: [id], onDelete: Restrict)
+
+  @@unique([fiscalRecordId, operation])
+  @@index([status, nextAttemptAt, createdAt, id])
+  @@index([leaseUntil, status])
+  @@map("verifactu_outbox_messages")
+}
+
+model VerifactuWorkerRun {
+  id              String                   @id @default(uuid()) @db.Uuid
+  companyId       String                   @db.Uuid
+  workerId        String                   @unique @db.VarChar(160)
+  environment     VerifactuEnvironment
+  status          VerifactuWorkerStatus
+  startedAt       DateTime                 @db.Timestamptz(3)
+  heartbeatAt     DateTime                 @db.Timestamptz(3)
+  lastPollAt      DateTime?                @db.Timestamptz(3)
+  lastProcessedAt DateTime?                @db.Timestamptz(3)
+  stoppedAt       DateTime?                @db.Timestamptz(3)
+  lastOutcome     VerifactuAttemptOutcome?
+  lastErrorCode   String?                  @db.VarChar(120)
+  processedCount  Int                      @default(0)
+  idleCount       Int                      @default(0)
+  errorCount      Int                      @default(0)
+  leaseLostCount  Int                      @default(0)
+  createdAt       DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime                 @updatedAt @db.Timestamptz(3)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, environment, status, heartbeatAt], map: "verifactu_worker_runs_companyId_environment_status_heartbeatAt_")
+  @@index([heartbeatAt])
+  @@map("verifactu_worker_runs")
 }
 
 model ReservedUserName {

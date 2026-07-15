@@ -41,7 +41,7 @@ export type CustomerCollectionForecastItem = {
   dueDate: string;
   forecastMonth: number;
   status: "PENDING" | "RETURNED" | "UNPAID";
-  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "UNPAID";
+  paymentStatus: "PENDING" | "PARTIALLY_PAID" | "PARTIALLY_SETTLED" | "UNPAID";
   amount: string;
   paidAmount: string;
   pendingAmount: string;
@@ -96,7 +96,8 @@ const forecastDueDateSelect = {
         }
       }
     }
-  }
+  },
+  creditApplications: { select: { amount: true } }
 } satisfies Prisma.InvoiceDueDateSelect;
 
 type ForecastDueDateRecord = Prisma.InvoiceDueDateGetPayload<{
@@ -165,7 +166,7 @@ async function findCustomerCollectionForecast(
       status: { in: ["PENDING", "RETURNED", "UNPAID"] },
       invoice: {
         status: "ISSUED",
-        paymentStatus: { in: ["PENDING", "PARTIALLY_PAID", "UNPAID"] },
+        paymentStatus: { in: ["PENDING", "PARTIALLY_PAID", "PARTIALLY_SETTLED", "UNPAID"] },
         ...(command.customerId ? { customerId: command.customerId } : {}),
         ...(command.search
           ? {
@@ -276,7 +277,8 @@ function mapForecastItem(
     (total, payment) => total.plus(payment.amount).minus(sumAmounts(payment.returns)),
     new Prisma.Decimal(0)
   );
-  const pendingAmount = record.amount.minus(paidAmount);
+  const creditAmount = sumAmounts(record.creditApplications);
+  const pendingAmount = record.amount.minus(paidAmount).minus(creditAmount);
 
   if (pendingAmount.lte(0)) {
     return null;

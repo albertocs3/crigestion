@@ -1,0 +1,39 @@
+[Unit]
+Description=CriGestion staging VeriFactu TEST worker
+After=network-online.target crigestion-staging-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crigestion-staging-verifactu
+Group=crigestion-staging-verifactu
+WorkingDirectory=/opt/crigestion-staging/current
+EnvironmentFile=/etc/crigestion-staging/verifactu-worker.env
+Environment=NODE_ENV=production
+Environment=TMPDIR=/var/lib/crigestion-staging-verifactu
+StateDirectory=crigestion-staging-verifactu
+StateDirectoryMode=0700
+ExecStartPre=/usr/bin/test -r /etc/crigestion-staging/verifactu-worker.env
+ExecStart=/opt/plesk/node/22/bin/node --conditions=react-server --import tsx scripts/run-verifactu-worker.ts
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=60s
+TimeoutStopSec=90s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

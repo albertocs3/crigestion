@@ -1,0 +1,1 @@
+ALTER TYPE "InvoicePaymentStatus" ADD VALUE 'NOT_APPLICABLE';

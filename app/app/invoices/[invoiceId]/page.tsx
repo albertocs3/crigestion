@@ -8,6 +8,8 @@ import { InvoiceIssueButton } from "@/modules/billing/presentation/InvoiceIssueB
 import { InvoiceDueDatesForm } from "@/modules/billing/presentation/InvoiceDueDatesForm";
 import { InvoiceLineCreateForm } from "@/modules/billing/presentation/InvoiceLineCreateForm";
 import { InvoiceRectificationCreateForm } from "@/modules/billing/presentation/InvoiceRectificationCreateForm";
+import { InvoiceTechnicalVoidingForm } from "@/modules/billing/presentation/InvoiceTechnicalVoidingForm";
+import { VerifactuCancellationForm } from "@/modules/billing/presentation/VerifactuCancellationForm";
 import { listCatalogItems } from "@/modules/catalog/application/items";
 import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -95,6 +97,10 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
   const canManagePayments = authorization.user.permissions.includes(
     "Treasury.ManagePayments"
   );
+  const canViewAccounting = authorization.user.permissions.includes("Accounting.View");
+  const canViewVerifactuOperations = authorization.user.permissions.includes("Billing.ViewVerifactuOperations");
+  const canRequestVerifactuCancellation = authorization.user.permissions.includes("Billing.RequestVerifactuCancellation");
+  const canFinalizeVerifactuCancellation = authorization.user.permissions.includes("Billing.FinalizeVerifactuCancellation");
   const items = canManageDrafts
     ? await listCatalogItems({ limit: 100, status: "ACTIVE" }, authorization.user)
     : { items: [], nextCursor: null };
@@ -107,7 +113,21 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
     canIssue &&
     invoice.documentType === "STANDARD" &&
     invoice.status === "ISSUED" &&
+    (invoice.verifactuStatus === "NOT_APPLICABLE" || invoice.verifactuStatus === "ACCEPTED" || invoice.verifactuStatus === "ACCEPTED_WITH_ERRORS") &&
     invoice.rectificationInvoices.length === 0;
+  const technicalVoidingEligible =
+    invoice.documentType === "STANDARD" &&
+    invoice.status === "ISSUED" &&
+    invoice.verifactuStatus === "CANCELLED" &&
+    invoice.verifactuTrace?.recordType === "ANULACION" &&
+    invoice.verifactuTrace.operationalStatus === "COMPLETED" &&
+    (invoice.verifactuTrace.latestAttempt?.outcome === "ACCEPTED" || invoice.verifactuTrace.latestAttempt?.outcome === "ACCEPTED_WITH_ERRORS") &&
+    invoice.verifactuTrace.cancellationReasonCode === "ISSUED_BY_MISTAKE" &&
+    invoice.rectificationInvoices.length === 0 &&
+    invoice.accountingEntry !== null &&
+    invoice.payments.length === 0 &&
+    invoice.paymentReturns.length === 0 &&
+    invoice.dueDates.every((dueDate) => dueDate.status === "PENDING" && !dueDate.remittance);
 
   return (
     <main className="shell">
@@ -123,6 +143,49 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
         </div>
       </header>
       <section className="content stack">
+        {invoice.status !== "DRAFT" ? (
+          <nav className="panel flow-trace" aria-label="Trazabilidad de factura y cobro">
+            <ol>
+              <li>
+                <span>1</span>
+                <strong>Factura emitida</strong>
+                <small>{invoice.number}</small>
+              </li>
+              <li>
+                <span>2</span>
+                <strong>Vencimientos</strong>
+                <small>{invoice.dueDates.length} programados</small>
+              </li>
+              <li>
+                <span>3</span>
+                <strong>Cobro o remesa</strong>
+                <small>{paymentStatusLabel(invoice.paymentStatus)}</small>
+              </li>
+              <li>
+                <span>4</span>
+                <strong>Contabilidad</strong>
+                <small>{invoice.payments.filter((payment) => payment.accountingEntry).length + invoice.paymentReturns.filter((paymentReturn) => paymentReturn.accountingEntry).length + (invoice.accountingEntry ? 1 : 0)} asientos</small>
+              </li>
+            </ol>
+            <div className="button-row">
+              {canManagePayments ? (
+                <Link className="button button-secondary button-small" href={`/app/treasury?search=${encodeURIComponent(invoice.number ?? "")}`}>
+                  Ver vencimientos en Tesoreria
+                </Link>
+              ) : null}
+              {canManagePayments ? (
+                <Link className="button button-secondary button-small" href="/app/treasury/remittances">
+                  Ver remesas
+                </Link>
+              ) : null}
+              {canViewAccounting && invoice.accountingEntry ? (
+                <Link className="button button-secondary button-small" href={`/app/accounting?entryId=${invoice.accountingEntry.id}`}>
+                  Asiento {invoice.accountingEntry.number}
+                </Link>
+              ) : null}
+            </div>
+          </nav>
+        ) : null}
         <div className="panel stack">
           <div className="split-header">
             <div>
@@ -227,6 +290,42 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
               </tbody>
             </table>
           </div>
+          {canViewVerifactuOperations && invoice.verifactuTrace ? <section className="credential-installation stack" aria-labelledby="invoice-verifactu-trace-heading">
+            <div className="split-header"><div><h3 id="invoice-verifactu-trace-heading">Trazabilidad VeriFactu</h3><p className="muted">Estado operativo derivado del registro fiscal, la cola y el último intento.</p></div>{canViewVerifactuOperations ? <Link className="button button-secondary button-small" href={`/app/verifactu/operations?search=${encodeURIComponent(invoice.number ?? "")}`}>Ver operación</Link> : null}</div>
+            <div className="data-grid"><div><span className="data-label">Estado operativo</span><strong>{verifactuOperationalStatusLabel(invoice.verifactuTrace.operationalStatus)}</strong></div><div><span className="data-label">Instalación</span><strong>{invoice.verifactuTrace.installationCode} · {invoice.verifactuTrace.environment}</strong></div><div><span className="data-label">Registro</span><strong>{invoice.verifactuTrace.recordType} · posición {invoice.verifactuTrace.chainPosition}</strong></div><div><span className="data-label">Preparado</span><strong>{formatDateTime(invoice.verifactuTrace.generatedAt)}</strong></div>{invoice.verifactuTrace.queue ? <><div><span className="data-label">Cola</span><strong>{invoice.verifactuTrace.queue.operation} · {invoice.verifactuTrace.queue.status}</strong><small>{invoice.verifactuTrace.queue.attemptCount} / {invoice.verifactuTrace.queue.maxAttempts} intentos</small></div><div><span className="data-label">Último error</span><strong>{invoice.verifactuTrace.queue.lastErrorCode ?? "Sin error"}</strong></div></> : null}{invoice.verifactuTrace.latestAttempt ? <div><span className="data-label">Último resultado</span><strong>{invoice.verifactuTrace.latestAttempt.outcome}</strong><small>{invoice.verifactuTrace.latestAttempt.stableErrorCode ?? "Sin código"}</small></div> : null}</div>
+          </section> : null}
+          {canRequestVerifactuCancellation
+            && invoice.number
+            && invoice.status === "ISSUED"
+            && invoice.verifactuTrace?.recordType === "ALTA"
+            && invoice.verifactuTrace.operationalStatus === "COMPLETED"
+            && (invoice.verifactuStatus === "ACCEPTED" || invoice.verifactuStatus === "ACCEPTED_WITH_ERRORS")
+            ? <VerifactuCancellationForm invoiceId={invoice.id} invoiceNumber={invoice.number} environment={invoice.verifactuTrace.environment} />
+            : null}
+          {invoice.verifactuStatus === "CANCELLED" ? (
+            <section className="credential-installation stack" aria-labelledby="invoice-technical-voiding-heading">
+              <div>
+                <h3 id="invoice-technical-voiding-heading">Anulacion tecnica y regularizacion</h3>
+                <p className="muted">La ANULACION AEAT esta completa. El documento comercial y la contabilidad se regularizan por separado, sin borrar la trazabilidad fiscal.</p>
+              </div>
+              <div className="data-grid">
+                <div><span className="data-label">Fiscal</span><strong>Anulacion AEAT aceptada</strong></div>
+                <div><span className="data-label">Comercial</span><strong>{invoice.status === "VOIDED" ? "Anulacion tecnica finalizada" : "Pendiente de regularizacion"}</strong></div>
+                <div><span className="data-label">Tesoreria</span><strong>{invoice.payments.length === 0 && invoice.paymentReturns.length === 0 ? "Sin actividad financiera" : "Tiene cobros o devoluciones"}</strong></div>
+                <div><span className="data-label">Contabilidad</span><strong>{invoice.voidingAccountingEntry ? (canViewAccounting ? `Contraasiento ${invoice.voidingAccountingEntry.number}` : "Contraasiento creado") : "Contraasiento pendiente"}</strong></div>
+              </div>
+              {canViewAccounting && invoice.voidingAccountingEntry ? (
+                <Link className="button button-secondary button-small" href={`/app/accounting?entryId=${invoice.voidingAccountingEntry.id}`}>Ver contraasiento</Link>
+              ) : null}
+              {!canFinalizeVerifactuCancellation && invoice.status === "ISSUED" ? (
+                <p className="message warning">No tienes el permiso específico para finalizar esta regularizacion.</p>
+              ) : canFinalizeVerifactuCancellation && technicalVoidingEligible && invoice.number ? (
+                <InvoiceTechnicalVoidingForm invoiceId={invoice.id} invoiceNumber={invoice.number} defaultVoidDate={invoice.issueDate} />
+              ) : invoice.status === "ISSUED" ? (
+                <p className="message warning">Esta factura no cumple las condiciones de anulacion tecnica: el motivo debe ser emision por error, la evidencia AEAT debe ser terminal y no puede haber cobros, remesas, vencimientos alterados ni rectificativas. La regularizacion alternativa permanece bloqueada hasta disponer del ALTA rectificativa VeriFactu real; requiere revision operativa.</p>
+              ) : null}
+            </section>
+          ) : null}
           <div className="table-wrap">
             <table>
               <thead>
@@ -238,12 +337,13 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                   <th>Neto</th>
                   <th>Origen</th>
                   <th>Referencia</th>
+                  <th>Asiento</th>
                 </tr>
               </thead>
               <tbody>
                 {invoice.payments.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>No hay cobros registrados.</td>
+                    <td colSpan={8}>No hay cobros registrados.</td>
                   </tr>
                 ) : (
                   invoice.payments.map((payment, index) => (
@@ -260,6 +360,15 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                       <td>{formatMoney(payment.netAmount)}</td>
                       <td>{paymentSourceLabel(payment.source)}</td>
                       <td>{payment.reference ?? "Sin referencia"}</td>
+                      <td>
+                        {payment.accountingEntry ? (
+                          canViewAccounting ? (
+                            <Link href={`/app/accounting?entryId=${payment.accountingEntry.id}`}>
+                              {payment.accountingEntry.number}
+                            </Link>
+                          ) : "Restringido"
+                        ) : "Pendiente"}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -274,12 +383,13 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                   <th>Fecha</th>
                   <th>Importe</th>
                   <th>Motivo</th>
+                  <th>Asiento</th>
                 </tr>
               </thead>
               <tbody>
                 {invoice.paymentReturns.length === 0 ? (
                   <tr>
-                    <td colSpan={4}>No hay devoluciones registradas.</td>
+                    <td colSpan={5}>No hay devoluciones registradas.</td>
                   </tr>
                 ) : (
                   invoice.paymentReturns.map((paymentReturn, index) => (
@@ -293,6 +403,15 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                       <td>{formatDate(paymentReturn.returnDate)}</td>
                       <td>{formatMoney(paymentReturn.amount)}</td>
                       <td>{paymentReturn.reasonCode ?? "Sin motivo"}</td>
+                      <td>
+                        {paymentReturn.accountingEntry ? (
+                          canViewAccounting ? (
+                            <Link href={`/app/accounting?entryId=${paymentReturn.accountingEntry.id}`}>
+                              {paymentReturn.accountingEntry.number}
+                            </Link>
+                          ) : "Restringido"
+                        ) : "Pendiente"}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -364,9 +483,11 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                   <th>Vencimiento</th>
                   <th>Importe</th>
                   <th>Cobrado</th>
+                  <th>Compensado</th>
                   <th>Pendiente</th>
                   <th>Metodo</th>
                   <th>Estado</th>
+                  <th>Remesa</th>
                 </tr>
               </thead>
               <tbody>
@@ -375,9 +496,19 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
                     <td>{formatDate(dueDate.dueDate)}</td>
                     <td>{formatMoney(dueDate.amount)}</td>
                     <td>{formatMoney(dueDate.paidAmount)}</td>
+                    <td>{formatMoney(dueDate.creditAppliedAmount)}</td>
                     <td>{formatMoney(dueDate.pendingAmount)}</td>
                     <td>{paymentMethodLabel(dueDate.paymentMethod)}</td>
                     <td>{dueDateStatusLabel(dueDate.status)}</td>
+                    <td>
+                      {dueDate.remittance ? (
+                        canManagePayments ? (
+                          <Link href={`/app/treasury/remittances/${dueDate.remittance.id}`}>
+                            {dueDate.remittance.number}
+                          </Link>
+                        ) : "Restringida"
+                      ) : dueDate.paymentMethod === "DIRECT_DEBIT" ? "Disponible" : "No aplica"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -428,20 +559,21 @@ export default async function InvoiceDetailPage({ params }: InvoiceDetailPagePro
           </div>
         ) : null}
 
-        {canManagePayments && invoice.status === "ISSUED" ? (
+        {canManagePayments && invoice.status === "ISSUED" && invoice.verifactuStatus !== "CANCELLED" ? (
           <div className="panel stack">
             <CustomerPaymentRegisterForm
               invoiceId={invoice.id}
               dueDates={invoice.dueDates}
             />
-            <CustomerPaymentReturnRegisterForm
-              invoiceId={invoice.id}
-              payments={invoice.payments}
-            />
             <CustomerDueDateUnpaidForm
               invoiceId={invoice.id}
               dueDates={invoice.dueDates}
             />
+          </div>
+        ) : null}
+        {canManagePayments && (invoice.status === "ISSUED" || invoice.status === "RECTIFIED") && invoice.payments.length > 0 ? (
+          <div className="panel stack">
+            <CustomerPaymentReturnRegisterForm invoiceId={invoice.id} payments={invoice.payments} />
           </div>
         ) : null}
       </section>
@@ -520,10 +652,14 @@ function dueDateStatusLabel(status: InvoiceDetail["dueDates"][number]["status"])
       return "Pendiente";
     case "PAID":
       return "Pagado";
+    case "SETTLED":
+      return "Compensado";
     case "RETURNED":
       return "Devuelto";
     case "UNPAID":
       return "Impagado";
+    case "CANCELLED":
+      return "Cancelado";
   }
 }
 
@@ -535,8 +671,16 @@ function paymentStatusLabel(status: InvoiceDetail["paymentStatus"]): string {
       return "Parcialmente cobrada";
     case "PAID":
       return "Cobrada";
+    case "PARTIALLY_SETTLED":
+      return "Parcialmente compensada";
+    case "SETTLED":
+      return "Compensada";
+    case "NOT_APPLICABLE":
+      return "No sujeta a cobro (abono)";
     case "UNPAID":
       return "Impagada";
+    case "CANCELLED":
+      return "Cancelada";
   }
 }
 
@@ -570,7 +714,21 @@ function verifactuStatusLabel(status: InvoiceDetail["verifactuStatus"]): string 
       return "Aceptada con errores";
     case "REJECTED":
       return "Rechazada";
+    case "CANCELLED":
+      return "Anulada en AEAT";
   }
+}
+
+function verifactuOperationalStatusLabel(status: NonNullable<InvoiceDetail["verifactuTrace"]>["operationalStatus"]): string {
+  return status === "ACTION_REQUIRED" ? "Requiere intervención"
+    : status === "RECONCILIATION_REQUIRED" ? "Conciliación pendiente"
+      : status === "PROCESSING" ? "Procesando"
+        : status === "PENDING" ? "Pendiente de envío"
+          : "Completado";
+}
+
+function formatDateTime(value: string): string {
+  return new Date(value).toLocaleString("es-ES");
 }
 
 function formatDate(value: string): string {

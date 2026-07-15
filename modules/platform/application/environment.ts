@@ -6,7 +6,7 @@ const sessionSecretPlaceholder = "change-me-in-local-env";
 
 const baseEnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  APP_ENV: z.enum(["development", "test", "production"]),
+  APP_ENV: z.enum(["development", "test", "staging", "production"]),
   APP_BASE_URL: z.string().trim().url().optional(),
   AUTH_COOKIE_NAME: z
     .string()
@@ -20,7 +20,8 @@ const baseEnvironmentSchema = z.object({
   TRUST_PROXY_HEADERS: z.enum(["true", "false"]).default("false")
 });
 const environmentSchema = baseEnvironmentSchema.extend({
-  APP_SESSION_SECRET: z.string().min(1)
+  APP_SESSION_SECRET: z.string().min(1),
+  VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: z.string().min(32).optional()
 });
 
 export type PlatformEnvironment = z.infer<typeof environmentSchema>;
@@ -46,18 +47,27 @@ export function getSessionSecret(): string {
   return readPlatformEnvironment().APP_SESSION_SECRET;
 }
 
+export function getVerifactuCredentialIdempotencySecret(): string {
+  const config = readPlatformEnvironment();
+  if (config.VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET) return config.VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET;
+  if (isDeployedAppEnvironment(config.APP_ENV)) {
+    throw new Error("Invalid platform environment: VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET is required in deployed environments.");
+  }
+  return `development-only:${config.APP_SESSION_SECRET}`;
+}
+
 export function getSessionCookieName(): string {
   return readPlatformBaseEnvironment().AUTH_COOKIE_NAME;
 }
 
 export function isProductionEnvironment(): boolean {
-  return readPlatformBaseEnvironment().APP_ENV === "production";
+  return isDeployedAppEnvironment(readPlatformBaseEnvironment().APP_ENV);
 }
 
 export function isSessionCookieSecure(): boolean {
   const config = readPlatformBaseEnvironment();
 
-  return config.APP_ENV === "production" || config.AUTH_COOKIE_SECURE === "true";
+  return isDeployedAppEnvironment(config.APP_ENV) || config.AUTH_COOKIE_SECURE === "true";
 }
 
 export function getSessionCookieSameSite(): "lax" | "strict" {
@@ -71,7 +81,7 @@ export function getConfiguredAppBaseUrl(): string | undefined {
 export function shouldTrustProxyHeaders(): boolean {
   const config = readPlatformBaseEnvironment();
 
-  return config.TRUST_PROXY_HEADERS === "true" || config.APP_ENV !== "production";
+  return config.TRUST_PROXY_HEADERS === "true" || !isDeployedAppEnvironment(config.APP_ENV);
 }
 
 function readPlatformBaseEnvironment(
@@ -89,7 +99,8 @@ function readPlatformBaseEnvironment(
 function normalizeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return {
     ...env,
-    APP_ENV: env.APP_ENV ?? env.NODE_ENV ?? "development"
+    APP_ENV: env.APP_ENV ?? env.NODE_ENV ?? "development",
+    VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET: env.VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET?.trim() || undefined
   };
 }
 
@@ -102,27 +113,35 @@ function validatePlatformEnvironment(config: PlatformEnvironment): void {
     throw new Error("Invalid platform environment: APP_SESSION_SECRET must be at least 32 characters.");
   }
 
+  if (isDeployedAppEnvironment(config.APP_ENV) && !config.VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET) {
+    throw new Error("Invalid platform environment: VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET is required in deployed environments.");
+  }
+
   validateProductionRuntimeEnvironment(config);
 }
 
 function validateProductionRuntimeEnvironment(config: PlatformBaseEnvironment): void {
-  if (config.NODE_ENV === "production" && config.APP_ENV !== "production") {
-    throw new Error("Invalid platform environment: APP_ENV must be production when NODE_ENV is production.");
+  if (config.NODE_ENV === "production" && !isDeployedAppEnvironment(config.APP_ENV)) {
+    throw new Error("Invalid platform environment: APP_ENV must be staging or production when NODE_ENV is production.");
   }
 
-  if (config.APP_ENV !== "production") {
+  if (!isDeployedAppEnvironment(config.APP_ENV)) {
     return;
   }
 
   if (!config.APP_BASE_URL) {
-    throw new Error("Invalid platform environment: APP_BASE_URL is required in production.");
+    throw new Error("Invalid platform environment: APP_BASE_URL is required in deployed environments.");
   }
 
   if (!config.APP_BASE_URL.startsWith("https://")) {
-    throw new Error("Invalid platform environment: APP_BASE_URL must use HTTPS in production.");
+    throw new Error("Invalid platform environment: APP_BASE_URL must use HTTPS in deployed environments.");
   }
 
   if (config.AUTH_COOKIE_SECURE === "false") {
-    throw new Error("Invalid platform environment: AUTH_COOKIE_SECURE cannot be false in production.");
+    throw new Error("Invalid platform environment: AUTH_COOKIE_SECURE cannot be false in deployed environments.");
   }
+}
+
+function isDeployedAppEnvironment(value: PlatformBaseEnvironment["APP_ENV"]): boolean {
+  return value === "staging" || value === "production";
 }

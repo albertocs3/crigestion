@@ -18,7 +18,22 @@ async function main() {
     ["Billing.View", "Consultar facturas"],
     ["Billing.ManageDrafts", "Gestionar borradores de facturacion"],
     ["Billing.Issue", "Emitir facturas"],
-    ["Treasury.ManagePayments", "Registrar cobros de clientes"]
+    ["Billing.ManageVerifactuCredentials", "Gestionar credenciales VeriFactu"],
+    ["Billing.ManageVerifactuInstallations", "Gestionar instalaciones SIF VeriFactu"],
+    ["Billing.ViewVerifactuOperations", "Consultar operaciones VeriFactu"],
+    ["Billing.ManageVerifactuOperations", "Intervenir operaciones VeriFactu"],
+    ["Billing.CreateVerifactuRejectionCorrection", "Subsanar rechazos VeriFactu"],
+    ["Billing.RequestVerifactuCancellation", "Solicitar anulaciones de registros VeriFactu"],
+    ["Billing.FinalizeVerifactuCancellation", "Finalizar anulaciones tecnicas VeriFactu"],
+    ["Treasury.ManagePayments", "Registrar cobros de clientes"],
+    ["Treasury.ViewCustomerCredits", "Consultar creditos de clientes"],
+    ["Treasury.ApplyCustomerCredits", "Compensar creditos de clientes"],
+    ["Treasury.RequestCustomerRefunds", "Solicitar reembolsos de creditos"],
+    ["Treasury.ApproveCustomerRefunds", "Aprobar reembolsos de creditos"],
+    ["Treasury.PostCustomerRefunds", "Contabilizar reembolsos de creditos"],
+    ["Treasury.ViewBanking", "Consultar movimientos y conciliaciones bancarias"],
+    ["Treasury.ReconcileBanking", "Gestionar conciliaciones bancarias"],
+    ["Treasury.ImportBankStatements", "Importar extractos bancarios"]
   ] as const;
   const catalogTaxRates = [
     ["IVA_21", "IVA general 21%", "21.00", true],

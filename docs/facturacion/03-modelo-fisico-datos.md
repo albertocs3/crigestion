@@ -14,7 +14,7 @@ VeriFactu real.
 - `InvoiceDocumentStatus`: `DRAFT`, `ISSUED`, `RECTIFIED`, `VOIDED`.
 - `InvoicePaymentStatus`: `PENDING`, `PARTIALLY_PAID`, `PAID`, `UNPAID`.
 - `InvoiceVerifactuStatus`: `NOT_APPLICABLE`, `PENDING`, `SENT`, `ACCEPTED`,
-  `ACCEPTED_WITH_ERRORS`, `REJECTED`.
+  `ACCEPTED_WITH_ERRORS`, `REJECTED`, `CANCELLED`.
 - `InvoiceOrigin`: `MANUAL`, `SUBSCRIPTION`.
 
 En el MVP se crean facturas `STANDARD` manuales y rectificativas
@@ -141,7 +141,16 @@ Restricciones e indices:
 - En el MVP se crea un unico vencimiento por el total.
 - La suma de vencimientos debe coincidir exactamente con `invoices.total`.
 
-## 8. Tabla `invoice_verifactu_records`
+## 8. Persistencia VeriFactu
+
+La persistencia definitiva se incorpora de forma escalonada. La columna
+`invoices.companyId` es nullable durante la transicion para no atribuir a una
+empresa facturas historicas cuyo propietario no pueda demostrarse. Las nuevas
+facturas copian la empresa de la instalacion inicializada. Antes de hacer la
+columna obligatoria se deben sanear las filas legacy y adaptar todos los seeds e
+importadores.
+
+### 8.1 Tabla legacy `invoice_verifactu_records`
 
 | Campo | Uso |
 |---|---|
@@ -151,8 +160,76 @@ Restricciones e indices:
 | `createdAt` | Instante de creacion del placeholder. |
 | `lastErrorCode` | Codigo funcional si falla preparacion futura. |
 
-El MVP no envia a AEAT ni guarda certificados. La tabla reserva el punto de
-integracion para el adaptador VeriFactu server-side.
+Esta tabla sigue siendo el placeholder usado por el flujo de emision actual. No
+se transforma automaticamente en un registro fiscal: carece del snapshot, hash,
+versiones y datos de encadenamiento necesarios para considerarlo conforme.
+
+### 8.2 Tabla `verifactu_sif_installations`
+
+Identifica la instalacion SIF por empresa y entorno, fija las versiones del
+contrato, esquema y manifiesto tecnico, y conserva la cabeza de la cadena. Solo
+puede existir una instalacion `ACTIVE` por empresa y entorno. `credentialRef`
+es una referencia server-side; nunca contiene el certificado ni su secreto.
+
+### 8.3 Tabla `verifactu_fiscal_records`
+
+Registro fiscal inmutable de alta o anulacion. Conserva el snapshot fiscal, el
+payload cifrado, sus hashes, la version de canonizacion y el enlace a la cadena.
+Las restricciones PostgreSQL garantizan propiedad por empresa, posicion unica,
+un unico sucesor por registro y que una anulacion apunte a un alta de la misma
+factura e instalacion. Un trigger rechaza cualquier `UPDATE` o `DELETE`.
+
+El JSONB visible contiene solo metadatos tecnicos minimos; el snapshot fiscal y
+el XML con datos identificativos se conservan en `payloadCiphertext`. Un indice
+parcial impide mas de un `ALTA` por factura e instalacion y un trigger valida que
+posicion y huella coincidan con el registro anterior.
+
+La huella normativa se genera en hexadecimal mayusculo. La restriccion acepta
+temporalmente ambos casos para conservar fixtures y registros de desarrollo
+anteriores, mientras el servicio de persistencia exige mayusculas para todas las
+nuevas preparaciones.
+
+`payloadCiphertext` almacena el sobre autenticado completo, no XML en claro.
+`encryptionKeyId` permite seleccionar claves historicas del keyring durante
+restauraciones, exportaciones autorizadas o reenvios. El hash SHA-256 del XML se
+mantiene separado para integridad e idempotencia y tambien queda ligado al AAD.
+
+### 8.4 Tabla `verifactu_submission_attempts`
+
+Cada fila representa un intento ya finalizado. Guarda resultado, hashes,
+identificadores AEAT y, cuando proceda, peticion/respuesta cifradas. Es
+append-only: las recuperaciones ambiguas se registran como nuevos intentos de
+tipo `RECONCILE`, nunca modificando el intento anterior.
+
+`credentialVersionId` identifica de forma inmutable la version mTLS utilizada.
+Las tablas `verifactu_mtls_credentials` y
+`verifactu_mtls_credential_versions` separan la identidad logica de sus
+versiones cifradas. Un indice parcial permite una sola version activa y las
+restricciones exigen vigencia, prueba ligada al SHA-256 del PFX y estados de
+ciclo de vida coherentes. Las versiones retiradas se conservan por trazabilidad.
+El ciclo es `STAGED -> TESTED -> ACTIVE -> RETIRED`; el material es inmutable
+desde su creacion y `TESTED` exige un intento `PASSED` con el mismo hash en
+`verifactu_mtls_credential_test_attempts`. La FK compuesta de la instalacion
+con `companyId` impide asignar una credencial de otra empresa.
+
+### 8.5 Tabla `verifactu_outbox_messages`
+
+Cola durable y mutable para separar la transaccion fiscal de la llamada externa.
+Sus estados `PENDING`, `CLAIMED`, `PROCESSED` y `DEAD` tienen invariantes de
+lease reforzadas en PostgreSQL. `commitPreparedVerifactuAlta` bloquea la
+instalacion SIF y confirma registro, outbox, cabeza de cadena y auditoria en una
+sola transaccion. `issueInvoice` reutiliza el mismo `TransactionClient`, por lo
+que numeracion, asiento, factura, alta fiscal y outbox confirman o revierten
+juntos cuando `VERIFACTU_ENABLED=true`.
+
+La activacion falla cerrada: exige una instalacion SIF activa del entorno, clave
+de idempotencia, preparador server-side y credencial probada por el adaptador
+AEAT. No existe fallback al placeholder cuando VeriFactu esta activo.
+
+El polling del worker usa el indice de pendientes por estado/fecha y un indice
+parcial de recuperacion para leases `CLAIMED`. El contador aumenta al iniciar
+una llamada externa; un lease `SUBMIT` abandonado se considera resultado
+indeterminado y genera conciliacion antes de cualquier nuevo envio.
 
 ## 9. Tabla `customer_payments`
 
@@ -215,7 +292,8 @@ Emitir:
 3. Bloquea o crea la fila de `invoice_number_sequences`.
 4. Asigna numero definitivo.
 5. Congela snapshot fiscal y economico.
-6. Crea `invoice_verifactu_records`.
+6. Crea el placeholder legacy `invoice_verifactu_records` mientras se migra el
+   caso de uso al registro fiscal append-only y al outbox atomico.
 7. Audita `INVOICE_ISSUED`.
 
 Registrar cobro manual:
@@ -247,9 +325,19 @@ Crear rectificativa integra:
 3. Bloquea o crea la secuencia de serie `R`.
 4. Crea la rectificativa ya `ISSUED` con importes invertidos.
 5. Copia lineas, resumen fiscal y vencimiento invertido.
-6. Crea placeholder VeriFactu.
+6. Crea placeholder VeriFactu legacy mientras se migra el caso de uso.
 7. Marca la factura original como `RECTIFIED`.
 8. Audita `INVOICE_RECTIFICATION_CREATED`.
+
+Finalizar anulacion tecnica VeriFactu:
+
+1. Exige factura ordinaria `ISSUED`, `verifactuStatus=CANCELLED` y evidencia
+   terminal de una `ANULACION` que referencia su `ALTA`.
+2. Rechaza pagos, devoluciones, remesas, vencimientos alterados y rectificativa.
+3. Conserva el asiento original `POSTED` y crea otro asiento
+   `INVOICE_VOIDING`, enlazado mediante `reversesEntryId` y `voidsInvoiceId`.
+4. Cambia factura a `VOIDED`, pago a `CANCELLED` y vencimientos a `CANCELLED`.
+5. Persiste replay idempotente y auditoria en la misma transaccion.
 
 ## 12. Auditoria
 
@@ -281,12 +369,15 @@ tablas de persistencia propias ni conserva obligatoriamente el binario generado.
 Quedan fuera del MVP la firma digital, el envio por correo, la plantilla
 definitiva versionada y el hash del PDF enviado.
 
-## 13. Decisiones Pendientes
+## 14. Decisiones Pendientes
 
 - Modelo definitivo de presupuestos.
 - Rectificativas integras.
 - Varios vencimientos manuales.
 - Devoluciones, anticipos, remesas y conciliacion.
 - Plantilla PDF definitiva, firma digital y hash de plantilla.
-- Encadenamiento y envio VeriFactu real.
+- Adaptador de preparacion XML/hash/QR validado con fixtures oficiales AEAT.
+- Aplicar el mismo flujo atomico a altas de facturas rectificativas.
+- Worker de envio/reconciliacion AEAT y politica de reintentos.
+- Saneamiento de facturas legacy para hacer `invoices.companyId` obligatorio.
 - Conexion con contabilidad.

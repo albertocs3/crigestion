@@ -1,5 +1,21 @@
 # Contratos HTTP de Facturacion
 
+## Subsanacion de rechazo VeriFactu
+
+`POST /api/platform/verifactu/fiscal-records/{recordId}/correct-rejection`
+crea un nuevo ALTA por rechazo para un ALTA original con resultado terminal
+`REJECTED`. Requiere sesion, permiso
+`Billing.CreateVerifactuRejectionCorrection`, origen permitido, CSRF,
+`Idempotency-Key`, JSON, mantenimiento inactivo y rate limit.
+
+El body incluye `expectedRejectedAttemptId`, nombre y NIF corregidos del
+destinatario, `reasonCode` y `rectificationNotRequired=true`. El servidor fija
+`Subsanacion=S` y `RechazoPrevio=X`; el cliente no puede elegir esos indicadores.
+Devuelve `202` con `correctionRecordId`, posicion de cadena y estado `PENDING`.
+Usa `404` si el rechazo no es elegible, `409` ante cambio concurrente o
+idempotencia incompatible, `422` para entrada invalida, `429` por limite y
+`503` si el preparador fiscal no esta disponible.
+
 ## Vencimientos de borrador
 
 `PUT /api/invoices/{invoiceId}/due-dates` requiere `Billing.ManageDrafts`,
@@ -412,8 +428,44 @@ Errores:
 Audita `INVOICE_PDF_DOWNLOADED` con `invoiceId`, `number`, `customerId` y
 `actorUserId`.
 
-## 14. Bloqueo por Mantenimiento
+## 14. `POST /api/invoices/{invoiceId}/verifactu-cancellation`
 
-Todas las mutaciones anteriores devuelven `423 MAINTENANCE_MODE_ACTIVE` si la
-plataforma esta en mantenimiento. Las consultas siguen permitidas para soporte
+Permiso requerido: `Billing.RequestVerifactuCancellation`. Requiere sesion,
+Origin permitido, CSRF, JSON e `Idempotency-Key`.
+
+El body contiene un `reasonCode`: `ISSUED_BY_MISTAKE`, `DUPLICATE_INVOICE` o
+`WRONG_FISCAL_IDENTITY`. La respuesta `202` identifica el registro `ANULACION`
+preparado y pendiente del worker.
+
+Un replay con la misma clave y cuerpo conserva el `202` original incluso
+durante mantenimiento, porque no crea un nuevo efecto. El replay sigue
+exigiendo sesion vigente, permiso, Origin y CSRF. La misma clave con otro body
+devuelve `409 IDEMPOTENCY_KEY_REUSED` antes del bloqueo de mantenimiento.
+
+## 15. `POST /api/invoices/{invoiceId}/technical-voiding`
+
+Permiso requerido: `Billing.FinalizeVerifactuCancellation`. Requiere sesion,
+Origin permitido, CSRF, JSON e `Idempotency-Key`.
+
+Este endpoint solo regulariza una factura estandar emitida por error cuya
+anulacion VeriFactu ya haya sido aceptada en AEAT TEST. El body contiene
+`voidDate`, `reasonCode=ISSUED_BY_MISTAKE` y la confirmacion literal
+`VOID_AFTER_ACCEPTED_VERIFACTU_CANCELLATION`.
+
+La operacion exige que no existan cobros, devoluciones ni remesas, y que todos
+los vencimientos sigan pendientes. En una unica transaccion marca la factura
+como `VOIDED`, cancela los vencimientos y crea un asiento `POSTED` de origen
+`INVOICE_VOIDING` que invierte, sin borrar ni modificar, el asiento original.
+La respuesta inicial es `201`; un replay idempotente devuelve `200` con el
+mismo resultado.
+
+Los conflictos funcionales devuelven `409` con un codigo estable y no alteran
+la factura. La rectificacion permanece cerrada para facturas integradas en
+VeriFactu mientras no genere un ALTA rectificativa real.
+
+## 16. Bloqueo por Mantenimiento
+
+Todas las mutaciones nuevas anteriores devuelven `423
+MAINTENANCE_MODE_ACTIVE` si la plataforma esta en mantenimiento. Las consultas
+y los replays idempotentes ya consolidados siguen permitidos para soporte
 operativo.

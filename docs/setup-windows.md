@@ -111,6 +111,25 @@ Activa `TRUST_PROXY_HEADERS="true"` solo cuando la aplicacion este detras de un 
 
 La aplicacion valida estas variables al arrancar. `APP_ENV` indica el entorno operativo. Cuando `APP_ENV="production"`, `APP_BASE_URL` debe usar `https://`, `APP_SESSION_SECRET` debe tener al menos 32 caracteres y `AUTH_COOKIE_SECURE` no puede ser `"false"`.
 
+Para abrir temporalmente la aplicacion contra la base desechable
+`crigestion_test`, copiar primero `.env.test.example` como `.env.test.local`,
+revisar que use PostgreSQL local y detener el servidor normal. Despues ejecutar:
+
+```powershell
+npm run dev:test-db
+```
+
+El comando no modifica `.env.local`, rechaza hosts no locales y bases cuyo
+nombre no sea exactamente `crigestion_test`, fuerza `APP_ENV=test` y todas las
+banderas VeriFactu a `TEST`, y arranca en el puerto 3000. Como alternativa
+automatizada acepta `TEST_DATABASE_URL`. Al cerrar esa consola, `npm run dev`
+vuelve a usar la base ordinaria.
+
+En `APP_ENV=test` todas las pantallas, incluidas inicializacion y login,
+muestran una banda persistente. Solo indica `crigestion_test` cuando la URL
+declarada coincide exactamente; cualquier otra configuracion muestra `BASE NO
+VERIFICADA`. La banda es informativa y no sustituye los guards de PostgreSQL.
+
 ## 7. PostgreSQL local con Docker
 
 Arranca PostgreSQL:

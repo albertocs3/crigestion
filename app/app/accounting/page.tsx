@@ -19,6 +19,7 @@ type AccountingPageProps = {
     entryCursor?: string;
     year?: string;
     search?: string;
+    entryId?: string;
   }>;
 };
 
@@ -57,7 +58,8 @@ export default async function AccountingPage({
   const entriesPayload = listJournalEntriesSchema.safeParse({
     limit: 25,
     cursor: params.entryCursor,
-    year: params.year
+    year: params.year,
+    entryId: params.entryId
   });
   const [accounts, entries, fiscalYears] = await Promise.all([
     accountsPayload.success
@@ -294,6 +296,7 @@ function accountNextPageHref(
   if (params.entryCursor) query.set("entryCursor", params.entryCursor);
   if (params.year) query.set("year", params.year);
   if (params.search) query.set("search", params.search);
+  if (params.entryId) query.set("entryId", params.entryId);
 
   return `/app/accounting?${query.toString()}`;
 }
@@ -307,6 +310,7 @@ function entryNextPageHref(
   if (params.accountCursor) query.set("accountCursor", params.accountCursor);
   if (params.year) query.set("year", params.year);
   if (params.search) query.set("search", params.search);
+  if (params.entryId) query.set("entryId", params.entryId);
 
   return `/app/accounting?${query.toString()}`;
 }

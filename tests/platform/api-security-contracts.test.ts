@@ -8,6 +8,8 @@ const publicMutationRoutes = new Set([
   normalizePath(join("app", "api", "platform", "installation", "initialize", "route.ts"))
 ]);
 const mutationHandlerPattern = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\s*\(/;
+const sharedCustomerCreditGuard = "authorizeCustomerCreditMutation(request";
+const sharedCustomerCreditRefundAction = "runCustomerCreditRefundAction(request";
 
 describe("API security route contracts", () => {
   it("requires origin and CSRF validation for mutating route handlers", () => {
@@ -20,17 +22,34 @@ describe("API security route contracts", () => {
     const routesMissingOriginValidation = mutatingRoutes.filter((filePath) => {
       const source = readFileSync(filePath, "utf8");
 
-      return !source.includes("isAllowedOrigin(request)");
+      return !source.includes("isAllowedOrigin(request)")
+        && !source.includes(sharedCustomerCreditGuard)
+        && !source.includes(sharedCustomerCreditRefundAction);
     });
     const authenticatedRoutesMissingCsrfValidation = mutatingRoutes.filter((filePath) => {
       const routePath = normalizePath(relative(process.cwd(), filePath));
       const source = readFileSync(filePath, "utf8");
 
-      return !publicMutationRoutes.has(routePath) && !source.includes("validateCsrfToken(");
+      return !publicMutationRoutes.has(routePath)
+        && !source.includes("validateCsrfToken(")
+        && !source.includes(sharedCustomerCreditGuard)
+        && !source.includes(sharedCustomerCreditRefundAction);
     });
 
     expect(routesMissingOriginValidation.map(toProjectPath)).toEqual([]);
     expect(authenticatedRoutesMissingCsrfValidation.map(toProjectPath)).toEqual([]);
+
+    const customerCreditGuardSource = readFileSync(
+      join(process.cwd(), "app", "api", "treasury", "_customer-credit-http.ts"),
+      "utf8"
+    );
+    expect(customerCreditGuardSource).toContain("isAllowedOrigin(request)");
+    expect(customerCreditGuardSource).toContain("validateCsrfToken(");
+    const refundActionSource = readFileSync(
+      join(process.cwd(), "app", "api", "treasury", "_customer-credit-refund-action.ts"),
+      "utf8"
+    );
+    expect(refundActionSource).toContain(sharedCustomerCreditGuard);
   });
 });
 

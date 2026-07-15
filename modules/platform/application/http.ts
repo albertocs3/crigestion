@@ -1,6 +1,6 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import {
   getConfiguredAppBaseUrl,
@@ -178,6 +178,25 @@ export function validateIdempotencyKey(value: string | null):
   }
 
   return { ok: true, key: value };
+}
+
+export function hashIdempotencyPayload(scope: string, payload: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify({ scope, payload }))
+    .digest("hex");
+}
+
+export function idempotencyStorageKey(
+  actorId: string,
+  scope: string,
+  resourceId: string,
+  clientKey: string
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify({ actorId, scope, resourceId, clientKey }))
+    .digest("hex");
+
+  return `v1:${digest}`;
 }
 
 export function validationError(issues: unknown) {

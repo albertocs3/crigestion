@@ -1,0 +1,101 @@
+import { randomUUID } from "node:crypto";
+import { cookies } from "next/headers";
+import { z } from "zod";
+import { prisma } from "@/lib/prisma";
+import {
+  createVerifactuRejectionCorrection,
+  createVerifactuRejectionCorrectionSchema,
+  hashVerifactuRejectionCorrectionBody
+} from "@/modules/billing/application/verifactuRejectionCorrections";
+import { readConfiguredVerifactuAltaPreparer } from "@/modules/billing/infrastructure/verifactu/configuredPreparer";
+import { requirePermission, sessionCookieName, validateCsrfToken } from "@/modules/platform/application/auth";
+import {
+  getCorrelationId, idempotencyStorageKey, invalidJson, isAllowedOrigin, isJsonRequest,
+  jsonResponse, originNotAllowed, unsupportedMediaType, validateIdempotencyKey, validationError
+} from "@/modules/platform/application/http";
+import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+const paramsSchema = z.object({ recordId: z.string().uuid() }).strict();
+
+export async function POST(request: Request, context: { params: Promise<{ recordId: string }> }) {
+  if (!isAllowedOrigin(request)) return jsonResponse(request, originNotAllowed(), { status: 403 });
+  const token = (await cookies()).get(sessionCookieName)?.value;
+  const csrf = validateCsrfToken(token, request.headers.get("X-CSRF-Token"));
+  if (!csrf.ok) return jsonResponse(request, csrf.error, { status: csrf.status });
+  const correlationId = getCorrelationId(request);
+  const authorization = await requirePermission(token, "Billing.CreateVerifactuRejectionCorrection", { correlationId });
+  if (!authorization.ok) return jsonResponse(request, authorization.error, { status: authorization.status });
+  const maintenance = await requireMaintenanceModeInactive(authorization.user, request, { correlationId });
+  if (!maintenance.ok) return jsonResponse(request, maintenance.error, { status: maintenance.status });
+  const idempotency = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+  if (!idempotency.ok) return jsonResponse(request, idempotency.error, { status: idempotency.status });
+  if (!isJsonRequest(request)) return jsonResponse(request, unsupportedMediaType(), { status: 415 });
+  if (await consumeRateLimit(authorization.user.id)) {
+    await prisma.auditEvent.create({ data: {
+      eventType: "VERIFACTU_REJECTION_CORRECTION_RATE_LIMITED",
+      actorType: "USER",
+      payload: { actorUserId: authorization.user.id, correlationId }
+    } });
+    return jsonResponse(request, { code: "RATE_LIMITED", message: "Demasiadas subsanaciones VeriFactu. Espere quince minutos." }, { status: 429, headers: { "Retry-After": "900" } });
+  }
+  const raw = await readBoundedBody(request, 4_096);
+  if (raw === null) return jsonResponse(request, { code: "PAYLOAD_TOO_LARGE", message: "La peticion supera el tamano permitido." }, { status: 413 });
+  let body: unknown;
+  try { body = JSON.parse(raw); } catch { return jsonResponse(request, invalidJson(), { status: 400 }); }
+  const params = paramsSchema.safeParse(await context.params);
+  const payload = createVerifactuRejectionCorrectionSchema.safeParse(body);
+  if (!params.success) return jsonResponse(request, validationError(params.error.flatten()), { status: 422 });
+  if (!payload.success) return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
+  const prepare = readConfiguredVerifactuAltaPreparer();
+  if (!prepare) return jsonResponse(request, {
+    code: "VERIFACTU_REJECTION_CORRECTION_PREPARATION_UNAVAILABLE",
+    message: "La preparacion VeriFactu no esta configurada."
+  }, { status: 503 });
+  const storageKey = idempotencyStorageKey(authorization.user.id, "verifactu-rejection-correction", params.data.recordId, idempotency.key);
+  const requestHash = hashVerifactuRejectionCorrectionBody(payload.data);
+  const result = await createVerifactuRejectionCorrection({
+    rejectedRecordId: params.data.recordId,
+    command: payload.data,
+    actor: authorization.user,
+    correlationId,
+    idempotencyKey: storageKey,
+    requestHash,
+    prepare
+  });
+  return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status });
+}
+
+async function consumeRateLimit(userId: string): Promise<boolean> {
+  const now = new Date();
+  const windowStart = new Date(now.getTime() - 15 * 60_000);
+  const [bucket] = await prisma.$queryRaw<Array<{ count: number }>>`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (${randomUUID()}::uuid, ${`verifactu-rejection-correction:${userId}`}, ${now}, 1, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN 1 ELSE "rate_limit_buckets"."count" + 1 END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN ${now} ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = ${now}
+    RETURNING "count"
+  `;
+  return Boolean(bucket && bucket.count > 5);
+}
+
+async function readBoundedBody(request: Request, maxBytes: number): Promise<string | null> {
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), size).toString("utf8");
+  } finally { reader.releaseLock(); }
+}

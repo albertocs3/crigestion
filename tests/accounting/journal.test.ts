@@ -92,6 +92,9 @@ describe("accounting journal application service", () => {
     expect(closed.value.closed.status).toBe("CLOSED");
     expect(closed.value.next).toMatchObject({ year: 2027, status: "OPEN" });
     expect(closed.value.next.accountCount).toBe(created.value.accountCount + 1);
+    expect(await prisma.accountingFiscalYear.count({
+      where: { companyId: (await prisma.installation.findFirstOrThrow()).companyId!, status: "OPEN" }
+    })).toBe(1);
     const copied = await prisma.accountingAccount.findFirstOrThrow({
       where: { fiscalYearId: closed.value.next.id, code: "572000099" }
     });

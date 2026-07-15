@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { prisma } from "@/lib/prisma";
+import { assertDisposableTestDatabase } from "@/tests/helpers/disposableTestDatabase";
 
 const companyName = "CriGestion E2E SL";
 const taxId = "B12345678";
@@ -27,6 +28,15 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   page
 }) => {
   await page.goto("/app");
+  const environmentBanner = page.getByRole("complementary", { name: "Entorno de ejecucion" });
+  await expect(environmentBanner).toBeVisible();
+  await expect(environmentBanner).toContainText("ENTORNO TEST · crigestion_test");
+  await expect(environmentBanner).toContainText("VERIFACTU DESACTIVADO");
+  const healthResponse = await page.request.get("/api/health");
+  expect(healthResponse.status()).toBe(200);
+  expect(await healthResponse.json()).toMatchObject({
+    status: "ok", database: "ok", verifactu: "disabled", worker: "not_required"
+  });
   await expect(page).toHaveURL(/\/platform\/installation$/);
 
   await page.goto("/platform/installation");
@@ -50,6 +60,7 @@ test("initializes the platform, logs in, shows the session, and logs out", async
 
   await expect(page).toHaveURL(/\/app$/);
   await expect(page.getByRole("heading", { name: "Inicio" })).toBeAttached();
+  await expect(environmentBanner).toContainText("ENTORNO TEST · crigestion_test");
   await expect(page.getByText(`Sesion activa de ${displayName}`)).toBeVisible();
   await expect(page.getByText(userName)).not.toBeVisible();
   await page.getByText("Utilidades", { exact: true }).click();
@@ -81,6 +92,7 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   await page.getByRole("button", { name: "Cerrar sesion" }).click();
 
   await expect(page).toHaveURL(/\/login$/);
+  await expect(environmentBanner).toContainText("ENTORNO TEST · crigestion_test");
   await expect(page.getByRole("heading", { name: "Iniciar sesion" })).toBeVisible();
   await page.goto("/app");
   await expect(page).toHaveURL(/\/login$/);
@@ -104,6 +116,30 @@ test("initializes the platform, logs in, shows the session, and logs out", async
   });
   expect(revokedSessionCount).toBe(1);
   expect(configurationAuditCount).toBe(1);
+});
+
+test("creates an active TEST SIF installation and exposes it to credential import", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-sif-installation");
+  await page.goto("/app/verifactu/installations");
+  await expect(page.getByRole("heading", { name: "Instalaciones SIF VeriFactu" })).toBeVisible();
+  await page.getByLabel("Nombre del productor").fill("Productor E2E SL");
+  await page.getByLabel("NIF del productor").fill("B12345678");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Crear instalación TEST" }).click();
+  await expect(page.getByText("La instalación TEST activa ya está creada.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Importar certificado" })).toBeVisible();
+
+  await page.goto("/app/verifactu/credentials");
+  await expect(page.getByRole("option", { name: "TEST-01" })).toBeAttached();
+  expect(await prisma.verifactuSifInstallation.findFirstOrThrow()).toMatchObject({
+    installationCode: "TEST-01",
+    environment: "TEST",
+    status: "ACTIVE",
+    nextPosition: 1n,
+    lastRecordId: null,
+    lastRecordHash: null
+  });
+  expect(await prisma.auditEvent.count({ where: { eventType: "VERIFACTU_SIF_INSTALLATION_CREATED" } })).toBe(1);
 });
 
 test("shows access denied for a user without users or roles permissions", async ({
@@ -302,6 +338,7 @@ test("requests restore validation and manages maintenance mode from the UI", asy
 
 test("creates a customer and primary store from the UI", async ({ page }) => {
   await initializeAndLoginAdmin(page, "e2e-customers-setup");
+  await initializeAccountingForAdmin(page);
 
   await page.getByRole("link", { name: "Clientes" }).click();
   await expect(page).toHaveURL(/\/app\/customers$/);
@@ -348,6 +385,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   test.setTimeout(60000);
 
   await initializeAndLoginAdmin(page, "e2e-invoice-setup");
+  await initializeAccountingForAdmin(page);
 
   await page.getByRole("link", { name: "Clientes" }).click();
   await fillCustomerForm(page);
@@ -391,18 +429,6 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
 
-  await page.getByLabel("Fecha de cobro").fill("2026-07-10");
-  await page.getByLabel("Importe cobrado").fill("121.00");
-  await page.getByLabel("Referencia").fill("Transferencia E2E");
-  await page.getByRole("button", { name: "Registrar cobro" }).click();
-
-  await expect(page.getByText("Cobro registrado.")).toBeVisible();
-  await expect(page.getByText("Cobrada").first()).toBeVisible();
-  await expect(page.getByText("0.00 EUR").first()).toBeVisible();
-  await expect(page.getByText("Cobro 1")).toBeVisible();
-  await expect(page.getByText("Transferencia E2E")).toBeVisible();
-  await expect(page.getByText("Manual").first()).toBeVisible();
-
   await page.getByLabel("Fecha de emision").fill("2026-07-08");
   await page.locator('select[name="reason"]').selectOption("AMOUNT_ERROR");
   await page.getByRole("button", { name: "Crear rectificativa" }).click();
@@ -424,7 +450,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
     page.getByRole("row").filter({ hasText: "F2600001" })
   ).toContainText("Rectificada");
   await expect(page.getByText("VeriFactu: Pendiente").first()).toBeVisible();
-  await expect(page.getByText("Cobro: Pagada").first()).toBeVisible();
+  await expect(page.getByText("Cobro: Cancelada").first()).toBeVisible();
 
   const issuedInvoice = await prisma.invoice.findUniqueOrThrow({
     where: { number: "F2600001" },
@@ -458,26 +484,26 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
 
   expect(issuedInvoice.status).toBe("RECTIFIED");
   expect(issuedInvoice.rectificationInvoices).toHaveLength(1);
-  expect(issuedInvoice.paymentStatus).toBe("PAID");
+  expect(issuedInvoice.paymentStatus).toBe("CANCELLED");
   expect(issuedInvoice.verifactuStatus).toBe("PENDING");
   expect(issuedInvoice.total.toFixed(2)).toBe("121.00");
   expect(issuedInvoice.lines).toHaveLength(1);
   expect(issuedInvoice.taxSummaries).toHaveLength(1);
   expect(issuedInvoice.dueDates[0]?.amount.toFixed(2)).toBe("121.00");
-  expect(issuedInvoice.dueDates[0]?.status).toBe("PAID");
-  expect(issuedInvoice.payments[0]?.amount.toFixed(2)).toBe("121.00");
+  expect(issuedInvoice.dueDates[0]?.status).toBe("CANCELLED");
+  expect(issuedInvoice.payments).toHaveLength(0);
   expect(issuedInvoice.verifactuRecord?.status).toBe("PENDING");
   expect(rectificationInvoice.documentType).toBe("RECTIFICATION");
   expect(rectificationInvoice.status).toBe("ISSUED");
-  expect(rectificationInvoice.paymentStatus).toBe("PAID");
+  expect(rectificationInvoice.paymentStatus).toBe("NOT_APPLICABLE");
   expect(rectificationInvoice.rectificationReason).toBe("AMOUNT_ERROR");
   expect(rectificationInvoice.rectifiesInvoice?.id).toBe(issuedInvoice.id);
   expect(rectificationInvoice.total.toFixed(2)).toBe("-121.00");
   expect(rectificationInvoice.lines[0]?.quantity.toFixed(3)).toBe("-1.000");
   expect(rectificationInvoice.taxSummaries[0]?.total.toFixed(2)).toBe("-121.00");
-  expect(rectificationInvoice.dueDates[0]?.status).toBe("PAID");
+  expect(rectificationInvoice.dueDates).toHaveLength(0);
   expect(issuedAuditCount).toBe(1);
-  expect(paymentAuditCount).toBe(1);
+  expect(paymentAuditCount).toBe(0);
   expect(rectificationAuditCount).toBe(1);
 });
 
@@ -515,6 +541,7 @@ test("shows issued invoices read-only for a billing viewer", async ({ page }) =>
 
 test("marks an issued invoice due date unpaid from the UI", async ({ page }) => {
   await initializeAndLoginAdmin(page, "e2e-unpaid-due-date-setup");
+  await initializeAccountingForAdmin(page);
   const invoice = await createIssuedInvoiceForAdmin();
 
   await page.goto(`/app/invoices/${invoice.id}`);
@@ -588,6 +615,10 @@ test("creates accounting accounts and a manual journal entry from the UI", async
   await expect(page.getByText("No hay cuentas para mostrar.")).toBeVisible();
   await expect(page.getByText("No hay asientos para mostrar.")).toBeVisible();
 
+  await page.getByRole("button", { name: "Crear contabilidad" }).click();
+  await expect.poll(() => prisma.accountingFiscalYear.count({ where: { year: 2026, status: "OPEN" } })).toBe(1);
+  await page.reload();
+
   const accountForm = page.getByRole("group", { name: "Nueva cuenta" });
   await accountForm.getByLabel("Codigo").fill("572000001");
   await accountForm.getByLabel("Nombre").fill("Banco E2E");
@@ -595,21 +626,21 @@ test("creates accounting accounts and a manual journal entry from the UI", async
   await accountForm.getByLabel("Nivel").fill("9");
   await page.getByRole("button", { name: "Crear cuenta" }).click();
   await expect(page.getByText("Cuenta creada.")).toBeVisible();
-  await expect(page.getByText("572000001", { exact: true })).toBeVisible();
+  await expect.poll(() => prisma.accountingAccount.count({ where: { code: "572000001" } })).toBe(1);
 
   await accountForm.getByLabel("Codigo").fill("700000001");
   await accountForm.getByLabel("Nombre").fill("Ventas E2E");
   await accountForm.getByLabel("Tipo").fill("Ingresos");
   await accountForm.getByLabel("Nivel").fill("9");
   await page.getByRole("button", { name: "Crear cuenta" }).click();
-  await expect(page.getByText("700000001", { exact: true })).toBeVisible();
+  await expect.poll(() => prisma.accountingAccount.count({ where: { code: "700000001" } })).toBe(1);
 
   const entryForm = page.getByRole("group", { name: "Nuevo asiento manual" });
   await entryForm.getByLabel("Fecha contable").fill("2026-07-10");
   await entryForm.getByLabel("Concepto").fill("Cobro factura E2E");
   await entryForm.getByLabel("Importe").fill("121.00");
-  await entryForm.getByLabel("Cuenta debe").selectOption({ label: "572000001 - Banco E2E" });
-  await entryForm.getByLabel("Cuenta haber").selectOption({ label: "700000001 - Ventas E2E" });
+  await entryForm.getByLabel("Cuenta debe").selectOption({ label: "100000000 - Capital social" });
+  await entryForm.getByLabel("Cuenta haber").selectOption({ label: "112000000 - Reserva legal" });
   await page.getByRole("button", { name: "Crear asiento" }).click();
 
   await expect(page.getByText("Asiento creado.")).toBeVisible();
@@ -631,7 +662,7 @@ test("creates accounting accounts and a manual journal entry from the UI", async
     where: { eventType: "ACCOUNTING_JOURNAL_ENTRY_CREATED" }
   });
 
-  expect(accountCount).toBe(2);
+  expect(accountCount).toBe(792);
   expect(entry.totalDebit.toFixed(2)).toBe("121.00");
   expect(entry.totalCredit.toFixed(2)).toBe("121.00");
   expect(entry.lines).toHaveLength(2);
@@ -641,6 +672,7 @@ test("creates accounting accounts and a manual journal entry from the UI", async
 
 test("creates a customer remittance draft from the UI", async ({ page }) => {
   await initializeAndLoginAdmin(page, "e2e-remittance-ui-setup");
+  await initializeAccountingForAdmin(page);
   await createIssuedDirectDebitInvoiceForAdmin();
 
   await page.getByRole("link", { name: "Tesoreria" }).click();
@@ -727,6 +759,62 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
   expect(closedAuditCount).toBe(1);
   expect(returnedAuditCount).toBe(1);
   expect(viewedAuditCount).toBeGreaterThanOrEqual(1);
+});
+
+test("imports Norma 43, reconciles a payment, and undoes it from the UI", async ({ page }) => {
+  test.setTimeout(60000);
+  await initializeAndLoginAdmin(page, "e2e-bank-reconciliation-setup");
+  const invoice = await createIssuedInvoiceForAdmin();
+  const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({ where: { invoiceId: invoice.id } });
+  const admin = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: userName } });
+  const payment = await prisma.customerPayment.create({
+    data: {
+      invoiceId: invoice.id,
+      dueDateId: dueDate.id,
+      paymentDate: new Date("2026-07-16T00:00:00.000Z"),
+      amount: "121.00",
+      reference: "Transferencia F2600001",
+      createdById: admin.id
+    }
+  });
+
+  await page.goto("/app/treasury/banking");
+  await expect(page.getByRole("heading", { name: "Conciliacion bancaria" })).toBeVisible();
+  const accountForm = page.getByRole("group", { name: "Nueva cuenta bancaria" });
+  await accountForm.getByLabel("Nombre").fill("Banco E2E");
+  await accountForm.getByLabel("IBAN").fill("ES9121000418450200051332");
+  await page.getByRole("button", { name: "Crear cuenta" }).click();
+  await expect(page.getByText("Operacion completada.")).toBeVisible();
+
+  await page.goto("/app/treasury/banking/import");
+  await page.getByLabel("Fichero AEB43").setInputFiles({
+    name: "extracto-e2e.n43",
+    mimeType: "text/plain",
+    buffer: Buffer.from(validNorma43E2E(), "latin1")
+  });
+  await page.getByRole("button", { name: "Validar vista previa" }).click();
+  await expect(page.getByText("Vista previa validada.")).toBeVisible();
+  await expect(page.getByText(/2026-07-01 a 2026-07-31/)).toBeVisible();
+  await page.getByRole("button", { name: "Confirmar importacion" }).click();
+  await expect(page.getByText("Extracto importado.")).toBeVisible();
+
+  await page.goto("/app/treasury/banking");
+  const movementRow = page.getByRole("row").filter({ hasText: "F2600001" });
+  await expect(movementRow).toContainText("Pendiente");
+  await movementRow.getByRole("link", { name: "Conciliar" }).click();
+  const reconciliationForm = page.getByRole("group", { name: "Conciliar movimiento" });
+  await reconciliationForm.getByLabel("Propuesta o cobro manual").selectOption({
+    label: "95 puntos · F2600001 · Cliente Facturacion E2E SL · disponible 121.00 EUR"
+  });
+  await expect(reconciliationForm.getByLabel("Importe")).toHaveValue("121.00");
+  await page.getByRole("button", { name: "Confirmar conciliacion" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "F2600001" })).toContainText("Conciliado");
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("row").filter({ hasText: "F2600001" }).getByRole("button", { name: "Deshacer" }).click();
+  await expect(page.getByRole("row").filter({ hasText: "F2600001" })).toContainText("Pendiente");
+  expect(await prisma.bankReconciliation.count({ where: { status: "UNDONE" } })).toBe(1);
+  expect(await prisma.bankReconciliationApplication.count({ where: { customerPaymentId: payment.id } })).toBe(1);
 });
 
 async function createLimitedUser(page: import("@playwright/test").Page): Promise<void> {
@@ -884,6 +972,10 @@ async function createAuthenticatedResource(
   expect(response.status).toBe(201);
 }
 
+async function initializeAccountingForAdmin(page: import("@playwright/test").Page): Promise<void> {
+  await createAuthenticatedResource(page, "/api/accounting/fiscal-years", { year: 2026 });
+}
+
 async function createIssuedInvoiceForAdmin() {
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: userName }
@@ -893,7 +985,7 @@ async function createIssuedInvoiceForAdmin() {
   });
   const customer = await prisma.customer.create({
     data: {
-      code: "C-E2E-BILL",
+      code: "900001",
       type: "COMPANY",
       legalName: "Cliente Facturacion E2E SL",
       tradeName: "Cliente Facturacion E2E",
@@ -912,6 +1004,22 @@ async function createIssuedInvoiceForAdmin() {
       createdById: admin.id
     }
   });
+
+  const fiscalYear = await prisma.accountingFiscalYear.findFirst({ where: { status: "OPEN" } });
+  if (fiscalYear) {
+    await prisma.accountingAccount.create({
+      data: {
+        fiscalYearId: fiscalYear.id,
+        code: "430900001",
+        name: "Cliente Facturacion E2E SL",
+        status: "ACTIVE",
+        type: "ACTIVO",
+        level: 9,
+        isPostable: true,
+        createdById: admin.id
+      }
+    });
+  }
 
   return prisma.invoice.create({
     data: {
@@ -992,7 +1100,7 @@ async function createIssuedDirectDebitInvoiceForAdmin() {
   });
   const customer = await prisma.customer.create({
     data: {
-      code: "C-E2E-REMIT",
+      code: "900003",
       type: "COMPANY",
       legalName: "Cliente Remesa E2E SL",
       tradeName: "Cliente Remesa E2E",
@@ -1018,6 +1126,20 @@ async function createIssuedDirectDebitInvoiceForAdmin() {
           createdById: admin.id
         }
       }
+    }
+  });
+
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { status: "OPEN" } });
+  await prisma.accountingAccount.create({
+    data: {
+      fiscalYearId: fiscalYear.id,
+      code: "430900003",
+      name: "Cliente Remesa E2E SL",
+      status: "ACTIVE",
+      type: "ACTIVO",
+      level: 9,
+      isPostable: true,
+      createdById: admin.id
     }
   });
 
@@ -1087,9 +1209,20 @@ async function createVerifiedBackupForAdmin() {
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await assertDisposableTestDatabase();
+  await prisma.$executeRaw`TRUNCATE TABLE "verifactu_mtls_credential_test_attempts", "verifactu_submission_attempts", "verifactu_outbox_messages", "verifactu_fiscal_records", "verifactu_sif_installations", "verifactu_mtls_credential_versions", "verifactu_mtls_credentials" CASCADE`;
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
+
+    prisma.bankReconciliationApplication.deleteMany(),
+    prisma.bankReconciliation.deleteMany(),
+    prisma.bankMovement.deleteMany(),
+    prisma.bankStatement.deleteMany(),
+    prisma.bankAccount.deleteMany(),
+
+    prisma.accountingJournalLine.deleteMany(),
+    prisma.accountingJournalEntry.deleteMany(),
 
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
@@ -1115,9 +1248,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.customer.deleteMany(),
     prisma.catalogItem.deleteMany(),
 
-    prisma.accountingJournalLine.deleteMany(),
-    prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
 
     prisma.user.deleteMany(),
@@ -1126,4 +1258,14 @@ async function resetPlatformTables(): Promise<void> {
     prisma.role.deleteMany(),
     prisma.company.deleteMany()
   ]);
+}
+
+function validNorma43E2E(): string {
+  const account = "210004180200051332";
+  const header = `11${account}260701260731H000000001000009781${"CRIGESTION".padEnd(26)}   `;
+  const movement = `22${" ".repeat(8)}260715260715040012${"12100".padStart(14, "0")}${"1".padStart(10, "0")}${"0".repeat(12)}${"F2600001".padEnd(16)}`;
+  const concept = `2301${"TRANSFERENCIA CLIENTE".padEnd(38)}${"FACTURA F2600001".padEnd(38)}`;
+  const end = `33${account}00000${"0".repeat(14)}00001${"12100".padStart(14, "0")}H${"112100".padStart(14, "0")}978${" ".repeat(4)}`;
+  const fileEnd = `88${"9".repeat(18)}${"4".padStart(6, "0")}${" ".repeat(54)}`;
+  return [header, movement, concept, end, fileEnd].join("\r\n");
 }

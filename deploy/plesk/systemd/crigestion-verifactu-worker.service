@@ -1,0 +1,41 @@
+[Unit]
+Description=CriGestion VeriFactu worker
+After=network-online.target crigestion-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crigestion-verifactu
+Group=crigestion-verifactu
+WorkingDirectory=/opt/crigestion/current
+EnvironmentFile=/etc/crigestion/verifactu-worker.env
+Environment=NODE_ENV=production
+Environment=TMPDIR=/var/lib/crigestion-verifactu
+StateDirectory=crigestion-verifactu
+StateDirectoryMode=0700
+ExecStartPre=/usr/bin/test -r /etc/crigestion/verifactu-worker.env
+ExecStart=/usr/bin/node --conditions=react-server --import tsx scripts/run-verifactu-worker.ts
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=60s
+TimeoutStopSec=90s
+KillSignal=SIGTERM
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+# This unit must not be enabled until the production authorization checklist is complete.
+
+[Install]
+WantedBy=multi-user.target

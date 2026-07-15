@@ -8,6 +8,10 @@ La rebanada inicial implementa:
 
 `PLT-CU-001 - Inicializar el sistema`
 
+Estado: completada. Este backlog se conserva como trazabilidad de la primera
+rebanada. El avance posterior se resume en
+[Estado de implementacion](09-estado-implementacion.md).
+
 ## 2. Objetivo
 
 Al terminar esta rebanada:

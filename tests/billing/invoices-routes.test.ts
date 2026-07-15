@@ -12,20 +12,26 @@ import { POST as invoiceIssuePost } from "@/app/api/invoices/[invoiceId]/issue/r
 import { POST as invoiceRectificationPost } from "@/app/api/invoices/[invoiceId]/rectifications/route";
 import { POST as invoicePaymentReturnPost } from "@/app/api/invoices/[invoiceId]/payment-returns/route";
 import { POST as invoicePaymentPost } from "@/app/api/invoices/[invoiceId]/payments/route";
+import { POST as invoiceTechnicalVoidingPost } from "@/app/api/invoices/[invoiceId]/technical-voiding/route";
 import { POST as invoiceUnpaidDueDatePost } from "@/app/api/invoices/[invoiceId]/unpaid-due-dates/route";
 import { GET as invoicePdfGet } from "@/app/api/invoices/[invoiceId]/pdf/route";
+import { POST as invoiceVerifactuCancellationPost } from "@/app/api/invoices/[invoiceId]/verifactu-cancellation/route";
 import { GET as customerDueDatesGet } from "@/app/api/treasury/customer-due-dates/route";
 import { GET as customerDueDatesExportGet } from "@/app/api/treasury/customer-due-dates/export/route";
 import { GET as customerCollectionForecastGet } from "@/app/api/treasury/customer-collection-forecast/route";
 import { GET as customerCollectionForecastExportGet } from "@/app/api/treasury/customer-collection-forecast/export/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
+import { hashVerifactuCancellationBody } from "@/modules/billing/application/verifactuCancellations";
+import { hashInvoiceTechnicalVoidingBody } from "@/modules/billing/application/invoiceTechnicalVoiding";
+import { idempotencyStorageKey } from "@/modules/platform/application/http";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { assertDisposableTestDatabase } from "@/tests/helpers/disposableTestDatabase";
 
 type CookieSetOptions = {
   httpOnly?: boolean;
@@ -373,6 +379,10 @@ describe("billing invoice HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const issued = await createIssuedInvoice(csrfToken);
+    await prisma.invoice.update({
+      where: { id: issued.id },
+      data: { verifactuStatus: "NOT_APPLICABLE" }
+    });
 
     const response = await invoiceRectificationPost(
       jsonRequest(
@@ -418,6 +428,27 @@ describe("billing invoice HTTP contracts", () => {
       reason: "AMOUNT_ERROR"
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
+  });
+
+  it("fails closed when rectifying an invoice integrated with VeriFactu", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+
+    const response = await invoiceRectificationPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/rectifications`,
+        { issueDate: "2026-07-08", reason: "AMOUNT_ERROR" },
+        { csrfToken }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: "INVOICE_RECTIFICATION_VERIFACTU_UNAVAILABLE"
+    });
+    expect(await prisma.invoice.count({ where: { rectifiesInvoiceId: issued.id } })).toBe(0);
   });
 
   it("protects invoice rectification creation with CSRF, idempotency and permissions", async () => {
@@ -577,6 +608,119 @@ describe("billing invoice HTTP contracts", () => {
     ]);
   });
 
+  it("returns an authenticated VeriFactu cancellation replay during maintenance without a new mutation", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const admin = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: "admin" }, select: { id: true } });
+    const invoiceId = randomUUID();
+    const clientKey = randomUUID();
+    const payload = { reasonCode: "ISSUED_BY_MISTAKE" as const };
+    const responseBody = { invoiceId, cancelledRecordId: randomUUID(), cancellationRecordId: randomUUID(),
+      chainPosition: "2", status: "PENDING" };
+    const storageKey = idempotencyStorageKey(admin.id, "verifactu-cancellation", invoiceId, clientKey);
+    await prisma.idempotencyRecord.create({ data: {
+      key: storageKey, requestHash: hashVerifactuCancellationBody(payload), responseStatus: 202, responseBody
+    } });
+    await enableMaintenance();
+
+    const response = await invoiceVerifactuCancellationPost(
+      jsonRequest(`/api/invoices/${invoiceId}/verifactu-cancellation`, payload, { csrfToken, idempotencyKey: clientKey }),
+      routeContext({ invoiceId })
+    );
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual(responseBody);
+    expect(await prisma.idempotencyRecord.count({ where: { key: storageKey } })).toBe(1);
+    expect(await prisma.rateLimitBucket.count({ where: { key: `verifactu-cancellation:${admin.id}` } })).toBe(0);
+    expect(await prisma.auditEvent.count({ where: { eventType: "MAINTENANCE_MUTATION_BLOCKED" } })).toBe(0);
+
+    const reused = await invoiceVerifactuCancellationPost(
+      jsonRequest(`/api/invoices/${invoiceId}/verifactu-cancellation`, { reasonCode: "DUPLICATE_INVOICE" },
+        { csrfToken, idempotencyKey: clientKey }),
+      routeContext({ invoiceId })
+    );
+    expect(reused.status).toBe(409);
+    expect(await reused.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+  });
+
+  it("protects and validates the technical voiding contract", async () => {
+    const invoiceId = randomUUID();
+    const payload = {
+      voidDate: "2026-07-14",
+      reasonCode: "ISSUED_BY_MISTAKE",
+      confirmation: "VOID_AFTER_ACCEPTED_VERIFACTU_CANCELLATION"
+    };
+
+    await createLimitedUserWithoutBilling();
+    await loginWith("auditor", limitedPassword);
+    const limitedCsrf = await getCsrfToken();
+    const forbidden = await invoiceTechnicalVoidingPost(
+      jsonRequest(`/api/invoices/${invoiceId}/technical-voiding`, payload, { csrfToken: limitedCsrf }),
+      routeContext({ invoiceId })
+    );
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+
+    cookieMock.reset();
+    await loginAsAdmin();
+    const adminCsrf = await getCsrfToken();
+    const missingIdempotency = await invoiceTechnicalVoidingPost(
+      jsonRequest(`/api/invoices/${invoiceId}/technical-voiding`, payload, {
+        csrfToken: adminCsrf,
+        idempotencyKey: null
+      }),
+      routeContext({ invoiceId })
+    );
+    expect(missingIdempotency.status).toBe(400);
+    expect(await missingIdempotency.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REQUIRED" });
+
+    const invalidConfirmation = await invoiceTechnicalVoidingPost(
+      jsonRequest(`/api/invoices/${invoiceId}/technical-voiding`, { ...payload, confirmation: "VOID" }, {
+        csrfToken: adminCsrf
+      }),
+      routeContext({ invoiceId })
+    );
+    expect(invalidConfirmation.status).toBe(422);
+    expect(await invalidConfirmation.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("returns a technical voiding replay during maintenance without consuming rate limit", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const admin = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: "admin" }, select: { id: true } });
+    const invoiceId = randomUUID();
+    const clientKey = randomUUID();
+    const payload = {
+      voidDate: "2026-07-14",
+      reasonCode: "ISSUED_BY_MISTAKE" as const,
+      confirmation: "VOID_AFTER_ACCEPTED_VERIFACTU_CANCELLATION" as const
+    };
+    const responseBody = {
+      invoiceId,
+      status: "VOIDED",
+      paymentStatus: "CANCELLED",
+      cancellationRecordId: randomUUID(),
+      reversalEntry: { id: randomUUID(), number: "2026/000002" }
+    };
+    const storageKey = idempotencyStorageKey(admin.id, "invoice-technical-voiding", invoiceId, clientKey);
+    await prisma.idempotencyRecord.create({ data: {
+      key: storageKey,
+      requestHash: hashInvoiceTechnicalVoidingBody(payload),
+      responseStatus: 201,
+      responseBody
+    } });
+    await enableMaintenance();
+
+    const response = await invoiceTechnicalVoidingPost(
+      jsonRequest(`/api/invoices/${invoiceId}/technical-voiding`, payload, { csrfToken, idempotencyKey: clientKey }),
+      routeContext({ invoiceId })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(responseBody);
+    expect(await prisma.rateLimitBucket.count({ where: { key: `invoice-technical-voiding:${admin.id}` } })).toBe(0);
+    expect(await prisma.auditEvent.count({ where: { eventType: "MAINTENANCE_MUTATION_BLOCKED" } })).toBe(0);
+  });
+
   it("returns functional errors for invalid invoice operations", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -653,6 +797,10 @@ describe("billing invoice HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const issued = await createIssuedInvoice(csrfToken);
+    await prisma.invoice.update({
+      where: { id: issued.id },
+      data: { verifactuStatus: "NOT_APPLICABLE" }
+    });
 
     const response = await invoicePdfGet(
       apiRequest(`/api/invoices/${issued.id}/pdf`),
@@ -675,6 +823,25 @@ describe("billing invoice HTTP contracts", () => {
       number: "F2600001"
     });
     expect(JSON.stringify(auditEvent.payload)).not.toContain(adminPassword);
+  });
+
+  it("embeds the persisted VeriFactu URL as a real monochrome QR in the invoice PDF", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const issued = await createIssuedInvoice(csrfToken);
+    const qrUrl = "https://prewww2.aeat.es/wlpl/TIKE-CONT/ValidarQR?nif=B12345678&numserie=F2600001&fecha=07-07-2026&importe=121.00";
+    await attachVerifactuQr(issued.id, qrUrl);
+
+    const response = await invoicePdfGet(
+      apiRequest(`/api/invoices/${issued.id}/pdf`),
+      routeContext({ invoiceId: issued.id })
+    );
+    const pdf = Buffer.from(await response.arrayBuffer()).toString("binary");
+
+    expect(response.status).toBe(200);
+    expect(pdf).toContain("(Factura verificable en la sede electronica de la AEAT)");
+    expect(pdf).not.toContain("(QR)");
+    expect(pdf).toContain("/ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate false");
   });
 
   it("registers customer payments through the invoice contract", async () => {
@@ -779,27 +946,51 @@ describe("billing invoice HTTP contracts", () => {
       throw new Error("Missing payment.");
     }
 
+    const returnIdempotencyKey = randomUUID();
+    const returnPayload = {
+      paymentId,
+      returnDate: "2026-07-12",
+      amount: "21.00",
+      reasonCode: "BANK_RETURN",
+      notes: "No auditar devolucion completa"
+    };
     const returnResponse = await invoicePaymentReturnPost(
       jsonRequest(
         `/api/invoices/${issued.id}/payment-returns`,
-        {
-          paymentId,
-          returnDate: "2026-07-12",
-          amount: "21.00",
-          reasonCode: "BANK_RETURN",
-          notes: "No auditar devolucion completa"
-        },
-        { csrfToken }
+        returnPayload,
+        { csrfToken, idempotencyKey: returnIdempotencyKey }
       ),
       routeContext({ invoiceId: issued.id })
     );
     const body = await returnResponse.json();
+    const replayResponse = await invoicePaymentReturnPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payment-returns`,
+        returnPayload,
+        { csrfToken, idempotencyKey: returnIdempotencyKey }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
+    const replayed = await replayResponse.json();
+    const reusedResponse = await invoicePaymentReturnPost(
+      jsonRequest(
+        `/api/invoices/${issued.id}/payment-returns`,
+        { ...returnPayload, amount: "20.00" },
+        { csrfToken, idempotencyKey: returnIdempotencyKey }
+      ),
+      routeContext({ invoiceId: issued.id })
+    );
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "CUSTOMER_PAYMENT_RETURNED" },
       orderBy: { createdAt: "asc" }
     });
 
     expect(returnResponse.status).toBe(201);
+    expect(replayResponse.status).toBe(201);
+    expect(replayed).toEqual(body);
+    expect(reusedResponse.status).toBe(409);
+    expect(await reusedResponse.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+    expect(await prisma.customerPaymentReturn.count({ where: { paymentId } })).toBe(1);
     expect(body).toMatchObject({
       paymentStatus: "PARTIALLY_PAID",
       dueDates: [
@@ -1044,7 +1235,7 @@ describe("billing invoice HTTP contracts", () => {
     expect(csv).toContain(
       '"vencimiento","fecha_emision","factura","serie","ejercicio","cliente_codigo","cliente_nombre"'
     );
-    expect(csv).toContain('"121.00","100.00","21.00","21.00"');
+    expect(csv).toContain('"121.00","100.00","0.00","21.00","21.00"');
     expect(auditEvent.payload).toMatchObject({
       scope: "OPEN",
       limit: 25,
@@ -1643,6 +1834,8 @@ async function initializeForRoutes(): Promise<void> {
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await assertDisposableTestDatabase();
+  await prisma.$executeRaw`TRUNCATE TABLE "verifactu_worker_runs", "verifactu_submission_attempts", "verifactu_outbox_messages", "verifactu_fiscal_records", "verifactu_sif_installations", "verifactu_mtls_credential_versions", "verifactu_mtls_credentials" CASCADE`;
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
@@ -1684,4 +1877,56 @@ async function resetPlatformTables(): Promise<void> {
     prisma.role.deleteMany(),
     prisma.company.deleteMany()
   ]);
+}
+
+async function attachVerifactuQr(invoiceId: string, qrUrl: string): Promise<void> {
+  const installation = await prisma.installation.findUniqueOrThrow({
+    where: { singletonKey: 1 },
+    select: { companyId: true }
+  });
+  if (!installation.companyId) throw new Error("COMPANY_NOT_AVAILABLE");
+  const sif = await prisma.verifactuSifInstallation.create({
+    data: {
+      companyId: installation.companyId,
+      installationCode: "PDF-TEST-SIF",
+      environment: "TEST",
+      contractVersion: "VF_V1",
+      schemaVersion: "tikeV1.0",
+      artifactManifestVersion: "AEAT_VERIFACTU_ARTIFACTS_V1",
+      artifactManifestSha256: "a".repeat(64),
+      producerTaxId: "B12345678",
+      producerName: "CriGestion Test SL",
+      systemName: "CriGestion",
+      systemId: "CG",
+      systemVersion: "0.1.0",
+      installationNumber: "PDF-TEST-1",
+      activatedAt: new Date("2026-07-07T09:00:00.000Z")
+    }
+  });
+  await prisma.verifactuFiscalRecord.create({
+    data: {
+      companyId: installation.companyId,
+      sifInstallationId: sif.id,
+      invoiceId,
+      recordType: "ALTA",
+      chainPosition: 1n,
+      issuerTaxId: "B12345678",
+      issuerName: "CriGestion Test SL",
+      invoiceSeries: "F",
+      invoiceNumber: "F2600001",
+      invoiceIssueDate: new Date("2026-07-07T00:00:00.000Z"),
+      generatedAt: new Date("2026-07-07T09:00:00.000Z"),
+      contractVersion: "VF_V1",
+      schemaVersion: "tikeV1.0",
+      canonicalizationVersion: "AEAT_HASH_0.1.2",
+      recordHash: "A".repeat(64),
+      fiscalSnapshot: { recordType: "ALTA", fixture: "PDF_QR" },
+      payloadCiphertext: Buffer.from("encrypted-pdf-fixture"),
+      encryptionKeyId: "pdf-test-key",
+      payloadSha256: "b".repeat(64),
+      qrUrl,
+      preparationKey: `pdf-qr:${randomUUID()}`
+    }
+  });
+  await prisma.invoice.update({ where: { id: invoiceId }, data: { verifactuStatus: "ACCEPTED" } });
 }

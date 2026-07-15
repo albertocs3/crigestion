@@ -1,0 +1,39 @@
+[Unit]
+Description=CriGestion web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=crigestion
+Group=crigestion
+WorkingDirectory=/opt/crigestion/current
+EnvironmentFile=/etc/crigestion/app.env
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3100
+ExecStartPre=/usr/bin/test -f /opt/crigestion/current/.next/BUILD_ID
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3100
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=60s
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+UMask=0027
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/cache/crigestion
+
+[Install]
+WantedBy=multi-user.target

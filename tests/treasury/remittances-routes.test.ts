@@ -17,12 +17,21 @@ import { POST as remittanceRejectPost } from "@/app/api/treasury/customer-remitt
 import { POST as remittanceSettleBankResponsePost } from "@/app/api/treasury/customer-remittances/[remittanceId]/settle-bank-response/route";
 import { GET as remittanceSepaFileGet } from "@/app/api/treasury/customer-remittances/[remittanceId]/sepa-file/route";
 import { GET as remittancesExportGet } from "@/app/api/treasury/customer-remittances/export/route";
+import { GET as bankAccountsGet, POST as bankAccountsPost } from "@/app/api/treasury/bank-accounts/route";
+import { GET as bankMovementsGet, POST as bankMovementsPost } from "@/app/api/treasury/bank-movements/route";
+import { POST as norma43PreviewPost } from "@/app/api/treasury/bank-statements/preview/route";
+import { POST as norma43ImportPost } from "@/app/api/treasury/bank-statements/route";
+import { POST as bankReconciliationsPost } from "@/app/api/treasury/bank-reconciliations/route";
+import { POST as bankReconciliationUndoPost } from "@/app/api/treasury/bank-reconciliations/[reconciliationId]/undo/route";
+import { GET as reconciliationCandidatesGet } from "@/app/api/treasury/reconciliation-candidates/route";
+import { GET as reconciliationProposalsGet } from "@/app/api/treasury/reconciliation-proposals/route";
 import { prisma } from "@/lib/prisma";
 import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { createTestAccountingFiscalYear } from "@/tests/helpers/accountingFiscalYear";
 
 type CookieSetOptions = {
   httpOnly?: boolean;
@@ -153,6 +162,124 @@ describe("customer remittance HTTP contracts", () => {
     });
   });
 
+  it("creates and lists masked bank accounts and movements through protected contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const accountResponse = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", { name: "Cuenta operativa", iban: "ES9121000418450200051332", currency: "EUR" }, { csrfToken }));
+    const account = await accountResponse.json();
+    const movementResponse = await bankMovementsPost(jsonRequest("/api/treasury/bank-movements", { bankAccountId: account.id, bookingDate: "2026-07-17", amount: "121.00", currency: "EUR", reference: "Factura F2600001" }, { csrfToken }));
+    const movement = await movementResponse.json();
+    const accountsResponse = await bankAccountsGet(apiRequest("/api/treasury/bank-accounts"));
+    const accounts = await accountsResponse.json();
+    const movementsResponse = await bankMovementsGet(apiRequest("/api/treasury/bank-movements?status=PENDING"));
+    const movements = await movementsResponse.json();
+    const proposalsResponse = await reconciliationProposalsGet(apiRequest(`/api/treasury/reconciliation-proposals?movementId=${movement.id}&limit=10`));
+    const proposals = await proposalsResponse.json();
+    expect(accountResponse.status).toBe(201);
+    expect(account).toMatchObject({ name: "Cuenta operativa", maskedIban: "ES91 **** **** 1332" });
+    expect(JSON.stringify(account)).not.toContain("ES9121000418450200051332");
+    expect(movementResponse.status).toBe(201);
+    expect(accounts.bankAccounts).toHaveLength(1);
+    expect(movements.bankMovements[0]).toMatchObject({ amount: "121.00", pendingAmount: "121.00", status: "PENDING" });
+    expect(proposalsResponse.status).toBe(200);
+    expect(proposals).toMatchObject({ movement: { id: movement.id }, proposals: [] });
+    expect(await prisma.auditEvent.count({ where: { eventType: "BANK_RECONCILIATION_PROPOSALS_VIEWED" } })).toBe(1);
+  });
+
+  it("protects banking reads and mutations", async () => {
+    const unauthenticated = await bankAccountsGet(apiRequest("/api/treasury/bank-accounts"));
+    const unauthenticatedProposals = await reconciliationProposalsGet(apiRequest(`/api/treasury/reconciliation-proposals?movementId=${randomUUID()}`));
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const missingIdempotency = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", { name: "Cuenta", iban: "ES9121000418450200051332", currency: "EUR" }, { csrfToken, idempotencyKey: null }));
+    const missingCsrf = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", { name: "Cuenta", iban: "ES9121000418450200051332", currency: "EUR" }, { csrfToken: null }));
+    const invalidIban = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", { name: "Cuenta", iban: "ES0012345678901234567890", currency: "EUR" }, { csrfToken }));
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticatedProposals.status).toBe(401);
+    expect(missingIdempotency.status).toBe(400);
+    expect(await missingIdempotency.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REQUIRED" });
+    expect(missingCsrf.status).toBe(403);
+    expect(invalidIban.status).toBe(422);
+  });
+
+  it("previews and imports Norma 43 through protected contracts", async () => {
+    await loginAsAdmin(); const csrfToken = await getCsrfToken();
+    const accountResponse = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", { name: "Norma 43", iban: "ES9121000418450200051332", currency: "EUR" }, { csrfToken }));
+    const account = await accountResponse.json();
+    const body = { bankAccountId: account.id, contentBase64: Buffer.from(validNorma43RouteFixture(), "latin1").toString("base64") };
+    const previewResponse = await norma43PreviewPost(jsonRequest("/api/treasury/bank-statements/preview", body, { csrfToken }));
+    const preview = await previewResponse.json();
+    const importResponse = await norma43ImportPost(jsonRequest("/api/treasury/bank-statements", body, { csrfToken, idempotencyKey: "n43-import-key" }));
+    const imported = await importResponse.json();
+    const replayResponse = await norma43ImportPost(jsonRequest("/api/treasury/bank-statements", body, { csrfToken, idempotencyKey: "n43-import-key" }));
+    const duplicateResponse = await norma43ImportPost(jsonRequest("/api/treasury/bank-statements", body, { csrfToken, idempotencyKey: "different-n43-key" }));
+    expect(previewResponse.status).toBe(200);
+    expect(preview).toMatchObject({ maskedIban: "ES91 **** **** 1332", duplicate: false, overlap: false });
+    expect(JSON.stringify(preview)).not.toContain("ES9121000418450200051332");
+    expect(importResponse.status).toBe(201);
+    expect(imported).toMatchObject({ movementCount: 1 });
+    expect(replayResponse.status).toBe(201);
+    expect(await replayResponse.json()).toEqual(imported);
+    expect(duplicateResponse.status).toBe(409);
+    expect(await duplicateResponse.json()).toMatchObject({ code: "BANK_STATEMENT_DUPLICATE" });
+    expect(await prisma.bankStatement.count()).toBe(1);
+  });
+
+  it("reconciles and undoes a customer payment through protected contracts", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const dueDate = await createIssuedDirectDebitDueDate();
+    const remittanceResponse = await remittancesPost(jsonRequest("/api/treasury/customer-remittances", {
+      chargeDate: "2026-07-15",
+      concept: "Cobro para conciliar",
+      dueDateIds: [dueDate.id]
+    }, { csrfToken }));
+    const remittance = await remittanceResponse.json();
+    const processResponse = await remittanceProcessPost(
+      jsonRequest(`/api/treasury/customer-remittances/${remittance.id}/process`, { paymentDate: "2026-07-16" }, { csrfToken }),
+      { params: Promise.resolve({ remittanceId: remittance.id }) }
+    );
+    expect(processResponse.status).toBe(200);
+    const payment = await prisma.customerPayment.findFirstOrThrow({ where: { dueDateId: dueDate.id } });
+
+    const accountResponse = await bankAccountsPost(jsonRequest("/api/treasury/bank-accounts", {
+      name: "Cuenta conciliacion",
+      iban: "ES9121000418450200051332",
+      currency: "EUR"
+    }, { csrfToken }));
+    const account = await accountResponse.json();
+    const movementResponse = await bankMovementsPost(jsonRequest("/api/treasury/bank-movements", {
+      bankAccountId: account.id,
+      bookingDate: "2026-07-17",
+      amount: "121.00",
+      currency: "EUR",
+      reference: "Cobro de cliente"
+    }, { csrfToken }));
+    const movement = await movementResponse.json();
+
+    const candidatesResponse = await reconciliationCandidatesGet(apiRequest(`/api/treasury/reconciliation-candidates?movementId=${movement.id}`));
+    const candidates = await candidatesResponse.json();
+    expect(candidatesResponse.status).toBe(200);
+    expect(candidates.candidates[0]).toMatchObject({ paymentId: payment.id, availableAmount: "121.00" });
+
+    const reconciliationResponse = await bankReconciliationsPost(jsonRequest("/api/treasury/bank-reconciliations", {
+      bankMovementId: movement.id,
+      applications: [{ customerPaymentId: payment.id, amount: "121.00" }]
+    }, { csrfToken }));
+    const reconciled = await reconciliationResponse.json();
+    expect(reconciliationResponse.status).toBe(201);
+    expect(reconciled).toMatchObject({ status: "RECONCILED", pendingAmount: "0.00", reconciledAmount: "121.00" });
+
+    const reconciliationId = reconciled.activeReconciliations[0].id;
+    const undoResponse = await bankReconciliationUndoPost(
+      jsonRequest(`/api/treasury/bank-reconciliations/${reconciliationId}/undo`, {}, { csrfToken }),
+      { params: Promise.resolve({ reconciliationId }) }
+    );
+    expect(undoResponse.status).toBe(200);
+    expect(await undoResponse.json()).toMatchObject({ status: "PENDING", pendingAmount: "121.00", reconciledAmount: "0.00" });
+    expect(await prisma.auditEvent.count({ where: { eventType: { in: ["BANK_RECONCILIATION_CREATED", "BANK_RECONCILIATION_UNDONE"] } } })).toBe(2);
+  });
+
   it("cancels draft remittances through the action contract", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
@@ -215,15 +342,33 @@ describe("customer remittance HTTP contracts", () => {
       )
     );
     const created = await createResponse.json();
+    const processIdempotencyKey = randomUUID();
     const processResponse = await remittanceProcessPost(
       jsonRequest(
         `/api/treasury/customer-remittances/${created.id}/process`,
         { paymentDate: "2026-07-16" },
-        { csrfToken }
+        { csrfToken, idempotencyKey: processIdempotencyKey }
       ),
       { params: Promise.resolve({ remittanceId: created.id }) }
     );
     const processed = await processResponse.json();
+    const replayResponse = await remittanceProcessPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/process`,
+        { paymentDate: "2026-07-16" },
+        { csrfToken, idempotencyKey: processIdempotencyKey }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const replayed = await replayResponse.json();
+    const reusedResponse = await remittanceProcessPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/process`,
+        { paymentDate: "2026-07-17" },
+        { csrfToken, idempotencyKey: processIdempotencyKey }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
     const payment = await prisma.customerPayment.findFirstOrThrow({
       where: {
         dueDateId: dueDate.id,
@@ -247,7 +392,15 @@ describe("customer remittance HTTP contracts", () => {
       id: created.id,
       status: "PROCESSED"
     });
+    expect(replayResponse.status).toBe(200);
+    expect(replayed).toEqual(processed);
+    expect(reusedResponse.status).toBe(409);
+    expect(await reusedResponse.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
     expect(payment.amount.toFixed(2)).toBe("121.00");
+    expect(await prisma.customerPayment.count({ where: { dueDateId: dueDate.id } })).toBe(1);
+    expect(await prisma.accountingJournalEntry.count({
+      where: { customerPaymentId: payment.id }
+    })).toBe(1);
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"
@@ -582,7 +735,7 @@ describe("customer remittance HTTP contracts", () => {
     await configureCompanySepa();
     const paidDueDate = await createIssuedDirectDebitDueDate();
     const rejectedDueDate = await createIssuedDirectDebitDueDate({
-      customerCode: "C-REMIT-ROUTE-2",
+      customerCode: "600002",
       legalName: "Cliente Remesa Route 2 SL",
       mandateReference: "MANDATO-ROUTE-002",
       invoiceNumber: "F2600002",
@@ -692,7 +845,7 @@ describe("customer remittance HTTP contracts", () => {
     await configureCompanySepa();
     const paidDueDate = await createIssuedDirectDebitDueDate();
     const rejectedDueDate = await createIssuedDirectDebitDueDate({
-      customerCode: "C-REMIT-CSV-2",
+      customerCode: "600002",
       legalName: "Cliente Remesa CSV 2 SL",
       mandateReference: "MANDATO-CSV-002",
       invoiceNumber: "F2600002",
@@ -749,6 +902,7 @@ describe("customer remittance HTTP contracts", () => {
       })
       .join("\r\n");
 
+    const importIdempotencyKey = randomUUID();
     const importResponse = await remittanceImportBankResponseCsvPost(
       jsonRequest(
         `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
@@ -756,11 +910,20 @@ describe("customer remittance HTTP contracts", () => {
           paymentDate: "2026-07-16",
           csv: completedTemplate
         },
-        { csrfToken }
+        { csrfToken, idempotencyKey: importIdempotencyKey }
       ),
       { params: Promise.resolve({ remittanceId: created.id }) }
     );
     const imported = await importResponse.json();
+    const importReplayResponse = await remittanceImportBankResponseCsvPost(
+      jsonRequest(
+        `/api/treasury/customer-remittances/${created.id}/import-bank-response-csv`,
+        { paymentDate: "2026-07-16", csv: completedTemplate },
+        { csrfToken, idempotencyKey: importIdempotencyKey }
+      ),
+      { params: Promise.resolve({ remittanceId: created.id }) }
+    );
+    const importReplayed = await importReplayResponse.json();
     const templateAuditCount = await prisma.auditEvent.count({
       where: { eventType: "CUSTOMER_REMITTANCE_BANK_RESPONSE_TEMPLATE_EXPORTED" }
     });
@@ -792,6 +955,8 @@ describe("customer remittance HTTP contracts", () => {
     expect(template).not.toContain("ES9121000418450200051332");
     expect(templateAuditCount).toBe(1);
     expect(importResponse.status).toBe(200);
+    expect(importReplayResponse.status).toBe(200);
+    expect(importReplayed).toEqual(imported);
     expect(imported).toMatchObject({
       id: created.id,
       status: "PARTIALLY_PROCESSED",
@@ -834,10 +999,10 @@ async function createIssuedDirectDebitDueDate(
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: "admin" }
   });
-  const customerCode = overrides.customerCode ?? "C-REMIT-ROUTE";
+  const invoiceNumber = overrides.invoiceNumber ?? "F2600001";
+  const customerCode = overrides.customerCode ?? invoiceNumber.replace(/\D/g, "").slice(-6);
   const legalName = overrides.legalName ?? "Cliente Remesa Route SL";
   const mandateReference = overrides.mandateReference ?? "MANDATO-ROUTE-001";
-  const invoiceNumber = overrides.invoiceNumber ?? "F2600001";
   const taxId = `B${invoiceNumber.slice(-7)}`;
   const customer = await prisma.customer.create({
     data: {
@@ -866,6 +1031,22 @@ async function createIssuedDirectDebitDueDate(
       }
     }
   });
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+    where: { year: 2026 }
+  });
+  if (/^\d{1,6}$/.test(customer.code)) {
+    await prisma.accountingAccount.create({
+      data: {
+        fiscalYearId: fiscalYear.id,
+        code: `430${customer.code.padStart(6, "0")}`,
+        name: customer.legalName,
+        type: "ASSET",
+        level: 9,
+        isPostable: true,
+        createdById: admin.id
+      }
+    });
+  }
   const invoice = await prisma.invoice.create({
     data: {
       status: "ISSUED",
@@ -997,12 +1178,35 @@ async function initializeForRoutes(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+  await createTestAccountingFiscalYear();
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+    where: { year: 2026 }
+  });
+  const installation = await prisma.installation.findFirstOrThrow();
+  await prisma.accountingAccount.createMany({
+    data: ["570000000", "572000000"].map((code) => ({
+      fiscalYearId: fiscalYear.id,
+      code,
+      name: code === "570000000" ? "Caja" : "Bancos",
+      type: "ASSET",
+      level: 9,
+      isPostable: true,
+      createdById: installation.initialAdministratorId!
+    }))
+  });
 }
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
+    prisma.accountingJournalLine.deleteMany(),
+    prisma.accountingJournalEntry.deleteMany(),
+    prisma.bankReconciliationApplication.deleteMany(),
+    prisma.bankReconciliation.deleteMany(),
+    prisma.bankMovement.deleteMany(),
+    prisma.bankStatement.deleteMany(),
+    prisma.bankAccount.deleteMany(),
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
@@ -1028,9 +1232,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.catalogItem.deleteMany(),
     prisma.catalogCategory.deleteMany(),
     prisma.catalogTaxRate.deleteMany(),
-    prisma.accountingJournalLine.deleteMany(),
-    prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),
@@ -1038,4 +1241,15 @@ async function resetPlatformTables(): Promise<void> {
     prisma.role.deleteMany(),
     prisma.company.deleteMany()
   ]);
+}
+
+function validNorma43RouteFixture(): string {
+  const account = "210004180200051332";
+  return [
+    `11${account}260701260731H000000001000009781${"CRIGESTION".padEnd(26)}   `,
+    `22${" ".repeat(8)}260715260715040012${"12100".padStart(14, "0")}${"1".padStart(10, "0")}${"0".repeat(12)}${"F2600001".padEnd(16)}`,
+    `2301${"TRANSFERENCIA CLIENTE".padEnd(38)}${"FACTURA F2600001".padEnd(38)}`,
+    `33${account}00000${"0".repeat(14)}00001${"12100".padStart(14, "0")}H${"112100".padStart(14, "0")}978${" ".repeat(4)}`,
+    `88${"9".repeat(18)}${"4".padStart(6, "0")}${" ".repeat(54)}`
+  ].join("\r\n");
 }

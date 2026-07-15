@@ -21,6 +21,15 @@ export default async function AppHomePage() {
     permissions.includes("Platform.ManageConfiguration")
       ? { href: "/app/configuration", label: "Configuracion" }
       : null,
+    permissions.includes("Billing.ManageVerifactuCredentials")
+      ? { href: "/app/verifactu/credentials", label: "Credenciales VeriFactu" }
+      : null,
+    permissions.includes("Billing.ManageVerifactuInstallations")
+      ? { href: "/app/verifactu/installations", label: "Instalaciones SIF VeriFactu" }
+      : null,
+    permissions.includes("Billing.ViewVerifactuOperations")
+      ? { href: "/app/verifactu/operations", label: "Operaciones VeriFactu" }
+      : null,
     permissions.includes("Platform.ViewAudit")
       ? { href: "/app/audit", label: "Ver auditoria" }
       : null,

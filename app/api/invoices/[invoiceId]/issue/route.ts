@@ -21,6 +21,7 @@ import {
   issueInvoice,
   issueInvoiceSchema
 } from "@/modules/billing/application/invoices";
+import { readConfiguredVerifactuAltaPreparer } from "@/modules/billing/infrastructure/verifactu/configuredPreparer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -99,7 +100,8 @@ export async function POST(
     params.data.invoiceId,
     payload.data,
     authorization.user,
-    { correlationId }
+    { correlationId, idempotencyKey: idempotency.key },
+    { prepareVerifactuAlta: readConfiguredVerifactuAltaPreparer() }
   );
 
   if (!result.ok) {

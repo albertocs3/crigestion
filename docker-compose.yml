@@ -6,7 +6,7 @@ services:
     env_file:
       - .env.docker
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -14,6 +14,73 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  verifactu-worker-test:
+    profiles: ["verifactu-test"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    stop_signal: SIGTERM
+    stop_grace_period: 60s
+    env_file:
+      - ${VERIFACTU_WORKER_ENV_FILE:-.env.worker.local}
+    environment:
+      APP_ENV: test
+      VERIFACTU_ENABLED: "true"
+      VERIFACTU_ENVIRONMENT: test
+      VERIFACTU_WORKER_ENVIRONMENT: TEST
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false"
+      VERIFACTU_WORKER_DEPLOYMENT_ID: docker-test
+      VERIFACTU_WORKER_EXPECTED_DATABASE: ${VERIFACTU_WORKER_EXPECTED_DATABASE:?Set VERIFACTU_WORKER_EXPECTED_DATABASE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      verifactu-migrate-test:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "node", "--conditions=react-server", "--import", "tsx", "scripts/check-verifactu-worker-health.ts"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  verifactu-migrate-test:
+    profiles: ["verifactu-test"]
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      target: migrate
+    restart: "no"
+    environment:
+      APP_ENV: test
+      DATABASE_URL: ${VERIFACTU_MIGRATION_DATABASE_URL:?Set VERIFACTU_MIGRATION_DATABASE_URL}
+      VERIFACTU_MIGRATION_CONFIRM_TEST: "true"
+      VERIFACTU_MIGRATION_EXPECTED_DATABASE: ${VERIFACTU_MIGRATION_EXPECTED_DATABASE:?Set VERIFACTU_MIGRATION_EXPECTED_DATABASE}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 100
+    mem_limit: 512m
+    cpus: 1.0
 
 volumes:
   postgres_data:

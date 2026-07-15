@@ -223,7 +223,9 @@ Si el envio a AEAT lo realiza CriGestión o su proveedor tecnico en nombre del o
 ### Sustitución
 
 - Al activar uno nuevo se sustituye el anterior.
-- No se conserva el archivo anterior.
+- La version anterior se conserva cifrada y retirada mientras existan intentos
+  asociados o sea necesaria para retencion/restauracion; no puede usarse para
+  nuevos envios.
 - Se conserva en auditoría la operación y sus metadatos necesarios.
 
 ### Caducidad

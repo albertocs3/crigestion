@@ -1,0 +1,28 @@
+[Unit]
+Description=Process one queued CriGestion backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=crigestion-backup
+Group=crigestion-backup
+WorkingDirectory=/opt/crigestion/current
+EnvironmentFile=/etc/crigestion/backup.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node --conditions=react-server --import tsx scripts/run-backup-worker.ts
+UMask=0077
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/crigestion/backups

@@ -6,6 +6,8 @@ import {
 } from "@/modules/platform/application/auth";
 import {
   getCorrelationId,
+  hashIdempotencyPayload,
+  idempotencyStorageKey,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
@@ -89,11 +91,24 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const params = await context.params;
+  const idempotencyScope = "treasury.remittances.process.v1";
   const result = await processCustomerRemittance(
     params.remittanceId,
     payload.data,
     authorization.user,
-    { correlationId }
+    {
+      correlationId,
+      idempotencyKey: idempotencyStorageKey(
+        authorization.user.id,
+        idempotencyScope,
+        params.remittanceId,
+        idempotency.key
+      ),
+      requestHash: hashIdempotencyPayload(idempotencyScope, {
+        remittanceId: params.remittanceId,
+        command: payload.data
+      })
+    }
   );
 
   if (!result.ok) {

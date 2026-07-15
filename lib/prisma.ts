@@ -1,4 +1,9 @@
 import { PrismaClient } from "@prisma/client";
+import { assertVitestDatabaseUrl } from "@/lib/vitestDatabaseSafety";
+
+if (process.env.VITEST === "true") {
+  assertVitestDatabaseUrl(process.env);
+}
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;

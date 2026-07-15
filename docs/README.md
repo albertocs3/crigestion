@@ -25,7 +25,10 @@ La base tecnologica vigente es:
 10. [Backlog tecnico de la primera rebanada vertical](07-backlog-tecnico-primera-rebanada.md)
 11. [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md)
 12. [Preparacion del entorno en macOS](setup-mac.md)
-13. Especificaciones funcionales y tecnicas de cada modulo.
+13. [Estado verificable de implementacion](09-estado-implementacion.md)
+14. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
+15. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
+15. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 
@@ -44,6 +47,9 @@ La base tecnologica vigente es:
 | [Checklist de release de Plataforma](plataforma/09-release-checklist.md) | Pasos de validacion, migracion, despliegue y rollback para releases. |
 | [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md) | Secuencia de comandos, estructura y validaciones para crear la solucion real. |
 | [Preparacion del entorno en macOS](setup-mac.md) | Herramientas, variables de entorno y comandos para arrancar el desarrollo en Mac. |
+| [Estado de implementacion](09-estado-implementacion.md) | Rebanadas disponibles, evidencia de validacion y prioridades pendientes. |
+| [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md) | Topologia, proxy HTTPS, servicios, secretos, migraciones y apertura gradual de `gestion.crisoft.es`. |
+| [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md) | Estado y puertas de seguridad para `gestion-test.crisoft.es`, PostgreSQL 14, Imunify360 y migraciones controladas. |
 
 ## 4. Especificaciones por modulo
 
@@ -52,7 +58,7 @@ La base tecnologica vigente es:
 | Clientes y Tiendas | [Especificacion funcional](clientes/01-especificacion-funcional.md), [Contratos HTTP](clientes/02-contratos-api.md), [Modelo fisico](clientes/03-modelo-fisico-datos.md) |
 | Catalogo e Inventario | [Especificacion funcional](catalogo/01-especificacion-funcional.md), [Contratos HTTP](catalogo/02-contratos-api.md), [Modelo fisico](catalogo/03-modelo-fisico-datos.md) |
 | Suscripciones | [Especificacion funcional](suscripciones/01-especificacion-funcional.md) |
-| Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md), [Contratos HTTP](facturacion/02-contratos-api.md), [Modelo fisico](facturacion/03-modelo-fisico-datos.md), [Diseno de pantallas](facturacion/04-diseno-pantallas.md), [Plan de pruebas](facturacion/05-plan-de-pruebas.md) |
+| Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md), [Contratos HTTP](facturacion/02-contratos-api.md), [Modelo fisico](facturacion/03-modelo-fisico-datos.md), [Diseno de pantallas](facturacion/04-diseno-pantallas.md), [Plan de pruebas](facturacion/05-plan-de-pruebas.md), [Contrato VeriFactu V1](facturacion/06-contrato-verifactu-v1.md) |
 | Atencion al Cliente | [Especificacion funcional](atencion-cliente/01-especificacion-funcional.md) |
 | Contabilidad, Compras y Proveedores | [Especificacion funcional](contabilidad/01-especificacion-funcional.md) |
 | Tesoreria y SEPA | [Especificacion funcional](tesoreria/01-especificacion-funcional.md), [Contratos HTTP](tesoreria/02-contratos-api.md) |
@@ -76,7 +82,8 @@ La base tecnologica vigente es:
 | Estructura de solucion | Adaptada inicialmente |
 | Registro de decisiones arquitectonicas | Adaptado inicialmente |
 | Plan de creacion fisica | Adaptado inicialmente |
-| Backlog tecnico primera rebanada vertical | Pendiente de refinamiento completo al nuevo stack |
+| Backlog tecnico primera rebanada vertical | Implementado; se conserva como trazabilidad historica |
+| Estado incremental del producto | Actualizado al corte 2026-07-12 |
 
 ## 6. Precedencia
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import {
@@ -16,11 +17,23 @@ import {
   settleCustomerRemittanceBankResponse
 } from "@/modules/treasury/application/remittances";
 import { registerCustomerPaymentReturn } from "@/modules/treasury/application/payments";
+import { getInvoiceDetail } from "@/modules/billing/application/invoices";
 import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { createTestAccountingFiscalYear } from "@/tests/helpers/accountingFiscalYear";
+import {
+  createBankAccount,
+  createBankMovement,
+  createBankReconciliation,
+  listReconciliationProposals,
+  scoreReconciliationProposal,
+  listReconciliationCandidates,
+  undoBankReconciliation
+} from "@/modules/treasury/application/banking";
+import { importNorma43, parseNorma43Bytes, previewNorma43 } from "@/modules/treasury/application/norma43";
 
 const adminPassword = "Cambiar-esta-clave-2026";
 const baseCommand: InitializeCommand = {
@@ -122,7 +135,7 @@ describe("customer remittances", () => {
           dueDateId: dueDate.id,
           invoiceNumber: "F2600001",
           customer: {
-            code: "C-F2600001",
+            code: "600001",
             legalName: "Cliente F2600001 SL"
           }
         }
@@ -760,6 +773,11 @@ describe("customer remittances", () => {
       where: { id: dueDate.id },
       include: { invoice: true }
     });
+    const accountingEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({
+      where: { customerPaymentId: payment.id },
+      include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
+    });
+    const invoiceDetail = await getInvoiceDetail(storedDueDate.invoiceId, actor);
     const auditCount = await prisma.auditEvent.count({
       where: { eventType: "CUSTOMER_REMITTANCE_PROCESSED" }
     });
@@ -778,9 +796,71 @@ describe("customer remittances", () => {
       returnedAmount: "0.00",
       netAmount: "121.00"
     });
+    expect(detail?.lines[0]?.accountingEntry).toEqual({
+      id: accountingEntry.id,
+      number: accountingEntry.number
+    });
+    expect(invoiceDetail?.payments[0]?.accountingEntry).toEqual({
+      id: accountingEntry.id,
+      number: accountingEntry.number
+    });
+    expect(accountingEntry.origin).toBe("CUSTOMER_PAYMENT");
+    expect(accountingEntry.totalDebit.toFixed(2)).toBe("121.00");
+    expect(accountingEntry.totalCredit.toFixed(2)).toBe("121.00");
+    expect(accountingEntry.lines.map((line) => line.account.code)).toEqual([
+      "572000000",
+      "430600001"
+    ]);
     expect(storedDueDate.status).toBe("PAID");
     expect(storedDueDate.invoice.paymentStatus).toBe("PAID");
     expect(auditCount).toBe(1);
+  });
+
+  it("rolls back remittance payments when accounting is unavailable", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const created = await createCustomerRemittanceDraft(
+      {
+        chargeDate: "2026-07-15",
+        concept: "Remesa sin cuenta bancaria",
+        dueDateIds: [dueDate.id]
+      },
+      actor
+    );
+
+    if (!created.ok) {
+      throw new Error(created.error.code);
+    }
+
+    await prisma.accountingAccount.deleteMany({ where: { code: "572000000" } });
+    const result = await processCustomerRemittance(
+      created.value.id,
+      { paymentDate: "2026-07-16" },
+      actor,
+      {
+        idempotencyKey: "v1:rollback-accounting-test",
+        requestHash: "a".repeat(64)
+      }
+    );
+    const storedRemittance = await prisma.customerRemittance.findUniqueOrThrow({
+      where: { id: created.value.id }
+    });
+    const storedDueDate = await prisma.invoiceDueDate.findUniqueOrThrow({
+      where: { id: dueDate.id }
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE" }
+    });
+    expect(await prisma.customerPayment.count()).toBe(0);
+    expect(await prisma.accountingJournalEntry.count()).toBe(0);
+    expect(await prisma.idempotencyRecord.count({
+      where: { key: "v1:rollback-accounting-test" }
+    })).toBe(0);
+    expect(storedRemittance.status).toBe("DRAFT");
+    expect(storedDueDate.status).toBe("PENDING");
   });
 
   it("closes processed remittances without changing payments", async () => {
@@ -911,7 +991,184 @@ describe("customer remittances", () => {
     });
     expect(remittanceReturnAuditCount).toBe(1);
   });
+
+  it("creates, partially reconciles and undoes a bank movement", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const remittance = await createCustomerRemittanceDraft(
+      { chargeDate: "2026-07-15", concept: "Cobros conciliables", dueDateIds: [dueDate.id] },
+      actor
+    );
+    if (!remittance.ok) throw new Error(remittance.error.code);
+    const processed = await processCustomerRemittance(remittance.value.id, { paymentDate: "2026-07-16" }, actor);
+    if (!processed.ok) throw new Error(processed.error.code);
+    const payment = await prisma.customerPayment.findFirstOrThrow({ where: { dueDateId: dueDate.id } });
+
+    const account = await createBankAccount(
+      { name: "Cuenta operativa", iban: "ES9121000418450200051332", currency: "EUR" },
+      actor,
+      mutationContext("account", "create-account")
+    );
+    if (!account.ok) throw new Error(account.error.code);
+    const movement = await createBankMovement(
+      { bankAccountId: account.value.id, bookingDate: "2026-07-17", amount: "121.00", currency: "EUR", reference: "F2600001" },
+      actor,
+      mutationContext("movement", "create-movement")
+    );
+    if (!movement.ok) throw new Error(movement.error.code);
+
+    const proposals = await listReconciliationProposals({ movementId: movement.value.id, limit: 10 }, actor);
+    expect(proposals.proposals[0]).toMatchObject({ paymentId: payment.id, score: 95, confidence: "HIGH", suggestedAmount: "121.00", reasons: ["Importe exacto", "Fechas separadas 1 dias", "Numero de factura en la referencia"] });
+    expect(scoreReconciliationProposal(movement.value, { ...proposals.proposals[0]!, availableAmount: "120.00" })).toBeNull();
+    expect(scoreReconciliationProposal(movement.value, { ...proposals.proposals[0]!, paymentDate: "2026-05-01" })).toBeNull();
+    expect(scoreReconciliationProposal({ ...movement.value, reference: null, counterpartyName: null }, proposals.proposals[0]!)).toMatchObject({ score: 80, confidence: "MEDIUM" });
+    expect(scoreReconciliationProposal({ ...movement.value, reference: "Cobro F/26-00001" }, proposals.proposals[0]!)).toMatchObject({ score: 95, confidence: "HIGH" });
+    expect(await prisma.bankReconciliation.count()).toBe(0);
+
+    const reconciled = await createBankReconciliation(
+      { bankMovementId: movement.value.id, applications: [{ customerPaymentId: payment.id, amount: "60.00" }] },
+      actor,
+      mutationContext("reconciliation", "create-reconciliation", movement.value.id)
+    );
+    if (!reconciled.ok) throw new Error(reconciled.error.code);
+    expect(reconciled.value).toMatchObject({ status: "PARTIALLY_RECONCILED", reconciledAmount: "60.00", pendingAmount: "61.00" });
+
+    const candidates = await listReconciliationCandidates({ movementId: movement.value.id, limit: 25 }, actor);
+    expect(candidates.candidates[0]).toMatchObject({ paymentId: payment.id, availableAmount: "61.00" });
+    const reconciliationId = reconciled.value.activeReconciliations[0]!.id;
+    const undone = await undoBankReconciliation(reconciliationId, actor, mutationContext("undo", "undo-reconciliation", reconciliationId));
+    expect(undone).toMatchObject({ ok: true, value: { status: "PENDING", reconciledAmount: "0.00", pendingAmount: "121.00" } });
+    expect(await prisma.auditEvent.count({ where: { eventType: { in: ["BANK_RECONCILIATION_CREATED", "BANK_RECONCILIATION_UNDONE"] } } })).toBe(2);
+  });
+
+  it("replays bank movement creation and rejects over-reconciliation", async () => {
+    const actor = await adminActor();
+    const dueDate = await createIssuedDirectDebitDueDate(actor.id);
+    const remittance = await createCustomerRemittanceDraft({ chargeDate: "2026-07-15", concept: "Cobro", dueDateIds: [dueDate.id] }, actor);
+    if (!remittance.ok) throw new Error(remittance.error.code);
+    const processed = await processCustomerRemittance(remittance.value.id, { paymentDate: "2026-07-16" }, actor);
+    if (!processed.ok) throw new Error(processed.error.code);
+    const payment = await prisma.customerPayment.findFirstOrThrow({ where: { dueDateId: dueDate.id } });
+    const account = await createBankAccount({ name: "Banco", iban: "ES7921000813610123456789", currency: "EUR" }, actor, mutationContext("account-replay", "create-account"));
+    if (!account.ok) throw new Error(account.error.code);
+    const context = mutationContext("movement-replay", "create-movement");
+    const command = { bankAccountId: account.value.id, bookingDate: "2026-07-17", amount: "50.00", currency: "EUR" as const };
+    const [first, replay] = await Promise.all([
+      createBankMovement(command, actor, context),
+      createBankMovement(command, actor, context)
+    ]);
+    expect(replay).toEqual(first);
+    expect(await prisma.bankMovement.count()).toBe(1);
+    if (!first.ok) throw new Error(first.error.code);
+    const exceeded = await createBankReconciliation({ bankMovementId: first.value.id, applications: [{ customerPaymentId: payment.id, amount: "50.01" }] }, actor, mutationContext("exceeded", "create-reconciliation", first.value.id));
+    expect(exceeded).toMatchObject({ ok: false, status: 409, error: { code: "BANK_MOVEMENT_AMOUNT_EXCEEDED" } });
+    expect(await prisma.bankReconciliation.count()).toBe(0);
+  });
+
+  it("returns stable conflicts for concurrent bank account and movement duplicates", async () => {
+    const actor = await adminActor();
+    const accountCommand = { name: "Cuenta concurrente", iban: "ES9121000418450200051332", currency: "EUR" as const };
+    const accountResults = await Promise.all([
+      createBankAccount(accountCommand, actor, mutationContext("account-concurrent-a", "create-account")),
+      createBankAccount(accountCommand, actor, mutationContext("account-concurrent-b", "create-account"))
+    ]);
+
+    expect(accountResults.filter((result) => result.ok)).toHaveLength(1);
+    expect(accountResults.find((result) => !result.ok)).toMatchObject({
+      status: 409,
+      error: { code: "BANK_ACCOUNT_ALREADY_EXISTS" }
+    });
+    const account = accountResults.find((result) => result.ok);
+    if (!account?.ok) throw new Error("BANK_ACCOUNT_NOT_CREATED");
+
+    const movementCommand = {
+      bankAccountId: account.value.id,
+      bookingDate: "2026-07-17",
+      amount: "50.00",
+      currency: "EUR" as const,
+      externalMovementNumber: "EXT-CONCURRENT-1"
+    };
+    const movementResults = await Promise.all([
+      createBankMovement(movementCommand, actor, mutationContext("movement-concurrent-a", "create-movement")),
+      createBankMovement(movementCommand, actor, mutationContext("movement-concurrent-b", "create-movement"))
+    ]);
+
+    expect(movementResults.filter((result) => result.ok)).toHaveLength(1);
+    expect(movementResults.find((result) => !result.ok)).toMatchObject({
+      status: 409,
+      error: { code: "BANK_MOVEMENT_ALREADY_EXISTS" }
+    });
+    expect(await prisma.bankMovement.count()).toBe(1);
+  });
+
+  it("parses, previews and imports a balanced Norma 43 statement", async () => {
+    const actor = await adminActor();
+    const account = await createBankAccount({ name: "Norma 43", iban: "ES9121000418450200051332", currency: "EUR" }, actor, mutationContext("n43-account", "create-account"));
+    if (!account.ok) throw new Error(account.error.code);
+    const bytes = Buffer.from(validNorma43(), "latin1");
+    const parsed = parseNorma43Bytes(bytes);
+    expect(parsed).toMatchObject({ ok: true, value: { dateFrom: "2026-07-01", dateTo: "2026-07-31", openingBalance: "1000.00", closingBalance: "1121.00", movements: [{ amount: "121.00" }] } });
+    const command = { bankAccountId: account.value.id, contentBase64: bytes.toString("base64") };
+    const preview = await previewNorma43(command, actor);
+    expect(preview).toMatchObject({ ok: true, value: { duplicate: false, overlap: false, maskedIban: "ES91 **** **** 1332" } });
+    const imported = await importNorma43(command, actor, { idempotencyKey: "n43-import", requestHash: "b".repeat(64), correlationId: "corr-n43-import" });
+    expect(imported).toMatchObject({ ok: true, status: 201, value: { movementCount: 1 } });
+    if (!imported.ok) throw new Error(imported.error.code);
+    expect(await prisma.bankStatement.count()).toBe(1);
+    expect(await prisma.bankMovement.findFirstOrThrow()).toMatchObject({ source: "NORMA43", statementOrdinal: 1, statementDocumentNumber: "0000000001" });
+    await expect(prisma.bankStatement.create({
+      data: {
+        companyId: (await prisma.installation.findFirstOrThrow()).companyId!,
+        bankAccountId: account.value.id,
+        dateFrom: new Date("2026-07-31T00:00:00.000Z"),
+        dateTo: new Date("2026-08-15T00:00:00.000Z"),
+        openingBalance: new Prisma.Decimal("1121.00"),
+        closingBalance: new Prisma.Decimal("1121.00"),
+        rawSha256: "c".repeat(64),
+        recordCount: 4,
+        movementCount: 1,
+        importedById: actor.id
+      }
+    })).rejects.toThrow();
+    const otherAccount = await createBankAccount({ name: "Otra cuenta", iban: "ES7921000813610123456789", currency: "EUR" }, actor, mutationContext("n43-other-account", "create-account"));
+    if (!otherAccount.ok) throw new Error(otherAccount.error.code);
+    await expect(prisma.bankMovement.create({
+      data: {
+        bankAccountId: otherAccount.value.id,
+        bankStatementId: imported.value.statementId,
+        statementOrdinal: 2,
+        bookingDate: new Date("2026-07-16T00:00:00.000Z"),
+        valueDate: new Date("2026-07-16T00:00:00.000Z"),
+        amount: new Prisma.Decimal("1.00"),
+        source: "NORMA43",
+        createdById: actor.id
+      }
+    })).rejects.toThrow();
+    const duplicate = await previewNorma43(command, actor);
+    expect(duplicate).toMatchObject({ ok: true, value: { duplicate: true, overlap: true } });
+  });
+
+  it("rejects malformed and unbalanced Norma 43 statements", () => {
+    const malformed = Buffer.from(validNorma43().replace("00000000012100", "00000000012200"), "latin1");
+    expect(parseNorma43Bytes(malformed)).toMatchObject({ ok: false, status: 422, error: { code: "N43_CONTROL_TOTAL_MISMATCH" } });
+    expect(parseNorma43Bytes(Buffer.from("11short", "latin1"))).toMatchObject({ ok: false, status: 422, error: { code: "N43_RECORD_INVALID" } });
+    expect(parseNorma43Bytes(Uint8Array.from([0x80]))).toMatchObject({ ok: false, status: 422, error: { code: "N43_ENCODING_UNSUPPORTED" } });
+  });
 });
+
+function mutationContext(key: string, operation: string, resourceId?: string) {
+  return { idempotencyKey: key, requestHash: key.padEnd(64, "0").slice(0, 64), operation, resourceId, correlationId: `corr-${key}` };
+}
+
+function validNorma43(): string {
+  const account = "210004180200051332";
+  const header = `11${account}260701260731H000000001000009781${"CRIGESTION".padEnd(26)}   `;
+  const movement = `22${" ".repeat(8)}260715260715040012${"12100".padStart(14, "0")}${"1".padStart(10, "0")}${"0".repeat(12)}${"F2600001".padEnd(16)}`;
+  const concept = `2301${"TRANSFERENCIA CLIENTE".padEnd(38)}${"FACTURA F2600001".padEnd(38)}`;
+  const end = `33${account}00000${"0".repeat(14)}00001${"12100".padStart(14, "0")}H${"112100".padStart(14, "0")}978${" ".repeat(4)}`;
+  const fileEnd = `88${"9".repeat(18)}${"4".padStart(6, "0")}${" ".repeat(54)}`;
+  return [header, movement, concept, end, fileEnd].join("\r\n");
+}
 
 async function adminActor() {
   const user = await prisma.user.findUniqueOrThrow({
@@ -952,7 +1209,7 @@ async function createIssuedDirectDebitDueDate(
   const mandateReference = `MANDATO-${String(overrides.dueDatePosition ?? 1).padStart(3, "0")}`;
   const customer = await prisma.customer.create({
     data: {
-      code: `C-${invoiceNumber}`,
+      code: invoiceNumber.replace(/\D/g, "").slice(-6),
       type: "COMPANY",
       legalName: `Cliente ${invoiceNumber} SL`,
       taxId: `B${invoiceNumber.slice(-7)}`,
@@ -975,6 +1232,20 @@ async function createIssuedDirectDebitDueDate(
           createdById: actorUserId
         }
       }
+    }
+  });
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+    where: { year: 2026 }
+  });
+  await prisma.accountingAccount.create({
+    data: {
+      fiscalYearId: fiscalYear.id,
+      code: `430${customer.code.padStart(6, "0")}`,
+      name: customer.legalName,
+      type: "ASSET",
+      level: 9,
+      isPostable: true,
+      createdById: actorUserId
     }
   });
   const invoice = await prisma.invoice.create({
@@ -1035,6 +1306,22 @@ async function initializeForTreasury(): Promise<void> {
   if (!result.ok) {
     throw new Error(result.error.code);
   }
+  await createTestAccountingFiscalYear();
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+    where: { year: 2026 }
+  });
+  const installation = await prisma.installation.findFirstOrThrow();
+  await prisma.accountingAccount.createMany({
+    data: ["570000000", "572000000"].map((code) => ({
+      fiscalYearId: fiscalYear.id,
+      code,
+      name: code === "570000000" ? "Caja" : "Bancos",
+      type: "ASSET",
+      level: 9,
+      isPostable: true,
+      createdById: installation.initialAdministratorId!
+    }))
+  });
 }
 
 async function configureCompanySepa(): Promise<void> {
@@ -1051,6 +1338,13 @@ async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
+    prisma.accountingJournalLine.deleteMany(),
+    prisma.accountingJournalEntry.deleteMany(),
+    prisma.bankReconciliationApplication.deleteMany(),
+    prisma.bankReconciliation.deleteMany(),
+    prisma.bankMovement.deleteMany(),
+    prisma.bankStatement.deleteMany(),
+    prisma.bankAccount.deleteMany(),
     prisma.customerPaymentReturn.deleteMany(),
     prisma.customerPayment.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
@@ -1076,9 +1370,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.catalogItem.deleteMany(),
     prisma.catalogCategory.deleteMany(),
     prisma.catalogTaxRate.deleteMany(),
-    prisma.accountingJournalLine.deleteMany(),
-    prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
+    prisma.accountingFiscalYear.deleteMany(),
     prisma.customerRemittance.deleteMany(),
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

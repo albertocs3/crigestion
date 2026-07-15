@@ -7,6 +7,8 @@ import {
 } from "@/modules/platform/application/auth";
 import {
   getCorrelationId,
+  hashIdempotencyPayload,
+  idempotencyStorageKey,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
@@ -101,7 +103,19 @@ export async function POST(
     params.data.invoiceId,
     payload.data,
     authorization.user,
-    { correlationId }
+    {
+      correlationId,
+      idempotencyKey: idempotencyStorageKey(
+        authorization.user.id,
+        "treasury.customer-payment-returns.create.v1",
+        params.data.invoiceId,
+        idempotency.key
+      ),
+      requestHash: hashIdempotencyPayload(
+        "treasury.customer-payment-returns.create.v1",
+        { invoiceId: params.data.invoiceId, command: payload.data }
+      )
+    }
   );
 
   if (!result.ok) {

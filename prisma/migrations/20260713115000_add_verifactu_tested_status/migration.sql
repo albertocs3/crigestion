@@ -1,0 +1,1 @@
+ALTER TYPE "VerifactuMtlsCredentialVersionStatus" ADD VALUE IF NOT EXISTS 'TESTED' AFTER 'STAGED';

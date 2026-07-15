@@ -2,9 +2,9 @@
 
 ## 1. Primer Corte
 
-El primer corte de Tesoreria implementa registro manual de cobros de clientes,
-devoluciones manuales sobre cobros registrados de facturas emitidas y el ciclo
-basico de remesas de cobro.
+El corte vigente de Tesoreria implementa registro manual de cobros de clientes,
+devoluciones, el ciclo basico de remesas y conciliacion bancaria manual contra
+cobros existentes.
 
 Incluye:
 
@@ -15,13 +15,17 @@ Incluye:
 - Crear borradores de remesa, generar XML SEPA CORE basico y descargarlo.
 - Procesar manualmente remesas para registrar cobros `SEPA_REMITTANCE`.
 - Auditar la operacion sin datos sensibles.
+- Dar de alta cuentas y movimientos bancarios manuales.
+- Conciliar movimientos total o parcialmente contra cobros y deshacer la
+  conciliacion conservando el historico.
+- Importar extractos Norma 43 con vista previa.
+- Generar propuestas puntuadas de conciliacion contra cobros.
 
 Fuera del primer corte:
 
-- Envio bancario, importacion de respuestas bancarias y conciliacion de remesas.
-- Conciliacion bancaria.
-- Asientos contables automaticos.
-- Previsiones de tesoreria.
+- Envio bancario directo y conciliacion bancaria directa de remesas.
+- Propuestas contra pagos de proveedores y gastos.
+- Perfiles Norma 43 historicos, multicuenta o en moneda distinta de EUR.
 
 ## 2. Convenciones
 
@@ -32,6 +36,13 @@ Fuera del primer corte:
 - Prevision mensual de cobros: `/api/treasury/customer-collection-forecast`.
 - Exportacion de prevision: `/api/treasury/customer-collection-forecast/export`.
 - Base inicial de remesas: `/api/treasury/customer-remittances`.
+- Cuentas bancarias: `/api/treasury/bank-accounts`.
+- Movimientos bancarios: `/api/treasury/bank-movements`.
+- Candidatos de conciliacion: `/api/treasury/reconciliation-candidates`.
+- Propuestas puntuadas: `/api/treasury/reconciliation-proposals`.
+- Conciliaciones: `/api/treasury/bank-reconciliations`.
+- Vista previa Norma 43: `/api/treasury/bank-statements/preview`.
+- Confirmacion Norma 43: `/api/treasury/bank-statements`.
 - Exportacion de remesas: `/api/treasury/customer-remittances/export`.
 - Generacion XML SEPA: `/api/treasury/customer-remittances/{remittanceId}/generate-sepa`.
 - Marcado de remesa enviada: `/api/treasury/customer-remittances/{remittanceId}/mark-sent`.
@@ -42,6 +53,14 @@ Fuera del primer corte:
 - Autenticacion obligatoria con sesion web.
 - Las mutaciones validan `Origin`, token CSRF y modo mantenimiento.
 - Las mutaciones requieren `Idempotency-Key`.
+- En `process`, `settle-bank-response` e `import-bank-response-csv`, una clave
+  repetida por el mismo usuario, operacion y remesa reproduce el mismo estado y
+  cuerpo sin duplicar cobros, asientos ni auditoria. Reutilizarla con otro
+  payload devuelve `409 IDEMPOTENCY_KEY_REUSED`. La respuesta se persiste en la
+  misma transaccion que los efectos contables.
+- El registro de devoluciones de cobro aplica el mismo replay persistente: una
+  clave repetida con el mismo payload devuelve la primera respuesta `201` y no
+  duplica devolucion, asiento ni auditoria.
 - Las respuestas son DTOs; no se exponen modelos Prisma.
 - La auditoria no incluye NIF, IBAN, notas completas ni referencias bancarias
   sensibles.
@@ -51,8 +70,77 @@ Fuera del primer corte:
 | Permiso | Uso |
 |---|---|
 | `Treasury.ManagePayments` | Consultar vencimientos y registrar cobros/devoluciones manuales de clientes. |
+| `Treasury.ViewBanking` | Consultar cuentas, movimientos y candidatos de conciliacion. |
+| `Treasury.ReconcileBanking` | Crear cuentas y movimientos, conciliar y deshacer conciliaciones. |
+| `Treasury.ImportBankStatements` | Validar e importar extractos Norma 43. |
 
 El administrador protegido recibe este permiso en el seed inicial.
+
+## 3.1 Conciliacion bancaria manual
+
+Todos los endpoints requieren sesion. Las lecturas requieren
+`Treasury.ViewBanking`; las mutaciones requieren `Treasury.ReconcileBanking`,
+`Origin` valido, CSRF, JSON, modo mantenimiento inactivo e `Idempotency-Key`.
+
+- `GET/POST /api/treasury/bank-accounts`: alta y consulta con IBAN siempre
+  enmascarado en la respuesta.
+- `GET/POST /api/treasury/bank-movements`: listado filtrable y alta manual con
+  importe distinto de cero y numero externo opcional unico por cuenta.
+- `GET /api/treasury/reconciliation-candidates`: cobros con saldo neto
+  conciliable tras devoluciones y aplicaciones activas.
+- `POST /api/treasury/bank-reconciliations`: aplica entre uno y cien cobros a
+  una entrada bancaria mediante transaccion serializable y bloqueos estables.
+- `POST /api/treasury/bank-reconciliations/{reconciliationId}/undo`: conserva
+  el historico y libera los saldos aplicados.
+
+Errores funcionales:
+
+| HTTP | Codigo | Uso |
+|---|---|---|
+| `404` | `BANK_ACCOUNT_NOT_FOUND` | Cuenta inexistente o inactiva. |
+| `404` | `BANK_MOVEMENT_NOT_FOUND` | Movimiento inexistente. |
+| `404` | `RECONCILIATION_TARGET_NOT_FOUND` | Cobro inexistente. |
+| `404` | `BANK_RECONCILIATION_NOT_FOUND` | Conciliacion inexistente. |
+| `409` | `BANK_ACCOUNT_ALREADY_EXISTS` | Cuenta duplicada. |
+| `409` | `BANK_MOVEMENT_ALREADY_EXISTS` | Numero externo duplicado. |
+| `409` | `BANK_MOVEMENT_AMOUNT_EXCEEDED` | Aplicaciones superiores al saldo del movimiento. |
+| `409` | `RECONCILIATION_TARGET_AMOUNT_EXCEEDED` | Aplicacion superior al saldo neto del cobro. |
+| `409` | `BANK_RECONCILIATION_ALREADY_UNDONE` | Conciliacion ya deshecha. |
+| `409` | `IDEMPOTENCY_KEY_REUSED` | Clave reutilizada con otro payload. |
+
+La auditoria registra IDs internos, importes, moneda y conteos, pero no IBAN
+completo, referencia, contraparte ni textos bancarios libres.
+
+`GET /api/treasury/reconciliation-proposals?movementId={uuid}&limit=10`
+requiere `Treasury.ViewBanking`. Devuelve como maximo 25 cobros dentro de 30
+dias, ordenados por puntuacion, con `confidence`, `suggestedAmount` y motivos.
+Es una lectura orientativa: nunca crea ni confirma conciliaciones.
+
+Una devolucion de cobro que dejaria el neto por debajo del importe conciliado
+se rechaza con `409 PAYMENT_RETURN_RECONCILIATION_CONFLICT`; debe deshacerse
+primero la conciliacion afectada.
+
+## 3.2 Importacion Norma 43
+
+`POST /api/treasury/bank-statements/preview` valida un JSON con
+`bankAccountId` y `contentBase64`. Admite hasta 5 MiB y 50.000 registros del
+perfil `AEB43_2012`, una cuenta y EUR. Devuelve metadatos, movimientos
+normalizados, IBAN enmascarado y los indicadores `duplicate` y `overlap`; nunca
+devuelve el fichero original ni el IBAN completo.
+
+`POST /api/treasury/bank-statements` recibe el mismo contenido, lo vuelve a
+validar y lo persiste atómicamente con sus movimientos. Requiere
+`Treasury.ImportBankStatements`, Origin, CSRF, JSON e `Idempotency-Key`.
+
+Errores estables: `N43_FILE_TOO_LARGE`, `N43_RECORD_INVALID`,
+`N43_STRUCTURE_INVALID`, `N43_ACCOUNT_MISMATCH`, `N43_DATE_RANGE_INVALID`,
+`N43_BALANCE_MISMATCH`, `N43_CONTROL_TOTAL_MISMATCH`,
+`BANK_STATEMENT_DUPLICATE` y `BANK_STATEMENT_OVERLAP`.
+
+La unicidad por empresa, el ownership cuenta-empresa y movimiento-extracto, y
+el no solapamiento inclusivo de periodos quedan reforzados mediante
+restricciones PostgreSQL. Las carreras de duplicidad se traducen a conflictos
+`409` estables y no se exponen como errores internos.
 
 ## 4. `GET /api/treasury/customer-due-dates`
 
@@ -548,6 +636,8 @@ Errores funcionales:
 |---|---|---|
 | `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
 | `409` | `REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE` | Respuesta fuera de estado o no cubre lineas activas. |
+| `409` | `REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | No existe un unico ejercicio abierto para la fecha de cobro. |
+| `409` | `REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE` | Faltan cuentas contables activas e imputables. |
 
 Audita `CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED`.
 
@@ -610,6 +700,8 @@ Errores funcionales:
 |---|---|---|
 | `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
 | `409` | `REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE` | Respuesta fuera de estado o no cubre lineas activas. |
+| `409` | `REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | No existe un unico ejercicio abierto para la fecha de cobro. |
+| `409` | `REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE` | Faltan cuentas contables activas e imputables. |
 | `422` | `REMITTANCE_BANK_RESPONSE_CSV_INVALID` | CSV sin cabecera valida, incompleto, duplicado o con resultados no admitidos. |
 
 Audita `CUSTOMER_REMITTANCE_BANK_RESPONSE_SETTLED`.
@@ -644,6 +736,8 @@ Errores funcionales:
 |---|---|---|
 | `404` | `REMITTANCE_NOT_FOUND` | Remesa inexistente. |
 | `409` | `REMITTANCE_NOT_PROCESSABLE` | Remesa o vencimientos no procesables. |
+| `409` | `REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | No existe un unico ejercicio abierto para la fecha de cobro. |
+| `409` | `REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE` | Faltan cuentas contables activas e imputables. |
 
 Audita `CUSTOMER_REMITTANCE_PROCESSED`.
 
@@ -806,3 +900,24 @@ Audita `CUSTOMER_DUE_DATE_MARKED_UNPAID` con `invoiceId`, `dueDateId`,
 `customerId`, `unpaidDate`, `reasonCode`, `pendingAmount`,
 `resultingPaymentStatus`, `actorUserId` y `correlationId`. Las observaciones
 internas no se auditan.
+
+## 23. Creditos de clientes
+
+Todos los contratos son autenticados. Las mutaciones requieren Origin valido,
+CSRF, JSON, `Idempotency-Key` y modo mantenimiento inactivo.
+
+| Metodo y ruta | Permiso | Uso |
+|---|---|---|
+| `GET /api/treasury/customer-credits` | `Treasury.ViewCustomerCredits` | Lista con `status`, `customerId`, `search`, `cursor` y `limit`. |
+| `POST /api/treasury/customer-credits/{creditId}/applications` | `Treasury.ApplyCustomerCredits` | Compensa un vencimiento (`targetDueDateId`, `applicationDate`, `amount`, `notes`). |
+| `POST /api/treasury/customer-credits/{creditId}/refund-requests` | `Treasury.RequestCustomerRefunds` | Reserva saldo para reembolso (`bankAccountId`, `requestedDate`, `amount`, `reasonCode`, `reference`, `notes`). |
+| `POST /api/treasury/customer-credit-refunds/{refundId}/approve` | `Treasury.ApproveCustomerRefunds` | Aprueba con segregacion solicitante/aprobador. |
+| `POST /api/treasury/customer-credit-refunds/{refundId}/post` | `Treasury.PostCustomerRefunds` | Contabiliza el reembolso aprobado. |
+| `POST /api/treasury/customer-credit-refunds/{refundId}/cancel` | `Treasury.RequestCustomerRefunds` | Cancela una solicitud pendiente y libera la reserva. |
+
+Errores funcionales estables incluyen `CUSTOMER_CREDIT_HELD`,
+`CUSTOMER_CREDIT_AMOUNT_EXCEEDS_AVAILABLE`,
+`CUSTOMER_CREDIT_TARGET_NOT_ELIGIBLE`,
+`CUSTOMER_CREDIT_AMOUNT_EXCEEDS_PENDING`,
+`CUSTOMER_CREDIT_REFUND_SELF_APPROVAL_FORBIDDEN` e
+`IDEMPOTENCY_KEY_REUSED`.

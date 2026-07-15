@@ -12,6 +12,7 @@ test-results/
 .env.docker
 prisma/dev.db
 tmp/
+.tmp/
 uploads/
 /backups/
 conversacionChatGPT.txt

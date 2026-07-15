@@ -7,6 +7,7 @@ import {
 } from "@/modules/platform/application/auth";
 import {
   getCorrelationId,
+  idempotencyStorageKey,
   invalidJson,
   isAllowedOrigin,
   isJsonRequest,
@@ -20,8 +21,11 @@ import { requireMaintenanceModeInactive } from "@/modules/platform/application/m
 import {
   createInvoiceRectification,
   createInvoiceRectificationSchema,
+  hashInvoiceRectificationBody,
+  readInvoiceRectificationReplay,
   normalizeDateOnlyInput
 } from "@/modules/billing/application/invoices";
+import { readConfiguredVerifactuAltaPreparer } from "@/modules/billing/infrastructure/verifactu/configuredPreparer";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -62,16 +66,6 @@ export async function POST(
     return jsonResponse(request, authorization.error, { status: authorization.status });
   }
 
-  const maintenance = await requireMaintenanceModeInactive(
-    authorization.user,
-    request,
-    { correlationId }
-  );
-
-  if (!maintenance.ok) {
-    return jsonResponse(request, maintenance.error, { status: maintenance.status });
-  }
-
   if (!isJsonRequest(request)) {
     return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   }
@@ -98,11 +92,24 @@ export async function POST(
     return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
   }
 
+  const storageKey = idempotencyStorageKey(authorization.user.id, "invoice-rectification", params.data.invoiceId, idempotency.key);
+  const requestHash = hashInvoiceRectificationBody(payload.data);
+  const replay = await readInvoiceRectificationReplay(storageKey, requestHash);
+  if (replay) return jsonResponse(request, replay.ok ? replay.value : replay.error, { status: replay.status });
+
+  const maintenance = await requireMaintenanceModeInactive(authorization.user, request, { correlationId });
+  if (!maintenance.ok) return jsonResponse(request, maintenance.error, { status: maintenance.status });
+
   const result = await createInvoiceRectification(
     params.data.invoiceId,
     payload.data,
     authorization.user,
-    { correlationId }
+    {
+      correlationId,
+      idempotencyKey: storageKey,
+      requestHash
+    },
+    { prepareVerifactuAlta: readConfiguredVerifactuAltaPreparer() }
   );
 
   if (!result.ok) {

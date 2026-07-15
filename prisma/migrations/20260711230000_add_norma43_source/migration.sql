@@ -1,0 +1,1 @@
+ALTER TYPE "BankMovementSource" ADD VALUE IF NOT EXISTS 'NORMA43';

@@ -9,6 +9,10 @@ import type {
   SessionUser
 } from "@/modules/platform/application/auth";
 import { normalizeDateOnlyInput } from "@/modules/billing/application/invoices";
+import {
+  createAccountedCustomerPayment,
+  CustomerPaymentAccountingUnavailableError
+} from "@/modules/treasury/application/payments";
 
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
@@ -191,6 +195,7 @@ export type CustomerRemittanceLineDto = {
   dueDate: string;
   amount: string;
   paymentId: string | null;
+  accountingEntry: { id: string; number: string } | null;
   paymentDate: string | null;
   paymentAmount: string;
   returnedAmount: string;
@@ -202,6 +207,20 @@ export type CustomerRemittanceLineDto = {
 export type CustomerRemittanceList = {
   remittances: CustomerRemittanceDto[];
   nextCursor: string | null;
+};
+
+type RemittanceMutationContext = Pick<RequestContext, "correlationId"> & {
+  idempotencyKey?: string;
+  requestHash?: string;
+};
+
+type IdempotencyKeyReusedResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "IDEMPOTENCY_KEY_REUSED";
+    message: string;
+  };
 };
 
 export type CreateCustomerRemittanceDraftResult =
@@ -238,6 +257,7 @@ export type CancelCustomerRemittanceDraftResult =
 
 export type ProcessCustomerRemittanceResult =
   | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | IdempotencyKeyReusedResult
   | {
       ok: false;
       status: 404;
@@ -250,7 +270,10 @@ export type ProcessCustomerRemittanceResult =
       ok: false;
       status: 409;
       error: {
-        code: "REMITTANCE_NOT_PROCESSABLE";
+        code:
+          | "REMITTANCE_NOT_PROCESSABLE"
+          | "REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"
+          | "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE";
         message: string;
       };
     };
@@ -314,6 +337,7 @@ export type RejectCustomerRemittanceResult =
 
 export type SettleCustomerRemittanceBankResponseResult =
   | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | IdempotencyKeyReusedResult
   | {
       ok: false;
       status: 404;
@@ -326,13 +350,17 @@ export type SettleCustomerRemittanceBankResponseResult =
       ok: false;
       status: 409;
       error: {
-        code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE";
+        code:
+          | "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE"
+          | "REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"
+          | "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE";
         message: string;
       };
     };
 
 export type ImportCustomerRemittanceBankResponseCsvResult =
   | { ok: true; status: 200; value: CustomerRemittanceDto }
+  | IdempotencyKeyReusedResult
   | {
       ok: false;
       status: 404;
@@ -345,7 +373,10 @@ export type ImportCustomerRemittanceBankResponseCsvResult =
       ok: false;
       status: 409;
       error: {
-        code: "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE";
+        code:
+          | "REMITTANCE_BANK_RESPONSE_NOT_SETTLEABLE"
+          | "REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"
+          | "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE";
         message: string;
       };
     }
@@ -466,6 +497,12 @@ const remittanceSelect = {
               paymentDate: true,
               amount: true,
               reference: true,
+              accountingEntry: {
+                select: {
+                  id: true,
+                  number: true
+                }
+              },
               returns: {
                 select: {
                   amount: true
@@ -528,7 +565,8 @@ const eligibleDueDateSelect = {
         }
       }
     }
-  }
+  },
+  creditApplications: { select: { amount: true } }
 } satisfies Prisma.InvoiceDueDateSelect;
 
 export async function createCustomerRemittanceDraft(
@@ -538,6 +576,25 @@ export async function createCustomerRemittanceDraft(
 ): Promise<CreateCustomerRemittanceDraftResult> {
   const dueDateIds = [...new Set(command.dueDateIds)];
   const result = await prisma.$transaction(async (tx) => {
+    const dueDateIdList = Prisma.join(dueDateIds.map((id) => Prisma.sql`${id}::uuid`));
+    await tx.$queryRaw(Prisma.sql`
+      SELECT invoice."id"
+      FROM "invoices" invoice
+      WHERE invoice."id" IN (
+        SELECT due_date."invoiceId"
+        FROM "invoice_due_dates" due_date
+        WHERE due_date."id" IN (${dueDateIdList})
+      )
+      ORDER BY invoice."id"
+      FOR UPDATE
+    `);
+    await tx.$queryRaw(Prisma.sql`
+      SELECT due_date."id"
+      FROM "invoice_due_dates" due_date
+      WHERE due_date."id" IN (${dueDateIdList})
+      ORDER BY due_date."id"
+      FOR UPDATE
+    `);
     const activeLineCount = await tx.customerRemittanceLine.count({
       where: {
         dueDateId: { in: dueDateIds },
@@ -1232,11 +1289,19 @@ export async function settleCustomerRemittanceBankResponse(
   remittanceId: string,
   command: SettleCustomerRemittanceBankResponseCommand,
   actor: SessionUser,
-  context: Pick<RequestContext, "correlationId"> = {}
+  context: RemittanceMutationContext = {}
 ): Promise<SettleCustomerRemittanceBankResponseResult> {
   const paidLineIds = new Set(command.paidLineIds);
   const rejectedLineIds = new Set(command.rejectedLineIds);
   const result = await prisma.$transaction(async (tx) => {
+    await lockRemittanceCollectionState(tx, remittanceId);
+    const replay = await replayRemittanceMutation(tx, context);
+
+    if (replay?.kind === "reused") return { kind: "idempotency-reused" as const };
+    if (replay?.kind === "replayed") {
+      return { kind: "replayed" as const, value: replay.value };
+    }
+
     const remittance = await tx.customerRemittance.findUnique({
       where: { id: remittanceId },
       select: {
@@ -1262,9 +1327,13 @@ export async function settleCustomerRemittanceBankResponse(
                   select: {
                     id: true,
                     status: true,
-                    total: true
+                    total: true,
+                    number: true,
+                    customerCodeSnapshot: true,
+                    customerLegalNameSnapshot: true
                   }
-                }
+                },
+                paymentMethod: true
               }
             }
           }
@@ -1312,17 +1381,19 @@ export async function settleCustomerRemittanceBankResponse(
     const paymentDate = parseDateOnly(command.paymentDate);
 
     for (const line of paidLines) {
-      await tx.customerPayment.create({
-        data: {
-          invoiceId: line.invoiceId,
-          dueDateId: line.dueDateId,
-          source: "SEPA_REMITTANCE",
-          paymentDate,
-          amount: line.amount,
-          reference: remittance.number,
-          notes: null,
-          createdById: actor.id
-        }
+      await createAccountedCustomerPayment(tx, {
+        invoiceId: line.invoiceId,
+        invoiceNumber: line.dueDate.invoice.number,
+        customerCode: line.dueDate.invoice.customerCodeSnapshot,
+        customerName: line.dueDate.invoice.customerLegalNameSnapshot,
+        dueDateId: line.dueDateId,
+        paymentMethod: line.dueDate.paymentMethod,
+        source: "SEPA_REMITTANCE",
+        paymentDate,
+        amount: line.amount,
+        reference: remittance.number,
+        notes: null,
+        actorId: actor.id
       });
 
       const dueDatePaid = await sumNetPaymentsForDueDate(tx, line.dueDateId);
@@ -1415,8 +1486,22 @@ export async function settleCustomerRemittanceBankResponse(
       }
     });
 
-    return { kind: "settled" as const, remittance: settled };
+    const value = mapRemittance(settled);
+    await persistRemittanceMutation(tx, context, value);
+
+    return { kind: "settled" as const, value };
+  }).catch((error: unknown) => {
+    if (error instanceof CustomerPaymentAccountingUnavailableError) {
+      return { kind: "accounting-unavailable" as const, reason: error.reason };
+    }
+
+    throw error;
   });
+
+  if (result.kind === "idempotency-reused") return idempotencyKeyReused();
+  if (result.kind === "replayed") {
+    return { ok: true, status: 200, value: result.value };
+  }
 
   if (result.kind === "not-found") {
     return {
@@ -1440,15 +1525,44 @@ export async function settleCustomerRemittanceBankResponse(
     };
   }
 
-  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+  if (result.kind === "accounting-unavailable") {
+    if (result.reason === "FISCAL_YEAR_NOT_OPEN") {
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN",
+          message: "No hay un unico ejercicio contable abierto para la fecha de cobro."
+        }
+      };
+    }
+
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE",
+        message: "Falta alguna cuenta contable activa e imputable necesaria para procesar la remesa."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: result.value };
 }
 
 export async function importCustomerRemittanceBankResponseCsv(
   remittanceId: string,
   command: ImportCustomerRemittanceBankResponseCsvCommand,
   actor: SessionUser,
-  context: Pick<RequestContext, "correlationId"> = {}
+  context: RemittanceMutationContext = {}
 ): Promise<ImportCustomerRemittanceBankResponseCsvResult> {
+  const idempotentReplay = await replayPersistedRemittanceMutation(context);
+
+  if (idempotentReplay?.kind === "reused") return idempotencyKeyReused();
+  if (idempotentReplay?.kind === "replayed") {
+    return { ok: true, status: 200, value: idempotentReplay.value };
+  }
+
   const remittance = await prisma.customerRemittance.findUnique({
     where: { id: remittanceId },
     select: {
@@ -1590,9 +1704,17 @@ export async function processCustomerRemittance(
   remittanceId: string,
   command: ProcessCustomerRemittanceCommand,
   actor: SessionUser,
-  context: Pick<RequestContext, "correlationId"> = {}
+  context: RemittanceMutationContext = {}
 ): Promise<ProcessCustomerRemittanceResult> {
   const result = await prisma.$transaction(async (tx) => {
+    await lockRemittanceCollectionState(tx, remittanceId);
+    const replay = await replayRemittanceMutation(tx, context);
+
+    if (replay?.kind === "reused") return { kind: "idempotency-reused" as const };
+    if (replay?.kind === "replayed") {
+      return { kind: "replayed" as const, value: replay.value };
+    }
+
     const remittance = await tx.customerRemittance.findUnique({
       where: { id: remittanceId },
       select: {
@@ -1619,9 +1741,13 @@ export async function processCustomerRemittance(
                   select: {
                     id: true,
                     status: true,
-                    total: true
+                    total: true,
+                    number: true,
+                    customerCodeSnapshot: true,
+                    customerLegalNameSnapshot: true
                   }
-                }
+                },
+                paymentMethod: true
               }
             }
           }
@@ -1661,17 +1787,19 @@ export async function processCustomerRemittance(
     const paymentDate = parseDateOnly(command.paymentDate);
 
     for (const line of remittance.lines) {
-      await tx.customerPayment.create({
-        data: {
-          invoiceId: line.invoiceId,
-          dueDateId: line.dueDateId,
-          source: "SEPA_REMITTANCE",
-          paymentDate,
-          amount: line.amount,
-          reference: remittance.number,
-          notes: null,
-          createdById: actor.id
-        }
+      await createAccountedCustomerPayment(tx, {
+        invoiceId: line.invoiceId,
+        invoiceNumber: line.dueDate.invoice.number,
+        customerCode: line.dueDate.invoice.customerCodeSnapshot,
+        customerName: line.dueDate.invoice.customerLegalNameSnapshot,
+        dueDateId: line.dueDateId,
+        paymentMethod: line.dueDate.paymentMethod,
+        source: "SEPA_REMITTANCE",
+        paymentDate,
+        amount: line.amount,
+        reference: remittance.number,
+        notes: null,
+        actorId: actor.id
       });
 
       const dueDatePaid = await sumNetPaymentsForDueDate(tx, line.dueDateId);
@@ -1728,8 +1856,22 @@ export async function processCustomerRemittance(
       }
     });
 
-    return { kind: "processed" as const, remittance: processed };
+    const value = mapRemittance(processed);
+    await persistRemittanceMutation(tx, context, value);
+
+    return { kind: "processed" as const, value };
+  }).catch((error: unknown) => {
+    if (error instanceof CustomerPaymentAccountingUnavailableError) {
+      return { kind: "accounting-unavailable" as const, reason: error.reason };
+    }
+
+    throw error;
   });
+
+  if (result.kind === "idempotency-reused") return idempotencyKeyReused();
+  if (result.kind === "replayed") {
+    return { ok: true, status: 200, value: result.value };
+  }
 
   if (result.kind === "not-found") {
     return {
@@ -1753,7 +1895,29 @@ export async function processCustomerRemittance(
     };
   }
 
-  return { ok: true, status: 200, value: mapRemittance(result.remittance) };
+  if (result.kind === "accounting-unavailable") {
+    if (result.reason === "FISCAL_YEAR_NOT_OPEN") {
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "REMITTANCE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN",
+          message: "No hay un unico ejercicio contable abierto para la fecha de cobro."
+        }
+      };
+    }
+
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE",
+        message: "Falta alguna cuenta contable activa e imputable necesaria para procesar la remesa."
+      }
+    };
+  }
+
+  return { ok: true, status: 200, value: result.value };
 }
 
 export async function closeCustomerRemittance(
@@ -2170,6 +2334,7 @@ function mapRemittance(record: CustomerRemittanceRecord): CustomerRemittanceDto 
       dueDate: formatDateOnly(line.dueDateSnapshot),
       amount: line.amount.toFixed(2),
       paymentId: firstPayment?.id ?? null,
+      accountingEntry: firstPayment?.accountingEntry ?? null,
       paymentDate: firstPayment ? formatDateOnly(firstPayment.paymentDate) : null,
       paymentAmount: paymentAmount.toFixed(2),
       returnedAmount: returnedAmount.toFixed(2),
@@ -2229,8 +2394,9 @@ function pendingAmount(dueDate: EligibleDueDateRecord): Prisma.Decimal {
     (total, payment) => total.plus(payment.amount).minus(sumAmounts(payment.returns)),
     new Prisma.Decimal(0)
   );
+  const creditAmount = sumAmounts(dueDate.creditApplications);
 
-  return dueDate.amount.minus(paidAmount);
+  return dueDate.amount.minus(paidAmount).minus(creditAmount);
 }
 
 function sumAmounts(items: Array<{ amount: Prisma.Decimal }>): Prisma.Decimal {
@@ -2342,6 +2508,104 @@ function isValidDateOnly(value: string): boolean {
 
 function parseDateOnly(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+async function lockRemittanceCollectionState(
+  tx: Prisma.TransactionClient,
+  remittanceId: string
+): Promise<void> {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "customer_remittances" WHERE "id" = ${remittanceId}::uuid FOR UPDATE`
+  );
+  await tx.$queryRaw(
+    Prisma.sql`SELECT i."id"
+      FROM "invoices" i
+      JOIN "customer_remittance_lines" l ON l."invoiceId" = i."id"
+      WHERE l."remittanceId" = ${remittanceId}::uuid AND l."status" = 'ACTIVE'
+      ORDER BY i."id"
+      FOR UPDATE OF i`
+  );
+  await tx.$queryRaw(
+    Prisma.sql`SELECT d."id"
+      FROM "invoice_due_dates" d
+      JOIN "customer_remittance_lines" l ON l."dueDateId" = d."id"
+      WHERE l."remittanceId" = ${remittanceId}::uuid AND l."status" = 'ACTIVE'
+      ORDER BY d."id"
+      FOR UPDATE OF d`
+  );
+}
+
+async function replayRemittanceMutation(
+  tx: Prisma.TransactionClient,
+  context: RemittanceMutationContext
+): Promise<
+  | { kind: "replayed"; value: CustomerRemittanceDto }
+  | { kind: "reused" }
+  | null
+> {
+  if (!context.idempotencyKey || !context.requestHash) return null;
+
+  const record = await tx.idempotencyRecord.findUnique({
+    where: { key: context.idempotencyKey }
+  });
+
+  if (!record) return null;
+  if (record.requestHash !== context.requestHash) return { kind: "reused" };
+
+  return {
+    kind: "replayed",
+    value: record.responseBody as unknown as CustomerRemittanceDto
+  };
+}
+
+async function persistRemittanceMutation(
+  tx: Prisma.TransactionClient,
+  context: RemittanceMutationContext,
+  value: CustomerRemittanceDto
+): Promise<void> {
+  if (!context.idempotencyKey || !context.requestHash) return;
+
+  await tx.idempotencyRecord.create({
+    data: {
+      key: context.idempotencyKey,
+      requestHash: context.requestHash,
+      responseStatus: 200,
+      responseBody: value as unknown as Prisma.InputJsonValue
+    }
+  });
+}
+
+function idempotencyKeyReused(): IdempotencyKeyReusedResult {
+  return {
+    ok: false,
+    status: 409,
+    error: {
+      code: "IDEMPOTENCY_KEY_REUSED",
+      message: "La clave de idempotencia ya se uso con otra peticion."
+    }
+  };
+}
+
+async function replayPersistedRemittanceMutation(
+  context: RemittanceMutationContext
+): Promise<
+  | { kind: "replayed"; value: CustomerRemittanceDto }
+  | { kind: "reused" }
+  | null
+> {
+  if (!context.idempotencyKey || !context.requestHash) return null;
+
+  const record = await prisma.idempotencyRecord.findUnique({
+    where: { key: context.idempotencyKey }
+  });
+
+  if (!record) return null;
+  if (record.requestHash !== context.requestHash) return { kind: "reused" };
+
+  return {
+    kind: "replayed",
+    value: record.responseBody as unknown as CustomerRemittanceDto
+  };
 }
 
 function formatDateOnly(value: Date): string {
