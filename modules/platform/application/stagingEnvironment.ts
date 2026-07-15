@@ -83,7 +83,7 @@ export function assertStagingDatabaseIdentity(
   if (
     identity.databaseName !== stagingDatabaseName ||
     identity.databaseRole !== expectedRole ||
-    !["127.0.0.1", "::1"].includes(identity.serverAddress ?? "") ||
+    !["127.0.0.1", "127.0.0.1/32", "::1", "::1/128"].includes(identity.serverAddress ?? "") ||
     identity.serverPort !== 5432
   ) {
     throw new Error("STAGING_DATABASE_IDENTITY_INVALID");

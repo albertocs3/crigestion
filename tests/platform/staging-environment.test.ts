@@ -28,6 +28,15 @@ describe("staging environment guard", () => {
     })).not.toThrow();
   });
 
+  it.each(["127.0.0.1/32", "::1/128"])("accepts PostgreSQL loopback address %s with its host mask", (serverAddress) => {
+    expect(() => assertStagingDatabaseIdentity({
+      databaseName: "crigestion_staging",
+      databaseRole: "crigestion_staging_app",
+      serverAddress,
+      serverPort: 5432
+    }, stagingRuntimeDatabaseRole)).not.toThrow();
+  });
+
   it.each([
     "postgresql://crigestion_staging_app:secret@localhost:5432/crigestion_staging?schema=public",
     "postgresql://other:secret@127.0.0.1:5432/crigestion_staging?schema=public",
@@ -61,6 +70,15 @@ describe("staging environment guard", () => {
       databaseName: "crigestion_staging",
       databaseRole: "crigestion_staging_migrator",
       serverAddress: "127.0.0.1",
+      serverPort: 5432
+    }, stagingRuntimeDatabaseRole)).toThrow("STAGING_DATABASE_IDENTITY_INVALID");
+  });
+
+  it.each(["127.0.0.1/24", "127.0.0.2/32", "::1/64", "::2/128", null])("rejects non-approved or non-host address %s", (serverAddress) => {
+    expect(() => assertStagingDatabaseIdentity({
+      databaseName: "crigestion_staging",
+      databaseRole: "crigestion_staging_app",
+      serverAddress,
       serverPort: 5432
     }, stagingRuntimeDatabaseRole)).toThrow("STAGING_DATABASE_IDENTITY_INVALID");
   });
