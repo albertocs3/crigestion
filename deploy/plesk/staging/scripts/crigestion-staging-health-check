@@ -1,0 +1,97 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_SERVICE='crigestion-staging-app.service'
+WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
+BACKUP_TIMER='crigestion-staging-backup.timer'
+BACKUP_DIR='/root/crigestion-staging-backups'
+BACKUP_MAX_AGE_SECONDS=129600
+PUBLIC_HEALTH='https://gestion-test.crisoft.es/api/health'
+LOCAL_HEALTH='http://127.0.0.1:3101/api/health'
+NODE='/opt/plesk/node/22/bin/node'
+
+systemctl is-active --quiet "$APP_SERVICE"
+systemctl is-active --quiet "$WORKER_SERVICE"
+systemctl is-active --quiet "$BACKUP_TIMER"
+
+LATEST_BACKUP="$(
+  find "$BACKUP_DIR" \
+    -maxdepth 1 \
+    -type f \
+    -name 'crigestion_staging-auto-*.dump' \
+    -printf '%T@ %p\n' |
+  sort -nr |
+  head -n 1 |
+  cut -d' ' -f2-
+)"
+
+test -n "$LATEST_BACKUP"
+test -f "$LATEST_BACKUP.sha256"
+
+BACKUP_MTIME="$(stat -c '%Y' "$LATEST_BACKUP")"
+NOW_EPOCH="$(date +%s)"
+
+if ((
+  NOW_EPOCH < BACKUP_MTIME ||
+  NOW_EPOCH - BACKUP_MTIME > BACKUP_MAX_AGE_SECONDS
+)); then
+  echo 'CRIGESTION_STAGING_BACKUP_STALE' >&2
+  exit 1
+fi
+
+read -r EXPECTED_HASH EXPECTED_NAME EXTRA_FIELDS \
+  < "$LATEST_BACKUP.sha256"
+
+test -z "${EXTRA_FIELDS:-}"
+test "$EXPECTED_NAME" = "$(basename "$LATEST_BACKUP")"
+[[ "$EXPECTED_HASH" =~ ^[0-9a-f]{64}$ ]]
+
+ACTUAL_HASH="$(/usr/bin/sha256sum "$LATEST_BACKUP" | cut -d' ' -f1)"
+test "$ACTUAL_HASH" = "$EXPECTED_HASH"
+
+/usr/bin/pg_restore --list "$LATEST_BACKUP" > /dev/null
+
+LOCAL_RESPONSE="$(
+  curl \
+    --silent \
+    --show-error \
+    --fail \
+    --connect-timeout 5 \
+    --max-time 15 \
+    "$LOCAL_HEALTH"
+)"
+
+PUBLIC_RESPONSE="$(
+  curl \
+    --silent \
+    --show-error \
+    --fail \
+    --proto '=https' \
+    --tlsv1.2 \
+    --connect-timeout 5 \
+    --max-time 20 \
+    "$PUBLIC_HEALTH"
+)"
+
+"$NODE" - "$LOCAL_RESPONSE" "$PUBLIC_RESPONSE" <<'NODE'
+const responses = process.argv.slice(2);
+
+if (responses.length !== 2) {
+  throw new Error("HEALTH_RESPONSE_COUNT_INVALID");
+}
+
+for (const text of responses) {
+  const health = JSON.parse(text);
+
+  if (
+    health.status !== "ok" ||
+    health.database !== "ok" ||
+    health.verifactu !== "ok" ||
+    health.worker !== "ok"
+  ) {
+    throw new Error("CRIGESTION_HEALTH_DEGRADED");
+  }
+}
+NODE
+
+echo "CRIGESTION_STAGING_HEALTH_OK $(date -u +%Y-%m-%dT%H:%M:%SZ)"

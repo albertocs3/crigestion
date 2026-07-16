@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+
+umask 077
+
+BACKUP_DIR='/root/crigestion-staging-backups'
+DATABASE='crigestion_staging'
+RETENTION_DAYS='14'
+
+unset \
+  PGHOST \
+  PGHOSTADDR \
+  PGPORT \
+  PGDATABASE \
+  PGUSER \
+  PGSERVICE \
+  PGSERVICEFILE \
+  PGOPTIONS
+
+if [ "$BACKUP_DIR" != '/root/crigestion-staging-backups' ]; then
+  echo 'BACKUP_DIRECTORY_INVALID' >&2
+  exit 1
+fi
+
+install -d -o root -g root -m 0700 "$BACKUP_DIR"
+
+exec 9>"$BACKUP_DIR/.automatic-backup.lock"
+
+if ! flock -n 9; then
+  echo 'BACKUP_ALREADY_RUNNING'
+  exit 0
+fi
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+NAME="crigestion_staging-auto-$STAMP.dump"
+FINAL="$BACKUP_DIR/$NAME"
+TEMP="$(mktemp "$BACKUP_DIR/.${NAME}.XXXXXX.incomplete")"
+CHECKSUM_TEMP="$(mktemp "$BACKUP_DIR/.${NAME}.sha256.XXXXXX.incomplete")"
+
+cleanup() {
+  rm -f -- "$TEMP" "$CHECKSUM_TEMP"
+}
+
+trap cleanup EXIT
+
+cd /tmp
+
+IDENTITY="$(
+  runuser -u postgres -- /usr/bin/psql \
+    -X \
+    --host=/var/run/postgresql \
+    --port=5432 \
+    --username=postgres \
+    --dbname="$DATABASE" \
+    --no-password \
+    -Atqc "SELECT current_database() || '|' || current_user;"
+)"
+
+test "$IDENTITY" = 'crigestion_staging|postgres'
+
+runuser -u postgres -- /usr/bin/pg_dump \
+  --format=custom \
+  --no-owner \
+  --no-privileges \
+  --host=/var/run/postgresql \
+  --port=5432 \
+  --username=postgres \
+  --no-password \
+  --dbname="$DATABASE" \
+  > "$TEMP"
+
+test -s "$TEMP"
+/usr/bin/pg_restore --list "$TEMP" > /dev/null
+
+HASH="$(/usr/bin/sha256sum "$TEMP" | cut -d' ' -f1)"
+printf '%s  %s\n' "$HASH" "$NAME" > "$CHECKSUM_TEMP"
+
+mv -- "$CHECKSUM_TEMP" "$FINAL.sha256"
+mv -- "$TEMP" "$FINAL"
+
+chmod 0600 "$FINAL" "$FINAL.sha256"
+trap - EXIT
+
+find "$BACKUP_DIR" \
+  -maxdepth 1 \
+  -type f \
+  -name 'crigestion_staging-auto-*.dump' \
+  -mtime "+$RETENTION_DAYS" \
+  -delete
+
+find "$BACKUP_DIR" \
+  -maxdepth 1 \
+  -type f \
+  -name 'crigestion_staging-auto-*.dump.sha256' \
+  -mtime "+$RETENTION_DAYS" \
+  -delete
+
+echo "AUTOMATIC_BACKUP_OK: $FINAL"

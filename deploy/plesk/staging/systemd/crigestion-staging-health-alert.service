@@ -1,0 +1,35 @@
+[Unit]
+Description=Send CriGestion staging health failure alert
+Wants=postfix.service
+After=postfix.service
+ConditionFileIsExecutable=/usr/sbin/sendmail
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=/etc/crigestion-staging/alert.env
+ExecStart=/usr/local/sbin/crigestion-staging-health-alert health-failure
+TimeoutStartSec=60s
+UMask=0077
+
+StateDirectory=crigestion-staging-alerts
+StateDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=full
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+StandardOutput=journal
+StandardError=journal

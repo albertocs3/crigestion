@@ -1,0 +1,143 @@
+#!/bin/bash
+set -euo pipefail
+
+umask 077
+
+RECIPIENT="${CRIGESTION_ALERT_RECIPIENT:-}"
+SENDER="${CRIGESTION_ALERT_SENDER:-}"
+SENDMAIL='/usr/sbin/sendmail'
+HEALTH_UNIT='crigestion-staging-health-check.service'
+BACKUP_UNIT='crigestion-staging-backup.service'
+STATE_DIR='/var/lib/crigestion-staging-alerts'
+COOLDOWN_SECONDS=3600
+MODE="${1:-health-failure}"
+
+case "$RECIPIENT" in
+  ''|*$'\r'*|*$'\n'*|*' '*|@*|*@|*@*@*)
+    echo 'ALERT_RECIPIENT_INVALID' >&2
+    exit 2
+    ;;
+esac
+
+case "$SENDER" in
+  ''|*$'\r'*|*$'\n'*|*' '*|@*|*@|*@*@*)
+    echo 'ALERT_SENDER_INVALID' >&2
+    exit 2
+    ;;
+esac
+
+IS_FAILURE=0
+
+case "$MODE" in
+  failure|health-failure)
+    MONITORED_UNIT="$HEALTH_UNIT"
+    ALERT_KEY='health'
+    SUBJECT='[CriGestion staging] health check failed'
+    IS_FAILURE=1
+    ;;
+  backup-failure)
+    MONITORED_UNIT="$BACKUP_UNIT"
+    ALERT_KEY='backup'
+    SUBJECT='[CriGestion staging] PostgreSQL backup failed'
+    IS_FAILURE=1
+    ;;
+  --dry-run)
+    MONITORED_UNIT="$HEALTH_UNIT"
+    ALERT_KEY='dry-run'
+    SUBJECT='[DRY RUN] CriGestion staging alert'
+    ;;
+  --test)
+    MONITORED_UNIT="$HEALTH_UNIT"
+    ALERT_KEY='test'
+    SUBJECT='[TEST] CriGestion staging health alert'
+    ;;
+  *)
+    echo 'ALERT_MODE_INVALID' >&2
+    exit 2
+    ;;
+esac
+
+LAST_SENT_FILE="$STATE_DIR/$ALERT_KEY-last-sent.epoch"
+LOCK_FILE="$STATE_DIR/$ALERT_KEY-alert.lock"
+
+test -x "$SENDMAIL"
+install -d -o root -g root -m 0700 "$STATE_DIR"
+
+HOST="$(hostname --fqdn 2>/dev/null || hostname)"
+UTC_NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RESULT="$(systemctl show "$MONITORED_UNIT" -p Result --value 2>/dev/null || true)"
+EXEC_STATUS="$(
+  systemctl show "$MONITORED_UNIT" -p ExecMainStatus --value 2>/dev/null || true
+)"
+
+RESULT="${RESULT:-unknown}"
+EXEC_STATUS="${EXEC_STATUS:-unknown}"
+
+if [ "$MODE" = '--dry-run' ]; then
+  echo "ALERT_DRY_RUN_OK recipient=$RECIPIENT unit=$MONITORED_UNIT host=$HOST"
+  exit 0
+fi
+
+exec 9>"$LOCK_FILE"
+
+if ! flock -n 9; then
+  echo 'ALERT_SUPPRESSED_LOCKED'
+  exit 0
+fi
+
+if [ "$IS_FAILURE" -eq 1 ]; then
+  NOW_EPOCH="$(date +%s)"
+  LAST_SENT_EPOCH=0
+
+  if [ -r "$LAST_SENT_FILE" ]; then
+    read -r LAST_SENT_EPOCH < "$LAST_SENT_FILE" || LAST_SENT_EPOCH=0
+  fi
+
+  if ! [[ "$LAST_SENT_EPOCH" =~ ^[0-9]+$ ]]; then
+    LAST_SENT_EPOCH=0
+  fi
+
+  if ((
+    LAST_SENT_EPOCH > 0 &&
+    NOW_EPOCH >= LAST_SENT_EPOCH &&
+    NOW_EPOCH - LAST_SENT_EPOCH < COOLDOWN_SECONDS
+  )); then
+    echo 'ALERT_SUPPRESSED_COOLDOWN'
+    exit 0
+  fi
+
+fi
+
+{
+  printf 'To: %s\n' "$RECIPIENT"
+  printf 'From: CriGestion staging monitor <%s>\n' "$SENDER"
+  printf 'Subject: %s\n' "$SUBJECT"
+  printf 'Content-Type: text/plain; charset=UTF-8\n'
+  printf 'Content-Transfer-Encoding: 8bit\n'
+  printf '\n'
+  printf 'CriGestion staging operational monitor.\n\n'
+  printf 'Host: %s\n' "$HOST"
+  printf 'Unit: %s\n' "$MONITORED_UNIT"
+  printf 'UTC: %s\n' "$UTC_NOW"
+  printf 'Result: %s\n' "$RESULT"
+  printf 'ExecMainStatus: %s\n' "$EXEC_STATUS"
+  printf '\nReview the service journal on the VPS.\n'
+} | "$SENDMAIL" -t -oi
+
+if [ "$IS_FAILURE" -eq 1 ]; then
+  TEMP_FILE="$(mktemp "$STATE_DIR/.${ALERT_KEY}-last-sent.XXXXXX")"
+
+  cleanup() {
+    rm -f -- "$TEMP_FILE"
+  }
+
+  trap cleanup EXIT
+
+  printf '%s\n' "$NOW_EPOCH" > "$TEMP_FILE"
+  chmod 0600 "$TEMP_FILE"
+  mv -- "$TEMP_FILE" "$LAST_SENT_FILE"
+
+  trap - EXIT
+fi
+
+echo "ALERT_ACCEPTED_BY_LOCAL_MTA mode=$MODE recipient=$RECIPIENT"

@@ -12,6 +12,7 @@ EnvironmentFile=/etc/crigestion-staging/migrator.env
 Environment=NODE_ENV=production
 ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/releases/%i/prisma/schema.prisma
 ExecStart=/opt/plesk/node/22/bin/node --import tsx scripts/deploy-staging-migrations.ts
+TimeoutStartSec=30min
 UMask=0077
 
 NoNewPrivileges=true
@@ -19,6 +20,7 @@ PrivateDevices=true
 PrivateTmp=true
 ProtectControlGroups=true
 ProtectHome=true
+ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectSystem=strict
