@@ -14,9 +14,9 @@ Estado verificado el 2026-07-17:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extension `btree_gist` instalada.
-- Release activa `staging-2026.07.17-rc1`.
-- Commit `ef40495c64f491669417ebdbc9fdd518a3ff2fa0`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.07.17-rc1` y
+- Release activa `staging-2026.07.17-rc2`.
+- Commit `ddfc6ce037b68683755d160d53b79fbadab0a011`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.07.17-rc2` y
   enlace `/opt/crigestion-staging/current`.
 - 79 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
@@ -157,7 +157,12 @@ parametrizado sin su env romperia el aviso instalado.
 
    ```bash
    npm ci --include=dev
-   npm run build
+   /opt/plesk/node/22/bin/node \
+     --env-file=/etc/crigestion-staging/build.env \
+     node_modules/prisma/build/index.js generate
+   /opt/plesk/node/22/bin/node \
+     --env-file=/etc/crigestion-staging/build.env \
+     node_modules/next/dist/bin/next build
    test -s .next/BUILD_ID
    ```
 
@@ -172,7 +177,9 @@ parametrizado sin su env romperia el aviso instalado.
    mantenimiento segun compatibilidad y ventana aprobada.
 7. Ejecutar una sola unidad
    `crigestion-staging-migrate@<RELEASE_ID>.service`; no usar
-   `prisma migrate dev` ni `db:seed`.
+   `prisma migrate dev` ni `db:seed`. Antes de iniciarla, el directorio
+   `node_modules/@prisma/engines` debe permitir escritura al grupo
+   `crigestion-staging-release`; restaurar modo `0750` al terminar.
 8. Confirmar que el migrador efectivo es `crigestion_staging_migrator` y no
    tiene atributos elevados.
 9. El post-migrado debe dejar al runtime sin acceso a `_prisma_migrations`, sin
@@ -182,6 +189,12 @@ parametrizado sin su env romperia el aviso instalado.
     proceso y journal; con VeriFactu habilitado, un health degradado/503 puede
     ser esperado en este punto.
 11. Arrancar el worker y exigir entonces health completo HTTP 200.
+
+Tras el migrador y `npm prune --omit=dev`, normalizar a
+`root:crigestion-staging-release` y modo `0750` la biblioteca
+`node_modules/.prisma/client/libquery_engine-*.so.node`. La unidad runtime
+necesita lectura y ejecucion de ese archivo; un modo `0711` provoca
+`PrismaClientInitializationError` y exige rollback del enlace.
 
 La unidad migradora tiene un timeout deliberado de 30 minutos. Observar
 `systemctl status` y el journal ante bloqueos; no matar arbitrariamente una
@@ -323,13 +336,28 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
 - conservacion interna de `ACCOUNT_LOCKED` en intentos y auditoria sin guardar
   la contrasena enviada;
 - reactivacion manual del usuario UAT, con estado final `ACTIVE` y sin fecha de
-  bloqueo.
+  bloqueo;
+- vencimiento del bloqueo automatico validado en `staging-2026.07.17-rc2` con
+  una cuenta temporal restringida: el login correcto posterior creo la sesion,
+  reinicio el contador y genero exactamente un `ACCOUNT_UNLOCKED` con motivo
+  `LOCK_EXPIRED`;
+- cinco fallos previos conservados como cuatro `INVALID_CREDENTIALS` y un
+  `ACCOUNT_LOCKED`, sin distinguir el estado en la respuesta publica;
+- cierre de la sesion temporal, cero sesiones activas y cuenta de prueba final
+  `INACTIVE` tras la limpieza UAT.
 
 La correccion del contrato de login se publico como
 `staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
 migrador controlado termino correctamente, y web, PostgreSQL, worker y
 VeriFactu quedaron en estado `ok`. La autorizacion SSH temporal usada durante
 el despliegue se retiro al finalizar. Produccion no se modifico.
+
+La release `staging-2026.07.17-rc2` se desplego despues de un backup verificado
+y una unidad migradora terminada con resultado `success`. Dos intentos de corte
+activaron el rollback automatico a `rc1` mientras se corrigieron exclusivamente
+permisos de escritura/lectura de los motores Prisma. El corte final dejo web,
+PostgreSQL, worker y VeriFactu en estado `ok`; no hubo cambios de esquema ni de
+produccion.
 
 ## 9. Rollback y recuperacion
 
