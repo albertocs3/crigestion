@@ -368,7 +368,15 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
   cuenta termino `INACTIVE` y solo permanecio activa la sesion administradora;
 - auditoria de la asignacion y restauracion mediante dos eventos
   `USER_ROLE_CHANGED` con identificadores de usuario y actor y codigos de rol,
-  sin contrasena, cookie, token ni otro secreto.
+  sin contrasena, cookie, token ni otro secreto;
+- invalidacion inmediata de las sesiones del rol al sustituir temporalmente
+  `Billing.View` por `Catalog.View`, comprobada con la cookie previamente
+  valida mediante `{ "authenticated": false }`;
+- restauracion exacta de `Billing.View` como unico permiso, cuenta temporal
+  final `INACTIVE` y solo la sesion administradora activa;
+- auditoria de la sustitucion y restauracion mediante dos eventos
+  `ROLE_PERMISSIONS_CHANGED` con identificadores y codigos de permisos, sin
+  contrasena, cookie, token ni otro secreto.
 
 La correccion del contrato de login se publico como
 `staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
