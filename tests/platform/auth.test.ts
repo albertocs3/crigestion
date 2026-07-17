@@ -218,6 +218,62 @@ describe("platform authentication", () => {
     expect(serializedAudit).not.toContain("Clave-incorrecta-2026");
   });
 
+  it("does not reveal that an account is locked on later login attempts", async () => {
+    const submittedPassword = "Clave-incorrecta-bloqueo-2026";
+    const expectedPublicError = {
+      ok: false,
+      status: 401,
+      error: {
+        code: "INVALID_CREDENTIALS",
+        message: "Usuario o contrasena incorrectos."
+      }
+    } as const;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = await login({
+        userName: "admin",
+        password: submittedPassword
+      });
+
+      expect(result).toEqual(expectedPublicError);
+    }
+
+    const result = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+    const attempts = await prisma.loginAttempt.findMany({
+      where: { normalizedUserName: "admin" },
+      orderBy: { createdAt: "asc" }
+    });
+    const auditEvents = await prisma.auditEvent.findMany({
+      where: {
+        eventType: "LOGIN_FAILED",
+        payload: {
+          path: ["reason"],
+          equals: "ACCOUNT_LOCKED"
+        }
+      },
+      orderBy: { createdAt: "asc" }
+    });
+    const sessionCount = await prisma.session.count();
+
+    expect(result).toEqual(expectedPublicError);
+    expect(attempts).toHaveLength(6);
+    expect(attempts.slice(-2).map((attempt) => attempt.failureCode)).toEqual([
+      "ACCOUNT_LOCKED",
+      "ACCOUNT_LOCKED"
+    ]);
+    expect(auditEvents).toHaveLength(2);
+    expect(auditEvents.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ reason: "ACCOUNT_LOCKED" }),
+      expect.objectContaining({ reason: "ACCOUNT_LOCKED" })
+    ]);
+    expect(JSON.stringify(auditEvents)).not.toContain(submittedPassword);
+    expect(JSON.stringify(auditEvents)).not.toContain(baseCommand.administrator.password);
+    expect(sessionCount).toBe(0);
+  });
+
   it("rate limits repeated login attempts by IP", async () => {
     const ipAddress = "198.51.100.10";
 

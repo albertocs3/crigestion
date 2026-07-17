@@ -134,6 +134,32 @@ describe("authentication HTTP contracts", () => {
     });
   });
 
+  it("does not expose locked account state through the login contract", async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await loginPost(
+        jsonRequest("/api/auth/login", {
+          userName: "admin",
+          password: "Clave-incorrecta-bloqueo-2026"
+        })
+      );
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({
+        code: "INVALID_CREDENTIALS",
+        message: "Usuario o contrasena incorrectos."
+      });
+    }
+
+    const response = await loginPost(jsonRequest("/api/auth/login", credentials()));
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({
+      code: "INVALID_CREDENTIALS",
+      message: "Usuario o contrasena incorrectos."
+    });
+    expect(cookieMock.setCalls).toHaveLength(0);
+  });
+
   it("rate limits repeated login requests by IP", async () => {
     const ipAddress = "198.51.100.42";
 

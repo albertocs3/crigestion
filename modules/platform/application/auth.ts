@@ -71,11 +71,10 @@ export type LoginResult =
     }
   | {
       ok: false;
-      status: 401 | 409 | 423 | 429;
+      status: 401 | 409 | 429;
       error: {
         code:
           | "INVALID_CREDENTIALS"
-          | "ACCOUNT_LOCKED"
           | "ACTIVE_SESSION_EXISTS"
           | "LOGIN_RATE_LIMITED";
         message: string;
@@ -188,6 +187,8 @@ export async function login(
   }
 
   if (user.status === "LOCKED" && user.lockedUntil && user.lockedUntil > now) {
+    verifyPassword(command.password, user.passwordHash);
+
     const lockedUntil = new Date(now.getTime() + lockDurationMs);
     await prisma.$transaction([
       prisma.user.update({
@@ -215,14 +216,7 @@ export async function login(
       })
     ]);
 
-    return {
-      ok: false,
-      status: 423,
-      error: {
-        code: "ACCOUNT_LOCKED",
-        message: "La cuenta esta bloqueada temporalmente."
-      }
-    };
+    return invalidCredentials();
   }
 
   if (user.status !== "ACTIVE") {

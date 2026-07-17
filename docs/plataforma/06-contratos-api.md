@@ -196,15 +196,17 @@ Errores:
 | Estado | Codigo | Causa |
 |---|---|---|
 | 400 | `INVALID_JSON` | Cuerpo JSON mal formado |
-| 401 | `INVALID_CREDENTIALS` | Usuario, contrasena o estado no validos |
+| 401 | `INVALID_CREDENTIALS` | Usuario, contrasena o estado no validos; incluye cuentas bloqueadas |
 | 403 | `ORIGIN_NOT_ALLOWED` | Origen no permitido |
 | 409 | `ACTIVE_SESSION_EXISTS` | Ya existe una sesion activa |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
-| 423 | `ACCOUNT_LOCKED` | Cuenta bloqueada temporalmente |
 | 429 | `LOGIN_RATE_LIMITED` | Demasiados intentos recientes desde la misma IP confiable |
 
-La respuesta `429` incluye la cabecera `Retry-After` y el campo `retryAfterSeconds`.
+El estado bloqueado se conserva solo en `login_attempts` y auditoria mediante
+`ACCOUNT_LOCKED`; la respuesta publica permanece indistinguible de otras
+credenciales invalidas. La respuesta `429` incluye la cabecera `Retry-After` y
+el campo `retryAfterSeconds`.
 
 ### `GET /api/auth/session`
 
