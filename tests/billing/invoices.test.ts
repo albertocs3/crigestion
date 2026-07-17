@@ -1146,7 +1146,12 @@ describe("billing invoices application service", () => {
       idempotencyKey: randomUUID(),
       requestHash: hashCustomerCreditRefundAction(refundId, "post")
     });
-    expect(posted).toMatchObject({ ok: true, value: { availableAmount: "0.00", status: "EXHAUSTED" } });
+    expect(posted).toMatchObject({ ok: true, value: {
+      reservedRefundAmount: "0.00",
+      postedRefundAmount: "71.00",
+      availableAmount: "0.00",
+      status: "EXHAUSTED"
+    } });
     const entry = await prisma.accountingJournalEntry.findUniqueOrThrow({
       where: { customerCreditRefundId: refundId },
       include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
