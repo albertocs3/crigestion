@@ -17,7 +17,7 @@ Fecha de corte: 2026-07-17.
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
 | Contabilidad | Operativa inicial | PGC PYMES, cuentas, asientos manuales, ejercicios, regularizacion, cierre y apertura. |
-| Tesoreria y SEPA | Operativa inicial | Vencimientos, previsiones de cobro, remesas, SEPA, respuestas bancarias controladas y devoluciones. |
+| Tesoreria y SEPA | Operativa inicial | Vencimientos, previsiones de cobro, remesas, SEPA, respuestas bancarias controladas, devoluciones, saldos a favor, compensaciones y reembolsos segregados. |
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
 
@@ -51,7 +51,7 @@ Evidencia actualizada el 17 de julio de 2026 sobre PostgreSQL desechable:
 - TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
-La aceptacion funcional de `staging-2026.07.17-rc4`, incluidas las pruebas de
+La aceptacion funcional de `staging-2026.07.17-rc5`, incluidas las pruebas de
 autenticacion, RBAC, sesiones, tesoreria y auditoria desde navegador, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
 

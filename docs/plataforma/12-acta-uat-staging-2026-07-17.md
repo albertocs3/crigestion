@@ -2,8 +2,8 @@
 
 ## 1. Decision
 
-La release `staging-2026.07.17-rc4`, commit
-`4521e274a9cd4aa78725d8bb29101467697061ef`, queda **ACEPTADA PARA STAGING**
+La release `staging-2026.07.17-rc5`, commit
+`1cda851e83d6e31b9bbdb9938028f33a21e47bff`, queda **ACEPTADA PARA STAGING**
 en el alcance descrito en este documento.
 
 Esta aceptacion no autoriza ni prepara un despliegue en produccion. VeriFactu
@@ -21,17 +21,21 @@ permanece limitado a AEAT TEST y los bloqueos productivos siguen cerrados.
 - Auditoria de operaciones funcionales y de seguridad sin contrasenas,
   certificados, claves, cookies, tokens, XML completos ni otros secretos.
 - Cabeceras HTTP de seguridad y redireccion de paginas privadas anonimas.
+- Saldos a favor de clientes, compensacion de vencimientos y reembolsos con
+  segregacion entre solicitud, aprobacion y contabilizacion.
 
 La evidencia detallada y el procedimiento operativo se conservan en
 `docs/plataforma/11-despliegue-staging-plesk.md`.
 
 ## 3. Estado final del entorno
 
-- Release activa: `staging-2026.07.17-rc4`.
+- Release activa: `staging-2026.07.17-rc5`.
 - Web, PostgreSQL, worker y VeriFactu: estado `ok` en la verificacion posterior
   al despliegue.
 - Rol `UAT_RESTRICTED`: restaurado con `Billing.View` como unico permiso.
 - Cuentas `uat_restricted`, `uat_unlock_rc2` y `uat_session_rc2`: `INACTIVE`.
+- Cuenta `uat_credit_approver`: `INACTIVE`; su sesion fue revocada al terminar
+  la prueba.
 - Sesiones UAT: ninguna activa; solo permanece la sesion administradora usada
   para el cierre.
 - Desactivacion final auditada mediante `USER_DEACTIVATED` con identificadores
@@ -126,7 +130,47 @@ en los filtros opcionales de la prevision. La correccion y su regresion E2E se
 desplegaron como `staging-2026.07.17-rc4`; el smoke posterior confirmo la
 simulacion sin `Filtro de prevision invalido` y health completo en estado `ok`.
 
-No se ensayo el ciclo de saldos a favor porque staging no contiene una
-rectificativa total fiscalmente aceptada que origine el credito. No se creo un
-credito manual ni se forzo una aceptacion VeriFactu para fabricar la
-precondicion.
+El ciclo de saldos a favor se ejecuto a continuacion tras obtener mediante
+AEAT TEST la precondicion fiscal necesaria, como recoge la seccion siguiente.
+
+## 9. Saldos a favor, compensacion y reembolso
+
+La precondicion se obtuvo posteriormente mediante un ciclo fiscal real en AEAT
+TEST con datos sinteticos. La factura `F2600003`, por 121 EUR, y su
+rectificativa total `R2600001` fueron subsanadas y aceptadas. El credito se
+mantuvo retenido mientras la rectificativa no estaba aceptada y paso a
+disponible tras la aceptacion fiscal, sin crear ni forzar manualmente el saldo.
+
+Se emitio despues la factura `F2600004`, por 60,50 EUR, aceptada directamente
+en AEAT TEST. Se compenso por completo con 60,50 EUR del credito, dejando la
+factura saldada sin registrar un cobro bancario. Los 60,50 EUR restantes
+recorrieron solicitud, cancelacion de control, nueva solicitud, aprobacion por
+un usuario distinto y contabilizacion del reembolso.
+
+La segregacion de funciones se valido con el rol temporal
+`UAT_CREDIT_APPROVER`, limitado a ver saldos, aprobar reembolsos y
+contabilizarlos. El solicitante no pudo autoaprobar. El aprobador pudo actuar
+sobre el reembolso, pero el servidor le denego usuarios, roles, configuracion,
+auditoria, credenciales VeriFactu y contabilidad. Al terminar, la cuenta
+temporal quedo inactiva y sin sesiones vigentes.
+
+El asiento `2026/000011`, por 60,50 EUR, carga la cuenta de cliente y abona la
+cuenta bancaria. La auditoria conserva
+`CUSTOMER_CREDIT_APPLIED`, `CUSTOMER_CREDIT_REFUND_REQUESTED`,
+`CUSTOMER_CREDIT_REFUND_CANCELLED`, `CUSTOMER_CREDIT_REFUND_APPROVED`,
+`CUSTOMER_CREDIT_REFUND_POSTED` y `USER_DEACTIVATED`. Sus payloads contienen
+importes e identificadores tecnicos, sin IBAN completo, contrasenas,
+certificados, claves, XML ni secretos.
+
+Durante el cierre se detecto que un reembolso ya contabilizado seguia
+mostrandose tambien como reservado. La correccion separa la reserva pendiente
+del importe reembolsado y mantiene ambos conceptos en el calculo del saldo. Se
+anadio una regresion que exige, tras contabilizar, reserva `0.00`, reembolsado
+`71.00` y disponible `0.00` en el escenario automatizado. La prueba dirigida
+de facturacion supero 21 casos, y TypeScript y ESLint finalizaron sin errores.
+
+La correccion se desplego como `staging-2026.07.17-rc5` tras backup verificado,
+build optimizado, migrador sin migraciones pendientes y health local y publico
+en estado `ok`. El smoke final desde navegador confirmo para el credito UAT:
+121 EUR originales, 60,50 EUR aplicados, 60,50 EUR reembolsados, 0 EUR
+reservados y 0 EUR disponibles.
