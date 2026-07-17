@@ -5,7 +5,7 @@
 Este runbook cubre exclusivamente `https://gestion-test.crisoft.es` en el VPS
 Ubuntu 22.04 administrado con Plesk.
 
-Estado verificado el 2026-07-16:
+Estado verificado el 2026-07-17:
 
 - VPS `93.93.116.238`.
 - Node.js `22.23.1` en `/opt/plesk/node/22/bin/node`.
@@ -14,9 +14,9 @@ Estado verificado el 2026-07-16:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extension `btree_gist` instalada.
-- Release activa `staging-2026.07.15-rc2`.
-- Commit `2f7dc1a04620fe5815fff9167b43b77a25dda438`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.07.15-rc2` y
+- Release activa `staging-2026.07.17-rc1`.
+- Commit `ef40495c64f491669417ebdbc9fdd518a3ff2fa0`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.07.17-rc1` y
   enlace `/opt/crigestion-staging/current`.
 - 79 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
@@ -304,6 +304,32 @@ El 2026-07-16 se verifico:
 
 No se documentan PFX, contrasenas, sujetos de certificado, identificadores
 fiscales de prueba, numeros de factura ni payloads AEAT.
+
+### 8.1 UAT de autenticacion, permisos y auditoria
+
+El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
+
+- logout con redireccion a `/login` e invalidacion real de la sesion;
+- nuevo login administrativo y acceso autorizado a `/app/audit`;
+- correlacion de login/logout, emision, operaciones VeriFactu, subsanacion y
+  anulacion sin contrasenas, certificados, claves, XML completos ni secretos;
+- rol UAT personalizado con un unico permiso `Billing.View`;
+- denegacion server-side y auditoria `ACCESS_DENIED` para gestion de roles,
+  usuarios, configuracion, auditoria y credenciales VeriFactu;
+- ausencia de sesion UAT tras logout y proteccion de autocambios del
+  administrador actual;
+- bloqueo tras cinco intentos fallidos, manteniendo la respuesta publica
+  `401 INVALID_CREDENTIALS` indistinguible tambien durante el bloqueo;
+- conservacion interna de `ACCOUNT_LOCKED` en intentos y auditoria sin guardar
+  la contrasena enviada;
+- reactivacion manual del usuario UAT, con estado final `ACTIVE` y sin fecha de
+  bloqueo.
+
+La correccion del contrato de login se publico como
+`staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
+migrador controlado termino correctamente, y web, PostgreSQL, worker y
+VeriFactu quedaron en estado `ok`. La autorizacion SSH temporal usada durante
+el despliegue se retiro al finalizar. Produccion no se modifico.
 
 ## 9. Rollback y recuperacion
 
