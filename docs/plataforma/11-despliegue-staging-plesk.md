@@ -344,7 +344,13 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
 - cinco fallos previos conservados como cuatro `INVALID_CREDENTIALS` y un
   `ACCOUNT_LOCKED`, sin distinguir el estado en la respuesta publica;
 - cierre de la sesion temporal, cero sesiones activas y cuenta de prueba final
-  `INACTIVE` tras la limpieza UAT.
+  `INACTIVE` tras la limpieza UAT;
+- revocacion remota validada con una segunda cuenta restringida: la sesion
+  aparecio en `/app/sessions`, desaparecio al pulsar `Revocar` y la misma cookie
+  devolvio inmediatamente `{ "authenticated": false }`;
+- auditoria `SESSION_REVOKED` con motivo `ADMIN_SESSION_REVOKED`, identificadores
+  de usuario, sesion y actor, sin token ni secreto; cuenta temporal final
+  `INACTIVE` y solo la sesion administradora activa.
 
 La correccion del contrato de login se publico como
 `staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
