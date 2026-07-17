@@ -208,6 +208,12 @@ El estado bloqueado se conserva solo en `login_attempts` y auditoria mediante
 credenciales invalidas. La respuesta `429` incluye la cabecera `Retry-After` y
 el campo `retryAfterSeconds`.
 
+Cuando vence `lockedUntil`, el siguiente intento materializa el desbloqueo:
+audita `ACCOUNT_UNLOCKED` con motivo `LOCK_EXPIRED`, reinicia el ciclo de fallos
+y mantiene el mismo contrato HTTP de login. Al producirse el bloqueo se revocan
+las sesiones previas con motivo `ACCOUNT_LOCKED`, evitando que recuperen validez
+cuando termine el plazo.
+
 ### `GET /api/auth/session`
 
 Respuesta sin sesion:

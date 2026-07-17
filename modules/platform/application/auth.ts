@@ -30,6 +30,9 @@ const genericLoginError = {
   message: "Usuario o contrasena incorrectos."
 } as const;
 
+class ActiveSessionExistsError extends Error {}
+class LoginStateChangedError extends Error {}
+
 export const sessionCookieName = getSessionCookieName();
 
 export const loginSchema = z.object({
@@ -161,20 +164,7 @@ export async function login(
     };
   }
 
-  const user = await prisma.user.findUnique({
-    where: { normalizedUserName },
-    include: {
-      role: {
-        include: {
-          permissions: {
-            include: {
-              permission: true
-            }
-          }
-        }
-      }
-    }
-  });
+  let user = await findUserForLogin(normalizedUserName);
 
   if (!user) {
     verifyPassword(command.password, dummyPasswordHash());
@@ -188,35 +178,28 @@ export async function login(
 
   if (user.status === "LOCKED" && user.lockedUntil && user.lockedUntil > now) {
     verifyPassword(command.password, user.passwordHash);
-
-    const lockedUntil = new Date(now.getTime() + lockDurationMs);
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
-        data: { lockedUntil }
-      }),
-      prisma.loginAttempt.create({
-        data: {
-          normalizedUserName,
-          succeeded: false,
-          failureCode: "ACCOUNT_LOCKED",
-          ipAddress: context.ipAddress,
-          userAgent: context.userAgent
-        }
-      }),
-      prisma.auditEvent.create({
-        data: {
-          eventType: "LOGIN_FAILED",
-          actorType: "USER",
-          payload: {
-            userId: user.id,
-            reason: "ACCOUNT_LOCKED"
-          }
-        }
-      })
-    ]);
+    await recordAttemptDuringActiveLock(user.id, normalizedUserName, context, now);
 
     return invalidCredentials();
+  }
+
+  const lockExpired =
+    user.status === "LOCKED" &&
+    user.lockedUntil !== null &&
+    user.lockedUntil <= now;
+
+  if (lockExpired) {
+    await materializeExpiredLock(user.id, now);
+    user = await findUserForLogin(normalizedUserName);
+
+    if (!user) {
+      await recordLoginAttempt(normalizedUserName, false, "INVALID_CREDENTIALS", context);
+      await auditLogin("LOGIN_FAILED", {
+        normalizedUserName,
+        reason: "INVALID_CREDENTIALS"
+      });
+      return invalidCredentials();
+    }
   }
 
   if (user.status !== "ACTIVE") {
@@ -229,73 +212,50 @@ export async function login(
   }
 
   if (!verifyPassword(command.password, user.passwordHash)) {
-    const failedLoginCount = user.failedLoginCount + 1;
-    const shouldLock = failedLoginCount >= maxFailedAttempts;
-    const lockedUntil = shouldLock
-      ? new Date(now.getTime() + lockDurationMs)
-      : undefined;
-
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
-        data: {
-          failedLoginCount,
-          status: shouldLock ? "LOCKED" : user.status,
-          lockedUntil
-        }
-      }),
-      prisma.loginAttempt.create({
-        data: {
-          normalizedUserName,
-          succeeded: false,
-          failureCode: shouldLock ? "ACCOUNT_LOCKED" : "INVALID_CREDENTIALS",
-          ipAddress: context.ipAddress,
-          userAgent: context.userAgent
-        }
-      }),
-      prisma.auditEvent.create({
-        data: {
-          eventType: "LOGIN_FAILED",
-          actorType: "USER",
-          payload: {
-            userId: user.id,
-            reason: shouldLock ? "ACCOUNT_LOCKED" : "INVALID_CREDENTIALS"
-          }
-        }
-      })
-    ]);
+    await recordInvalidPasswordAttempt(user.id, normalizedUserName, context, now);
 
     return invalidCredentials();
   }
 
   await revokeExpiredSessionsForUser(user.id, now);
 
-  const activeSession = await prisma.session.findFirst({
-    where: {
-      userId: user.id,
-      revokedAt: null
-    },
-    select: { id: true }
-  });
-
-  if (activeSession) {
-    return activeSessionExists(normalizedUserName, user.id, context);
-  }
-
   const token = createSessionToken();
   const expiresAt = new Date(now.getTime() + sessionDurationMs);
 
   try {
-    await prisma.$transaction([
-      prisma.user.update({
-        where: { id: user.id },
+    await prisma.$transaction(async (transaction) => {
+      const activeSession = await transaction.session.findFirst({
+        where: {
+          userId: user.id,
+          revokedAt: null
+        },
+        select: { id: true }
+      });
+
+      if (activeSession) {
+        throw new ActiveSessionExistsError();
+      }
+
+      const userUpdate = await transaction.user.updateMany({
+        where: {
+          id: user.id,
+          status: "ACTIVE",
+          passwordHash: user.passwordHash,
+          roleId: user.roleId,
+          securityVersion: user.securityVersion
+        },
         data: {
           failedLoginCount: 0,
           lockedUntil: null,
           lastLoginAt: now
         }
-      }),
-      prisma.session.create({
+      });
+
+      if (userUpdate.count !== 1) {
+        throw new LoginStateChangedError();
+      }
+
+      await transaction.session.create({
         data: {
           userId: user.id,
           tokenHash: hashSessionToken(token),
@@ -306,16 +266,16 @@ export async function login(
           userAgent: context.userAgent,
           securityVersion: user.securityVersion
         }
-      }),
-      prisma.loginAttempt.create({
+      });
+      await transaction.loginAttempt.create({
         data: {
           normalizedUserName,
           succeeded: true,
           ipAddress: context.ipAddress,
           userAgent: context.userAgent
         }
-      }),
-      prisma.auditEvent.create({
+      });
+      await transaction.auditEvent.create({
         data: {
           eventType: "LOGIN_SUCCEEDED",
           actorType: "USER",
@@ -323,9 +283,22 @@ export async function login(
             userId: user.id
           }
         }
-      })
-    ]);
+      });
+    });
   } catch (error) {
+    if (error instanceof ActiveSessionExistsError) {
+      return activeSessionExists(normalizedUserName, user.id, context);
+    }
+
+    if (error instanceof LoginStateChangedError) {
+      await recordLoginAttempt(normalizedUserName, false, "INVALID_CREDENTIALS", context);
+      await auditLogin("LOGIN_FAILED", {
+        userId: user.id,
+        reason: "INVALID_CREDENTIALS"
+      });
+      return invalidCredentials();
+    }
+
     if (isUniqueConstraintError(error)) {
       return activeSessionExists(normalizedUserName, user.id, context);
     }
@@ -665,6 +638,215 @@ function mapSessionUser(user: {
     },
     permissions: user.role.permissions.map((rolePermission) => rolePermission.permission.code)
   };
+}
+
+async function findUserForLogin(normalizedUserName: string) {
+  return prisma.user.findUnique({
+    where: { normalizedUserName },
+    include: {
+      role: {
+        include: {
+          permissions: {
+            include: {
+              permission: true
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+async function materializeExpiredLock(userId: string, now: Date): Promise<void> {
+  await prisma.$transaction(async (transaction) => {
+    const transition = await transaction.user.updateMany({
+      where: {
+        id: userId,
+        status: "LOCKED",
+        lockedUntil: {
+          not: null,
+          lte: now
+        }
+      },
+      data: {
+        status: "ACTIVE",
+        failedLoginCount: 0,
+        lockedUntil: null
+      }
+    });
+
+    if (transition.count !== 1) {
+      return;
+    }
+
+    await revokeSessionsForAccountLock(transaction, userId, now);
+    await transaction.auditEvent.create({
+      data: {
+        eventType: "ACCOUNT_UNLOCKED",
+        actorType: "SYSTEM",
+        payload: {
+          userId,
+          reason: "LOCK_EXPIRED"
+        }
+      }
+    });
+  });
+}
+
+async function recordAttemptDuringActiveLock(
+  userId: string,
+  normalizedUserName: string,
+  context: RequestContext,
+  now: Date
+): Promise<void> {
+  await prisma.$transaction(async (transaction) => {
+    const extension = await transaction.user.updateMany({
+      where: {
+        id: userId,
+        status: "LOCKED",
+        lockedUntil: { gt: now }
+      },
+      data: {
+        lockedUntil: new Date(now.getTime() + lockDurationMs)
+      }
+    });
+    const failureCode = extension.count === 1 ? "ACCOUNT_LOCKED" : "INVALID_CREDENTIALS";
+
+    await transaction.loginAttempt.create({
+      data: {
+        normalizedUserName,
+        succeeded: false,
+        failureCode,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent
+      }
+    });
+    await transaction.auditEvent.create({
+      data: {
+        eventType: "LOGIN_FAILED",
+        actorType: "USER",
+        payload: {
+          userId,
+          reason: failureCode
+        }
+      }
+    });
+  });
+}
+
+async function recordInvalidPasswordAttempt(
+  userId: string,
+  normalizedUserName: string,
+  context: RequestContext,
+  now: Date
+): Promise<void> {
+  await prisma.$transaction(async (transaction) => {
+    const nextLockedUntil = new Date(now.getTime() + lockDurationMs);
+    const [updatedUser] = await transaction.$queryRaw<
+      Array<{ failedLoginCount: number; status: "ACTIVE" | "LOCKED" }>
+    >(Prisma.sql`
+      UPDATE "users"
+      SET
+        "failedLoginCount" = "failedLoginCount" + 1,
+        "status" = CASE
+          WHEN "failedLoginCount" + 1 >= ${maxFailedAttempts}
+            THEN CAST('LOCKED' AS "UserStatus")
+          ELSE "status"
+        END,
+        "lockedUntil" = CASE
+          WHEN "failedLoginCount" + 1 >= ${maxFailedAttempts}
+            THEN ${nextLockedUntil}
+          ELSE NULL
+        END,
+        "updatedAt" = ${now}
+      WHERE "id" = ${userId}::uuid
+        AND "status" = CAST('ACTIVE' AS "UserStatus")
+      RETURNING "failedLoginCount", "status"
+    `);
+
+    let failureCode = "INVALID_CREDENTIALS";
+
+    if (updatedUser?.status === "LOCKED") {
+      failureCode = "ACCOUNT_LOCKED";
+      await revokeSessionsForAccountLock(transaction, userId, now);
+    } else if (!updatedUser) {
+      const currentUser = await transaction.user.findUnique({
+        where: { id: userId },
+        select: { status: true, lockedUntil: true }
+      });
+
+      if (
+        currentUser?.status === "LOCKED" &&
+        currentUser.lockedUntil &&
+        currentUser.lockedUntil > now
+      ) {
+        failureCode = "ACCOUNT_LOCKED";
+        await transaction.user.updateMany({
+          where: {
+            id: userId,
+            status: "LOCKED",
+            lockedUntil: { gt: now }
+          },
+          data: { lockedUntil: nextLockedUntil }
+        });
+      }
+    }
+
+    await transaction.loginAttempt.create({
+      data: {
+        normalizedUserName,
+        succeeded: false,
+        failureCode,
+        ipAddress: context.ipAddress,
+        userAgent: context.userAgent
+      }
+    });
+    await transaction.auditEvent.create({
+      data: {
+        eventType: "LOGIN_FAILED",
+        actorType: "USER",
+        payload: {
+          userId,
+          reason: failureCode
+        }
+      }
+    });
+  });
+}
+
+async function revokeSessionsForAccountLock(
+  transaction: Prisma.TransactionClient,
+  userId: string,
+  now: Date
+): Promise<void> {
+  const revokedSessions = await transaction.session.updateManyAndReturn({
+    where: {
+      userId,
+      revokedAt: null
+    },
+    data: {
+      revokedAt: now,
+      revokeReason: "ACCOUNT_LOCKED"
+    },
+    select: {
+      id: true,
+      userId: true
+    }
+  });
+
+  for (const session of revokedSessions) {
+    await transaction.auditEvent.create({
+      data: {
+        eventType: "SESSION_REVOKED",
+        actorType: "SYSTEM",
+        payload: {
+          sessionId: session.id,
+          userId: session.userId,
+          reason: "ACCOUNT_LOCKED"
+        }
+      }
+    });
+  }
 }
 
 async function recordLoginAttempt(

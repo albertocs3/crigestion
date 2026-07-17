@@ -274,6 +274,249 @@ describe("platform authentication", () => {
     expect(sessionCount).toBe(0);
   });
 
+  it("unlocks an expired account on a valid login", async () => {
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        status: "LOCKED",
+        failedLoginCount: 5,
+        lockedUntil: new Date(Date.now() - 1_000)
+      }
+    });
+
+    const result = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+    const unlockedUser = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id }
+    });
+    const unlockEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ACCOUNT_UNLOCKED" }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(unlockedUser).toMatchObject({
+      status: "ACTIVE",
+      failedLoginCount: 0,
+      lockedUntil: null
+    });
+    expect(unlockEvent).toMatchObject({
+      actorType: "SYSTEM",
+      payload: {
+        userId: user.id,
+        reason: "LOCK_EXPIRED"
+      }
+    });
+    expect(JSON.stringify(unlockEvent.payload)).not.toContain(
+      baseCommand.administrator.password
+    );
+    await expect(
+      prisma.auditEvent.count({ where: { eventType: "LOGIN_SUCCEEDED" } })
+    ).resolves.toBe(1);
+    await expect(prisma.session.count({ where: { userId: user.id } })).resolves.toBe(1);
+  });
+
+  it("starts a new failure cycle after an account lock expires", async () => {
+    const submittedPassword = "Clave-incorrecta-nuevo-ciclo-2026";
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        status: "LOCKED",
+        failedLoginCount: 5,
+        lockedUntil: new Date(Date.now() - 1_000)
+      }
+    });
+
+    const result = await login({
+      userName: "admin",
+      password: submittedPassword
+    });
+    const unlockedUser = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id }
+    });
+    const latestAttempt = await prisma.loginAttempt.findFirstOrThrow({
+      where: { normalizedUserName: "admin" },
+      orderBy: { createdAt: "desc" }
+    });
+    const auditEvents = await prisma.auditEvent.findMany({
+      where: { eventType: { in: ["ACCOUNT_UNLOCKED", "LOGIN_FAILED"] } },
+      select: { eventType: true, payload: true }
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 401,
+      error: {
+        code: "INVALID_CREDENTIALS",
+        message: "Usuario o contrasena incorrectos."
+      }
+    });
+    expect(unlockedUser).toMatchObject({
+      status: "ACTIVE",
+      failedLoginCount: 1,
+      lockedUntil: null
+    });
+    expect(latestAttempt.failureCode).toBe("INVALID_CREDENTIALS");
+    expect(auditEvents).toHaveLength(2);
+    expect(auditEvents.map((event) => event.eventType).sort()).toEqual([
+      "ACCOUNT_UNLOCKED",
+      "LOGIN_FAILED"
+    ]);
+    expect(auditEvents).toContainEqual({
+      eventType: "ACCOUNT_UNLOCKED",
+      payload: {
+        userId: user.id,
+        reason: "LOCK_EXPIRED"
+      }
+    });
+    expect(JSON.stringify(auditEvents)).not.toContain(submittedPassword);
+  });
+
+  it("serializes concurrent failures after an account lock expires", async () => {
+    const submittedPassword = "Clave-incorrecta-concurrente-2026";
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        status: "LOCKED",
+        failedLoginCount: 5,
+        lockedUntil: new Date(Date.now() - 1_000)
+      }
+    });
+
+    const results = await Promise.all([
+      login({ userName: "admin", password: submittedPassword }),
+      login({ userName: "admin", password: submittedPassword })
+    ]);
+    const unlockedUser = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id }
+    });
+
+    expect(results).toEqual([
+      expect.objectContaining({ ok: false, status: 401 }),
+      expect.objectContaining({ ok: false, status: 401 })
+    ]);
+    expect(unlockedUser).toMatchObject({
+      status: "ACTIVE",
+      failedLoginCount: 2,
+      lockedUntil: null
+    });
+    await expect(
+      prisma.auditEvent.count({ where: { eventType: "ACCOUNT_UNLOCKED" } })
+    ).resolves.toBe(1);
+    await expect(
+      prisma.auditEvent.count({ where: { eventType: "LOGIN_FAILED" } })
+    ).resolves.toBe(2);
+    expect(JSON.stringify(await prisma.auditEvent.findMany())).not.toContain(
+      submittedPassword
+    );
+  });
+
+  it("revokes active sessions when failed attempts lock the account", async () => {
+    const loginResult = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+
+    expect(loginResult.ok).toBe(true);
+
+    if (!loginResult.ok) {
+      return;
+    }
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await login({
+        userName: "admin",
+        password: "Clave-incorrecta-revocacion-2026"
+      });
+    }
+
+    const session = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashSessionToken(loginResult.value.token) }
+    });
+    const revokeEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: {
+        eventType: "SESSION_REVOKED",
+        payload: {
+          path: ["sessionId"],
+          equals: session.id
+        }
+      }
+    });
+
+    expect(session.revokedAt).toBeInstanceOf(Date);
+    expect(session.revokeReason).toBe("ACCOUNT_LOCKED");
+    expect(revokeEvent).toMatchObject({
+      actorType: "SYSTEM",
+      payload: {
+        sessionId: session.id,
+        userId: session.userId,
+        reason: "ACCOUNT_LOCKED"
+      }
+    });
+  });
+
+  it("counts concurrent failures atomically and revokes a session once", async () => {
+    const loginResult = await login({
+      userName: "admin",
+      password: baseCommand.administrator.password
+    });
+
+    expect(loginResult.ok).toBe(true);
+
+    if (!loginResult.ok) {
+      return;
+    }
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        login({
+          userName: "admin",
+          password: "Clave-incorrecta-umbral-concurrente-2026"
+        })
+      )
+    );
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    const session = await prisma.session.findUniqueOrThrow({
+      where: { tokenHash: hashSessionToken(loginResult.value.token) }
+    });
+
+    expect(results).toHaveLength(5);
+    expect(results.every((result) => !result.ok && result.status === 401)).toBe(true);
+    expect(user).toMatchObject({
+      status: "LOCKED",
+      failedLoginCount: 5
+    });
+    expect(session.revokeReason).toBe("ACCOUNT_LOCKED");
+    await expect(
+      prisma.loginAttempt.count({
+        where: { normalizedUserName: "admin", succeeded: false }
+      })
+    ).resolves.toBe(5);
+    await expect(
+      prisma.auditEvent.count({
+        where: {
+          eventType: "SESSION_REVOKED",
+          payload: {
+            path: ["sessionId"],
+            equals: session.id
+          }
+        }
+      })
+    ).resolves.toBe(1);
+  });
+
   it("rate limits repeated login attempts by IP", async () => {
     const ipAddress = "198.51.100.10";
 

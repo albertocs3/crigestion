@@ -160,6 +160,55 @@ describe("authentication HTTP contracts", () => {
     expect(cookieMock.setCalls).toHaveLength(0);
   });
 
+  it("logs in through the same HTTP contract after an account lock expires", async () => {
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        status: "LOCKED",
+        failedLoginCount: 5,
+        lockedUntil: new Date(Date.now() - 1_000)
+      }
+    });
+
+    const response = await loginPost(jsonRequest("/api/auth/login", credentials()));
+    const body = await response.json();
+    const unlockedUser = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id }
+    });
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      authenticated: true,
+      user: { userName: "admin" }
+    });
+    expect(cookieMock.setCalls).toHaveLength(1);
+    expect(JSON.stringify(body)).not.toContain("token");
+    expect(JSON.stringify(body)).not.toContain(initialPassword);
+    expect(unlockedUser).toMatchObject({
+      status: "ACTIVE",
+      failedLoginCount: 0,
+      lockedUntil: null
+    });
+    await expect(
+      prisma.auditEvent.count({ where: { eventType: "ACCOUNT_UNLOCKED" } })
+    ).resolves.toBe(1);
+    await expect(
+      prisma.auditEvent.findFirstOrThrow({
+        where: { eventType: "ACCOUNT_UNLOCKED" },
+        select: { actorType: true, payload: true }
+      })
+    ).resolves.toEqual({
+      actorType: "SYSTEM",
+      payload: {
+        userId: user.id,
+        reason: "LOCK_EXPIRED"
+      }
+    });
+  });
+
   it("rate limits repeated login requests by IP", async () => {
     const ipAddress = "198.51.100.42";
 
