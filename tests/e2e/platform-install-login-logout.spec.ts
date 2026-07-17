@@ -573,6 +573,14 @@ test("marks an issued invoice due date unpaid from the UI", async ({ page }) => 
   await expect(dueDateRow).toContainText("Impagado");
   await expect(dueDateRow).toContainText("81.00 EUR");
 
+  await page.goto(
+    "/app/treasury?search=&scope=ALL&customerId=&dueFrom=&dueTo="
+  );
+  await expect(page.getByText("Filtro de vencimientos invalido.")).toHaveCount(0);
+  await expect(page.getByRole("row").filter({ hasText: "F2600001" })).toContainText(
+    "Impagado"
+  );
+
   await page.getByRole("link", { name: "Prevision" }).click();
   await expect(page).toHaveURL(/\/app\/treasury\/forecast$/);
   await expect(page.getByRole("heading", { name: "Prevision de cobros" })).toBeVisible();

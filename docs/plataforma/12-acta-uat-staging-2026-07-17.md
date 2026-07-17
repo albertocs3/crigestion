@@ -63,10 +63,10 @@ Resultado del cierre:
 
 Estos riesgos impiden interpretar esta acta como autorizacion de produccion.
 
-## 6. Siguiente ciclo funcional en staging
+## 6. Ciclo financiero completado en staging
 
-El siguiente bloque UAT sera el ciclo financiero desde navegador, sin preparar
-produccion:
+El 2026-07-17 se completo desde navegador el ciclo financiero previsto, sin
+preparar produccion:
 
 1. vencimientos y registro de cobros;
 2. creacion, proceso y generacion SEPA de una remesa de prueba;
@@ -76,5 +76,36 @@ produccion:
 6. permisos y auditoria del ciclo sin IBAN completo, ficheros bancarios ni
    secretos en los eventos.
 
-Se utilizaran exclusivamente datos sinteticos de staging y se limpiaran o
-inactivaran las identidades temporales al terminar.
+La prueba utilizo exclusivamente datos sinteticos de staging. La factura
+`F2600002`, por 121 EUR, recibio un cobro manual parcial de 40 EUR. Los 81 EUR
+restantes se incluyeron en la remesa `RC2026/000001`, que recorrio generacion
+SEPA, envio, respuesta bancaria, devolucion total y cierre. El resultado final
+fue un vencimiento pendiente de 81 EUR y un cobro manual vigente de 40 EUR.
+
+Se importo un extracto Norma 43 sintetico con un movimiento de 40 EUR. La
+aplicacion genero una propuesta de conciliacion con la factura, permitio
+conciliar el movimiento y deshacer la conciliacion. El estado final del
+movimiento quedo pendiente, con 0 EUR conciliados y 40 EUR disponibles.
+
+La auditoria confirmo, entre otros, `BANK_STATEMENT_IMPORTED`,
+`BANK_RECONCILIATION_CREATED` y `BANK_RECONCILIATION_UNDONE`. Los payloads
+contienen fechas, importes, hashes e identificadores tecnicos, pero no incluyen
+el contenido del extracto, IBAN completo, ficheros SEPA, contrasenas,
+certificados, claves ni secretos.
+
+Durante la prueba se detecto que los parametros opcionales vacios enviados por
+el formulario de vencimientos se validaban como filtros invalidos. La rama
+candidata normaliza esos valores a ausencia de filtro y aporta una prueba E2E
+de regresion. Este ajuste debe desplegarse y verificarse en staging antes de
+cerrar la candidata que lo contenga.
+
+La candidata corregida supero localmente TypeScript, 56 archivos con 524
+pruebas Vitest, ESLint, el build optimizado de Next.js y
+`npm audit --audit-level=high` sin vulnerabilidades. Tambien supero la prueba
+E2E dirigida al vencimiento impagado con parametros opcionales vacios.
+
+## 7. Limites de la aceptacion
+
+Los datos sinteticos financieros se mantienen en staging como evidencia
+trazable del ensayo. La cuenta bancaria de prueba se muestra enmascarada en la
+interfaz. Esta ampliacion del acta no autoriza ni prepara produccion.
