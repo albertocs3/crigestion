@@ -46,13 +46,13 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 Evidencia actualizada el 17 de julio de 2026 sobre PostgreSQL desechable:
 
-- El repositorio contiene 80 migraciones; CI las aplica desde cero antes de validar.
+- El repositorio contiene 79 migraciones; CI las aplica desde cero antes de validar.
 - Vitest: 56 archivos y 524 pruebas superadas.
 - TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
-La aceptacion funcional de `staging-2026.07.17-rc2`, incluidas las pruebas de
-autenticacion, RBAC, sesiones y auditoria desde navegador, se conserva en el
+La aceptacion funcional de `staging-2026.07.17-rc4`, incluidas las pruebas de
+autenticacion, RBAC, sesiones, tesoreria y auditoria desde navegador, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
 
 El build y las pruebas automatizadas forman parte de `verify:release`; deben

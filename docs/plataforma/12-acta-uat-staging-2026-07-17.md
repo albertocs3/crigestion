@@ -2,8 +2,8 @@
 
 ## 1. Decision
 
-La release `staging-2026.07.17-rc3`, commit
-`9753fe3690d2bc7e7c8751aaeef779b3ae7ff9e0`, queda **ACEPTADA PARA STAGING**
+La release `staging-2026.07.17-rc4`, commit
+`4521e274a9cd4aa78725d8bb29101467697061ef`, queda **ACEPTADA PARA STAGING**
 en el alcance descrito en este documento.
 
 Esta aceptacion no autoriza ni prepara un despliegue en produccion. VeriFactu
@@ -27,7 +27,7 @@ La evidencia detallada y el procedimiento operativo se conservan en
 
 ## 3. Estado final del entorno
 
-- Release activa: `staging-2026.07.17-rc3`.
+- Release activa: `staging-2026.07.17-rc4`.
 - Web, PostgreSQL, worker y VeriFactu: estado `ok` en la verificacion posterior
   al despliegue.
 - Rol `UAT_RESTRICTED`: restaurado con `Billing.View` como unico permiso.
@@ -111,3 +111,22 @@ E2E dirigida al vencimiento impagado con parametros opcionales vacios.
 Los datos sinteticos financieros se mantienen en staging como evidencia
 trazable del ensayo. La cuenta bancaria de prueba se muestra enmascarada en la
 interfaz. Esta ampliacion del acta no autoriza ni prepara produccion.
+
+## 8. Prevision de cobros y saldos a favor
+
+La prevision de cobros se valido con la factura sintetica `F2600002`. Con fecha
+de referencia 2026-07-18 muestra un vencimiento por 81 EUR, previsto y
+atrasado en julio. La exportacion CSV se ejecuto desde navegador y genero
+`CUSTOMER_COLLECTION_FORECAST_EXPORTED` con ejercicio, fecha, limite,
+indicadores de filtro, actor y numero de resultados, sin contenido CSV ni datos
+bancarios sensibles.
+
+Durante el ensayo se detecto el mismo tratamiento incorrecto de campos vacios
+en los filtros opcionales de la prevision. La correccion y su regresion E2E se
+desplegaron como `staging-2026.07.17-rc4`; el smoke posterior confirmo la
+simulacion sin `Filtro de prevision invalido` y health completo en estado `ok`.
+
+No se ensayo el ciclo de saldos a favor porque staging no contiene una
+rectificativa total fiscalmente aceptada que origine el credito. No se creo un
+credito manual ni se forzo una aceptacion VeriFactu para fabricar la
+precondicion.
