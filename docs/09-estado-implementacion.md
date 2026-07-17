@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-07-13.
+Fecha de corte: 2026-07-17.
 
 ## 2. Rebanadas disponibles
 
@@ -44,15 +44,19 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 ## 4. Evidencia de validacion
 
-Evidencia actualizada el 15 de julio de 2026 sobre PostgreSQL desechable:
+Evidencia actualizada el 17 de julio de 2026 sobre PostgreSQL desechable:
 
 - El repositorio contiene 80 migraciones; CI las aplica desde cero antes de validar.
-- Vitest: 54 archivos y 480 pruebas superadas.
-- TypeScript y ESLint completados correctamente.
+- Vitest: 56 archivos y 524 pruebas superadas.
+- TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
-El build productivo y Playwright forman parte de `verify:release`; deben
-repetirse sobre el artefacto candidato y el destino elegido antes del despliegue.
+La aceptacion funcional de `staging-2026.07.17-rc2`, incluidas las pruebas de
+autenticacion, RBAC, sesiones y auditoria desde navegador, se conserva en el
+[acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
+
+El build y las pruebas automatizadas forman parte de `verify:release`; deben
+repetirse sobre cada nuevo artefacto candidato antes de desplegarlo.
 
 La cobertura bancaria incluye importacion, propuesta, conciliacion y deshacer
 desde navegador, contratos HTTP, concurrencia e invariantes PostgreSQL.

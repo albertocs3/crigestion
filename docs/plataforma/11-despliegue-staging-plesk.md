@@ -335,8 +335,8 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
   `401 INVALID_CREDENTIALS` indistinguible tambien durante el bloqueo;
 - conservacion interna de `ACCOUNT_LOCKED` en intentos y auditoria sin guardar
   la contrasena enviada;
-- reactivacion manual del usuario UAT, con estado final `ACTIVE` y sin fecha de
-  bloqueo;
+- reactivacion manual del usuario UAT, inicialmente `ACTIVE` y sin fecha de
+  bloqueo para continuar las pruebas;
 - vencimiento del bloqueo automatico validado en `staging-2026.07.17-rc2` con
   una cuenta temporal restringida: el login correcto posterior creo la sesion,
   reinicio el contador y genero exactamente un `ACCOUNT_UNLOCKED` con motivo
@@ -390,6 +390,14 @@ activaron el rollback automatico a `rc1` mientras se corrigieron exclusivamente
 permisos de escritura/lectura de los motores Prisma. El corte final dejo web,
 PostgreSQL, worker y VeriFactu en estado `ok`; no hubo cambios de esquema ni de
 produccion.
+
+### 8.2 Cierre de la aceptacion
+
+Tras completar las pruebas se desactivaron las tres cuentas UAT, se confirmo
+que solo permanecia activa la sesion administradora y se verifico el evento
+`USER_DEACTIVATED` sin secretos. La decision, los riesgos aceptados y el
+siguiente ciclo funcional se registran en
+`docs/plataforma/12-acta-uat-staging-2026-07-17.md`.
 
 ## 9. Rollback y recuperacion
 

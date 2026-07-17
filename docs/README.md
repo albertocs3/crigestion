@@ -28,7 +28,8 @@ La base tecnologica vigente es:
 13. [Estado verificable de implementacion](09-estado-implementacion.md)
 14. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
 15. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
-15. Especificaciones funcionales y tecnicas de cada modulo.
+16. [Acta UAT de staging 2026-07-17](plataforma/12-acta-uat-staging-2026-07-17.md)
+17. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 
@@ -50,6 +51,7 @@ La base tecnologica vigente es:
 | [Estado de implementacion](09-estado-implementacion.md) | Rebanadas disponibles, evidencia de validacion y prioridades pendientes. |
 | [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md) | Topologia, proxy HTTPS, servicios, secretos, migraciones y apertura gradual de `gestion.crisoft.es`. |
 | [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md) | Estado y puertas de seguridad para `gestion-test.crisoft.es`, PostgreSQL 14, Imunify360 y migraciones controladas. |
+| [Acta UAT de staging 2026-07-17](plataforma/12-acta-uat-staging-2026-07-17.md) | Aceptacion funcional, evidencias, estado final, riesgos y siguiente ciclo exclusivo de staging. |
 
 ## 4. Especificaciones por modulo
 
