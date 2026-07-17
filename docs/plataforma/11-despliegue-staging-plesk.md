@@ -361,7 +361,14 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
 - rechazo de una mutacion autenticada con origen permitido pero sin token CSRF
   mediante `403 CSRF_TOKEN_INVALID`, antes de procesar el cuerpo y sin crear
   datos; la cuenta temporal termino `INACTIVE`, su sesion quedo revocada y solo
-  permanecio activa la sesion administradora.
+  permanecio activa la sesion administradora;
+- invalidacion inmediata de una sesion restringida al cambiar el rol del
+  usuario, comprobada con la misma cookie mediante
+  `{ "authenticated": false }`; el rol se restauro a `UAT_RESTRICTED`, la
+  cuenta termino `INACTIVE` y solo permanecio activa la sesion administradora;
+- auditoria de la asignacion y restauracion mediante dos eventos
+  `USER_ROLE_CHANGED` con identificadores de usuario y actor y codigos de rol,
+  sin contrasena, cookie, token ni otro secreto.
 
 La correccion del contrato de login se publico como
 `staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
