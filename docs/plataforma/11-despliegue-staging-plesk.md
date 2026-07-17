@@ -350,7 +350,18 @@ El 2026-07-17 se completo en staging la aceptacion funcional desde navegador:
   devolvio inmediatamente `{ "authenticated": false }`;
 - auditoria `SESSION_REVOKED` con motivo `ADMIN_SESSION_REVOKED`, identificadores
   de usuario, sesion y actor, sin token ni secreto; cuenta temporal final
-  `INACTIVE` y solo la sesion administradora activa.
+  `INACTIVE` y solo la sesion administradora activa;
+- cabeceras publicas verificadas con CSP y `frame-ancestors 'none'`, HSTS,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, politica de
+  referencia estricta y permisos de navegador restringidos;
+- redireccion de una pagina privada anonima a `/login`, respuesta anonima
+  estable de sesion y rechazo `401 UNAUTHENTICATED` en la API administrativa;
+- rechazo de un login con origen no permitido mediante respuesta
+  `403 ORIGIN_NOT_ALLOWED`;
+- rechazo de una mutacion autenticada con origen permitido pero sin token CSRF
+  mediante `403 CSRF_TOKEN_INVALID`, antes de procesar el cuerpo y sin crear
+  datos; la cuenta temporal termino `INACTIVE`, su sesion quedo revocada y solo
+  permanecio activa la sesion administradora.
 
 La correccion del contrato de login se publico como
 `staging-2026.07.17-rc1`. Antes del cambio se creo y verifico un backup; el
