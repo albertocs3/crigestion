@@ -2,8 +2,8 @@
 
 ## 1. Decision
 
-La release `staging-2026.07.17-rc2`, commit
-`ddfc6ce037b68683755d160d53b79fbadab0a011`, queda **ACEPTADA PARA STAGING**
+La release `staging-2026.07.17-rc3`, commit
+`9753fe3690d2bc7e7c8751aaeef779b3ae7ff9e0`, queda **ACEPTADA PARA STAGING**
 en el alcance descrito en este documento.
 
 Esta aceptacion no autoriza ni prepara un despliegue en produccion. VeriFactu
@@ -27,7 +27,7 @@ La evidencia detallada y el procedimiento operativo se conservan en
 
 ## 3. Estado final del entorno
 
-- Release activa: `staging-2026.07.17-rc2`.
+- Release activa: `staging-2026.07.17-rc3`.
 - Web, PostgreSQL, worker y VeriFactu: estado `ok` en la verificacion posterior
   al despliegue.
 - Rol `UAT_RESTRICTED`: restaurado con `Billing.View` como unico permiso.
@@ -96,8 +96,10 @@ certificados, claves ni secretos.
 Durante la prueba se detecto que los parametros opcionales vacios enviados por
 el formulario de vencimientos se validaban como filtros invalidos. La rama
 candidata normaliza esos valores a ausencia de filtro y aporta una prueba E2E
-de regresion. Este ajuste debe desplegarse y verificarse en staging antes de
-cerrar la candidata que lo contenga.
+de regresion. El ajuste se desplego como `staging-2026.07.17-rc3` despues de
+verificar backup, build, unidad migradora sin migraciones pendientes y salud
+interna y externa. El smoke final desde navegador cargo la factura `F2600002`
+con parametros opcionales vacios sin mostrar el error de filtro invalido.
 
 La candidata corregida supero localmente TypeScript, 56 archivos con 524
 pruebas Vitest, ESLint, el build optimizado de Next.js y
