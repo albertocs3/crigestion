@@ -26,6 +26,8 @@ VERIFACTU_WORKER_EXPECTED_DATABASE=crigestion_prod
 La conexion debe usar exactamente el rol `crigestion_app`, la base
 `crigestion_prod`, loopback y el puerto `5433`. Cualquier desviacion invalida el
 perfil. La interfaz muestra permanentemente `ENTORNO TFM DEMO` y `AEAT TEST`.
+El layout se fuerza a evaluacion dinamica para que este indicador use las
+variables runtime validadas y no las credenciales aisladas del proceso de build.
 
 ## Endpoints fijados por codigo
 
