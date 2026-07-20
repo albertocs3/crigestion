@@ -46,8 +46,8 @@ export default async function TreasuryForecastPage({
   const payload = getCustomerCollectionForecastSchema.safeParse({
     year: params.year,
     asOf: params.asOf,
-    customerId: params.customerId,
-    search: params.search,
+    customerId: optionalSearchParam(params.customerId),
+    search: optionalSearchParam(params.search),
     limit: 500
   });
   const forecast = payload.success
@@ -280,6 +280,11 @@ function formatMoney(value: string): string {
 
 function todayDateOnly(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function optionalSearchParam(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function exportHref(

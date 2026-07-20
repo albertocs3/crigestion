@@ -1084,11 +1084,14 @@ export async function issueInvoice(
       select: { id: true, number: true }
     });
 
+    const verifactuEnabled = dependencies.verifactuEnabled ?? readVerifactuEnabled();
+    const verifactuEnvironment = dependencies.verifactuEnvironment ?? readVerifactuEnvironment();
+
     await tx.invoice.update({
       where: { id: invoiceId },
       data: {
         status: "ISSUED",
-        verifactuStatus: "PENDING",
+        verifactuStatus: verifactuEnabled ? "PENDING" : "NOT_APPLICABLE",
         year: sequence.year,
         numberSequence: sequence.value,
         number,
@@ -1099,8 +1102,6 @@ export async function issueInvoice(
       }
     });
 
-    const verifactuEnabled = dependencies.verifactuEnabled ?? readVerifactuEnabled();
-    const verifactuEnvironment = dependencies.verifactuEnvironment ?? readVerifactuEnvironment();
     if (verifactuEnabled && !verifactuEnvironment) throw new VerifactuPreparationUnavailableError();
     const activeSif = verifactuEnabled && invoice.companyId
       ? (await tx.$queryRaw<Array<{

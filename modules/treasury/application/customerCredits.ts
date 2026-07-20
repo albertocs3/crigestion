@@ -7,7 +7,7 @@ import { normalizeDateOnlyInput } from "@/modules/billing/application/invoices";
 
 const defaultLimit = 25;
 const maxLimit = 100;
-const activeRefundStatuses = ["REQUESTED", "APPROVED", "POSTED"] as const;
+const reservedRefundStatuses = ["REQUESTED", "APPROVED"] as const;
 
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
@@ -346,10 +346,9 @@ async function mutateRefund(refundId: string, actor: SessionUser, context: Mutat
 
 async function mapCredit(tx: Prisma.TransactionClient | typeof prisma, record: CreditRecord): Promise<CustomerCreditDetail> {
   const applied = sum(record.applications);
-  const activeRefunds = record.refunds.filter((refund) => activeRefundStatuses.includes(refund.status as typeof activeRefundStatuses[number]));
-  const reservedRefund = sum(activeRefunds);
+  const reservedRefund = sum(record.refunds.filter((refund) => reservedRefundStatuses.includes(refund.status as typeof reservedRefundStatuses[number])));
   const postedRefund = sum(record.refunds.filter((refund) => refund.status === "POSTED"));
-  const available = Prisma.Decimal.max(0, record.originalAmount.minus(applied).minus(reservedRefund));
+  const available = Prisma.Decimal.max(0, record.originalAmount.minus(applied).minus(reservedRefund).minus(postedRefund));
   const fiscalAvailable = ["ACCEPTED", "ACCEPTED_WITH_ERRORS", "NOT_APPLICABLE"].includes(record.sourceRectificationInvoice.verifactuStatus);
   const status: CustomerCreditStatus = !fiscalAvailable ? "HELD" : available.isZero() ? "EXHAUSTED" : available.equals(record.originalAmount) ? "AVAILABLE" : "PARTIALLY_USED";
   const eligibleDueDates = fiscalAvailable && !available.isZero() ? await eligibleDueDatesFor(tx, record.companyId, record.customerId) : [];

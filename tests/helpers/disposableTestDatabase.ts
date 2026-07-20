@@ -1,20 +1,37 @@
 import { prisma } from "@/lib/prisma";
+import {
+  assertE2eDatabaseUrl,
+  e2eDatabaseIdentity
+} from "@/lib/e2eDatabaseSafety";
 import { assertVitestDatabaseUrl, vitestDatabaseIdentity } from "@/lib/vitestDatabaseSafety";
 
-const disposableDatabaseName = "crigestion_ci_test";
+const disposableDatabaseNames = new Set<string>([
+  vitestDatabaseIdentity.databaseName,
+  e2eDatabaseIdentity.databaseName
+]);
 
 export function isDisposableTestDatabaseName(databaseName: string): boolean {
-  return databaseName === disposableDatabaseName;
+  return disposableDatabaseNames.has(databaseName);
 }
 
 export async function assertDisposableTestDatabase(): Promise<void> {
-  let declaredDatabase: string;
+  let expectedIdentity: {
+    applicationName: string;
+    databaseName: string;
+    databaseUser: string;
+  };
   try {
-    declaredDatabase = decodeURIComponent(assertVitestDatabaseUrl(process.env).pathname.slice(1));
+    assertVitestDatabaseUrl(process.env);
+    expectedIdentity = vitestDatabaseIdentity;
   } catch {
-    throw new Error("TEST_DATABASE_RESET_NOT_ALLOWED");
+    try {
+      assertE2eDatabaseUrl(process.env);
+      expectedIdentity = e2eDatabaseIdentity;
+    } catch {
+      throw new Error("TEST_DATABASE_RESET_NOT_ALLOWED");
+    }
   }
-  if (!isDisposableTestDatabaseName(declaredDatabase)) {
+  if (!isDisposableTestDatabaseName(expectedIdentity.databaseName)) {
     throw new Error("TEST_DATABASE_RESET_NOT_ALLOWED");
   }
   const rows = await prisma.$queryRaw<Array<{ applicationName: string; databaseName: string; databaseUser: string }>>`
@@ -23,9 +40,9 @@ export async function assertDisposableTestDatabase(): Promise<void> {
   `;
   const identity = rows[0];
   if (
-    identity?.databaseName !== declaredDatabase ||
-    identity.databaseUser !== vitestDatabaseIdentity.databaseUser ||
-    identity.applicationName !== vitestDatabaseIdentity.applicationName
+    identity?.databaseName !== expectedIdentity.databaseName ||
+    identity.databaseUser !== expectedIdentity.databaseUser ||
+    identity.applicationName !== expectedIdentity.applicationName
   ) {
     throw new Error("TEST_DATABASE_RESET_NOT_ALLOWED");
   }

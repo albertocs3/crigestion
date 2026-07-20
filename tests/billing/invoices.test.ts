@@ -221,7 +221,7 @@ describe("billing invoices application service", () => {
       value: {
         status: "ISSUED",
         number: "F2600001",
-        verifactuStatus: "PENDING"
+        verifactuStatus: "NOT_APPLICABLE"
       }
     });
     expect(verifactuRecord.status).toBe("PENDING");
@@ -312,6 +312,23 @@ describe("billing invoices application service", () => {
     });
     expect(await prisma.invoiceVerifactuRecord.count({ where: { invoiceId: draftId } })).toBe(0);
     expect(await prisma.accountingJournalEntry.count({ where: { invoiceId: draftId } })).toBe(1);
+
+    const disabledWhileFiscalPending = await createInvoiceRectification(
+      draftId,
+      {
+        issueDate: "2026-07-08",
+        reason: "AMOUNT_ERROR",
+        fiscalClassification: "R4_OTHER",
+        notes: null
+      },
+      actor,
+      {},
+      { verifactuEnabled: false }
+    );
+    expect(disabledWhileFiscalPending).toMatchObject({
+      ok: false,
+      error: { code: "INVOICE_RECTIFICATION_VERIFACTU_UNAVAILABLE" }
+    });
 
     let submittedXml = "";
     const processed = await processNextVerifactuOutboxMessage({
@@ -862,11 +879,6 @@ describe("billing invoices application service", () => {
       issueDate: "2026-07-07",
       legalName: "Cliente Rectificativa SL"
     });
-    await prisma.invoice.update({
-      where: { id: original.issued.value.id },
-      data: { verifactuStatus: "NOT_APPLICABLE" }
-    });
-
     const rectification = await createInvoiceRectification(
       original.issued.value.id,
       {
@@ -999,7 +1011,7 @@ describe("billing invoices application service", () => {
     });
     await prisma.invoice.update({
       where: { id: original.issued.value.id },
-      data: { verifactuStatus: "NOT_APPLICABLE", paymentStatus: "PAID" }
+      data: { paymentStatus: "PAID" }
     });
     await prisma.invoiceDueDate.updateMany({
       where: { invoiceId: original.issued.value.id },
@@ -1060,11 +1072,6 @@ describe("billing invoices application service", () => {
       notes: null
     }, actor);
     if (!payment.ok) throw new Error(payment.error.code);
-    await prisma.invoice.update({
-      where: { id: original.issued.value.id },
-      data: { verifactuStatus: "NOT_APPLICABLE" }
-    });
-
     const rectification = await createInvoiceRectification(original.issued.value.id, {
       issueDate: "2026-07-09",
       reason: "OPERATION_CANCELLED",
@@ -1146,7 +1153,12 @@ describe("billing invoices application service", () => {
       idempotencyKey: randomUUID(),
       requestHash: hashCustomerCreditRefundAction(refundId, "post")
     });
-    expect(posted).toMatchObject({ ok: true, value: { availableAmount: "0.00", status: "EXHAUSTED" } });
+    expect(posted).toMatchObject({ ok: true, value: {
+      reservedRefundAmount: "0.00",
+      postedRefundAmount: "71.00",
+      availableAmount: "0.00",
+      status: "EXHAUSTED"
+    } });
     const entry = await prisma.accountingJournalEntry.findUniqueOrThrow({
       where: { customerCreditRefundId: refundId },
       include: { lines: { include: { account: true }, orderBy: { position: "asc" } } }
@@ -1163,10 +1175,6 @@ describe("billing invoices application service", () => {
     const original = await createIssuedInvoiceWithOneLine(actor, {
       issueDate: "2026-07-07",
       legalName: "Cliente Rollback Rectificativa SL"
-    });
-    await prisma.invoice.update({
-      where: { id: original.issued.value.id },
-      data: { verifactuStatus: "NOT_APPLICABLE" }
     });
     await prisma.accountingAccount.updateMany({
       where: { code: "477000000" },

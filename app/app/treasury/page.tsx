@@ -45,12 +45,12 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
 
   const payload = listCustomerDueDatesSchema.safeParse({
     limit: 25,
-    cursor: params.cursor,
-    scope: params.scope,
-    customerId: params.customerId,
-    dueFrom: params.dueFrom,
-    dueTo: params.dueTo,
-    search: params.search
+    cursor: optionalSearchParam(params.cursor),
+    scope: optionalSearchParam(params.scope),
+    customerId: optionalSearchParam(params.customerId),
+    dueFrom: optionalSearchParam(params.dueFrom),
+    dueTo: optionalSearchParam(params.dueTo),
+    search: optionalSearchParam(params.search)
   });
   const dueDateList = payload.success
     ? await listCustomerDueDates(payload.data, authorization.user)
@@ -347,6 +347,11 @@ function formatDate(value: string): string {
 
 function formatMoney(value: string): string {
   return `${value} EUR`;
+}
+
+function optionalSearchParam(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
 }
 
 function nextPageHref(
