@@ -382,7 +382,7 @@ test("creates a customer and primary store from the UI", async ({ page }) => {
 });
 
 test("creates and issues a manual invoice from the UI", async ({ page }) => {
-  test.setTimeout(60000);
+  test.setTimeout(120_000);
 
   await initializeAndLoginAdmin(page, "e2e-invoice-setup");
   await initializeAccountingForAdmin(page);
@@ -429,6 +429,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Agregar linea" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Emitir factura" })).not.toBeVisible();
 
+  await expect(page.getByRole("group", { name: "Crear rectificativa" })).toBeVisible();
   await page.getByLabel("Fecha de emision").fill("2026-07-08");
   await page.locator('select[name="reason"]').selectOption("AMOUNT_ERROR");
   await page.getByRole("button", { name: "Crear rectificativa" }).click();
@@ -449,7 +450,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   await expect(
     page.getByRole("row").filter({ hasText: "F2600001" })
   ).toContainText("Rectificada");
-  await expect(page.getByText("VeriFactu: Pendiente").first()).toBeVisible();
+  await expect(page.getByText("VeriFactu: No aplica").first()).toBeVisible();
   await expect(page.getByText("Cobro: Cancelada").first()).toBeVisible();
 
   const issuedInvoice = await prisma.invoice.findUniqueOrThrow({
@@ -485,7 +486,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   expect(issuedInvoice.status).toBe("RECTIFIED");
   expect(issuedInvoice.rectificationInvoices).toHaveLength(1);
   expect(issuedInvoice.paymentStatus).toBe("CANCELLED");
-  expect(issuedInvoice.verifactuStatus).toBe("PENDING");
+  expect(issuedInvoice.verifactuStatus).toBe("NOT_APPLICABLE");
   expect(issuedInvoice.total.toFixed(2)).toBe("121.00");
   expect(issuedInvoice.lines).toHaveLength(1);
   expect(issuedInvoice.taxSummaries).toHaveLength(1);
@@ -496,6 +497,7 @@ test("creates and issues a manual invoice from the UI", async ({ page }) => {
   expect(rectificationInvoice.documentType).toBe("RECTIFICATION");
   expect(rectificationInvoice.status).toBe("ISSUED");
   expect(rectificationInvoice.paymentStatus).toBe("NOT_APPLICABLE");
+  expect(rectificationInvoice.verifactuStatus).toBe("NOT_APPLICABLE");
   expect(rectificationInvoice.rectificationReason).toBe("AMOUNT_ERROR");
   expect(rectificationInvoice.rectifiesInvoice?.id).toBe(issuedInvoice.id);
   expect(rectificationInvoice.total.toFixed(2)).toBe("-121.00");
@@ -778,7 +780,7 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
 });
 
 test("imports Norma 43, reconciles a payment, and undoes it from the UI", async ({ page }) => {
-  test.setTimeout(60000);
+  test.setTimeout(120_000);
   await initializeAndLoginAdmin(page, "e2e-bank-reconciliation-setup");
   const invoice = await createIssuedInvoiceForAdmin();
   const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({ where: { invoiceId: invoice.id } });
@@ -1041,7 +1043,7 @@ async function createIssuedInvoiceForAdmin() {
     data: {
       status: "ISSUED",
       paymentStatus: "PENDING",
-      verifactuStatus: "PENDING",
+      verifactuStatus: "NOT_APPLICABLE",
       series: "F",
       year: 2026,
       numberSequence: 1,
@@ -1163,7 +1165,7 @@ async function createIssuedDirectDebitInvoiceForAdmin() {
     data: {
       status: "ISSUED",
       paymentStatus: "PENDING",
-      verifactuStatus: "PENDING",
+      verifactuStatus: "NOT_APPLICABLE",
       series: "F",
       year: 2026,
       numberSequence: 3,

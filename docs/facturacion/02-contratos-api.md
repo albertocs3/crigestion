@@ -100,7 +100,7 @@ Respuesta `200`:
       "issueDate": "2026-07-07",
       "operationDate": "2026-07-07",
       "paymentStatus": "PENDING",
-      "verifactuStatus": "PENDING",
+      "verifactuStatus": "NOT_APPLICABLE",
       "total": "121.00",
       "createdAt": "2026-07-07T08:00:00.000Z",
       "updatedAt": "2026-07-07T08:05:00.000Z"
@@ -341,7 +341,11 @@ Reglas:
 - No se permite emitir con fecha anterior a la ultima factura emitida de la
   serie si rompe el orden cronologico.
 - Tras emitir, la factura queda bloqueada.
-- Se crea placeholder de registro VeriFactu con estado `PENDING`, sin envio real.
+- Con `VERIFACTU_ENABLED=true`, la factura queda `PENDING` y se prepara el
+  registro fiscal y su outbox de envio.
+- Con `VERIFACTU_ENABLED=false`, la factura queda `NOT_APPLICABLE`; se conserva
+  el placeholder legacy para trazabilidad, pero no representa actividad fiscal
+  pendiente ni habilita el worker.
 
 Respuesta `200`: DTO de detalle emitido.
 

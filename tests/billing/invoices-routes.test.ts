@@ -379,11 +379,6 @@ describe("billing invoice HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const issued = await createIssuedInvoice(csrfToken);
-    await prisma.invoice.update({
-      where: { id: issued.id },
-      data: { verifactuStatus: "NOT_APPLICABLE" }
-    });
-
     const response = await invoiceRectificationPost(
       jsonRequest(
         `/api/invoices/${issued.id}/rectifications`,
@@ -430,10 +425,14 @@ describe("billing invoice HTTP contracts", () => {
     expect(JSON.stringify(auditEvent.payload)).not.toContain("No auditar");
   });
 
-  it("fails closed when rectifying an invoice integrated with VeriFactu", async () => {
+  it("fails closed when rectifying a pending VeriFactu invoice", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const issued = await createIssuedInvoice(csrfToken);
+    await prisma.invoice.update({
+      where: { id: issued.id },
+      data: { verifactuStatus: "PENDING" }
+    });
 
     const response = await invoiceRectificationPost(
       jsonRequest(
@@ -797,11 +796,6 @@ describe("billing invoice HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const issued = await createIssuedInvoice(csrfToken);
-    await prisma.invoice.update({
-      where: { id: issued.id },
-      data: { verifactuStatus: "NOT_APPLICABLE" }
-    });
-
     const response = await invoicePdfGet(
       apiRequest(`/api/invoices/${issued.id}/pdf`),
       routeContext({ invoiceId: issued.id })

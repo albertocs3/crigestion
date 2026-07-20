@@ -174,3 +174,63 @@ build optimizado, migrador sin migraciones pendientes y health local y publico
 en estado `ok`. El smoke final desde navegador confirmo para el credito UAT:
 121 EUR originales, 60,50 EUR aplicados, 60,50 EUR reembolsados, 0 EUR
 reservados y 0 EUR disponibles.
+
+## 10. Regresion complementaria y ensayo de cierre 2026
+
+El 2026-07-20 se completo una regresion local posterior a rc5 sobre la copia de
+trabajo que incorpora los ultimos ajustes aun no consolidados como una nueva
+release inmutable. `npm run verify:release` supero TypeScript, 56 archivos con
+536 pruebas Vitest, ESLint, el build optimizado de Next.js y
+`npm audit --audit-level=high` sin vulnerabilidades. La regresion E2E completa
+supero tambien sus 12 casos.
+
+Esta evidencia local no se atribuye al commit rc5 desplegado: antes de llevar
+esos ajustes a staging deben recibir una identidad de release y commit propios.
+
+En el VPS se valido ademas el procedimiento canonico de restauracion de
+staging, que termino con `RESTORE_DRILL_OK`. A continuacion se ejecuto el ciclo
+de cierre sobre una copia persistente y aislada del backup automatico
+`crigestion_staging-auto-20260720T002559Z.dump`, cuya suma SHA-256 y catalogo de
+`pg_restore` se verificaron antes de crear la copia.
+
+La aplicacion temporal uso exclusivamente el artefacto inmutable
+`staging-2026.07.17-rc5`, build ID `809M0YDu_pQ1vAZxKMkIl`, y una base llamada
+`crigestion_test` con 79 de 79 migraciones terminadas. Escucho solo en
+`127.0.0.1:3102`, utilizo usuario, rol, cookie y secretos efimeros, mantuvo
+VeriFactu desactivado, no arranco ningun worker y no tuvo permiso de conexion
+sobre `crigestion_staging`.
+
+Antes del cierre se comprobo:
+
+- ejercicio 2026 abierto y ausencia del ejercicio 2027;
+- 11 asientos contabilizados, con 1.044,16 EUR tanto al debe como al haber;
+- ningun descuadre entre cabeceras, lineas, debe y haber;
+- 792 cuentas en el ejercicio 2026.
+
+Un usuario restringido sin `Accounting.CloseExercises` recibio
+`403 FORBIDDEN`; el servidor genero `ACCESS_DENIED` y mantuvo 2026 abierto sin
+crear 2027. El administrador ejecuto despues el cierre con respuesta HTTP 200.
+La operacion genero:
+
+| Origen | Asiento | Fecha | Debe | Haber | Lineas |
+|---|---|---|---:|---:|---:|
+| `REGULARIZATION` | `2026/000012` | 2026-12-31 | 150,00 EUR | 150,00 EUR | 2 |
+| `CLOSING` | `2026/000013` | 2026-12-31 | 181,50 EUR | 181,50 EUR | 4 |
+| `OPENING` | `2027/000001` | 2027-01-01 | 181,50 EUR | 181,50 EUR | 4 |
+
+El resultado dejo 2026 cerrado y 2027 abierto, con las 792 cuentas copiadas y
+enlazadas a su cuenta origen. No hubo descuadres ni diferencias entre las
+lineas de cierre y apertura. La auditoria genero un unico
+`ACCOUNTING_FISCAL_YEAR_CLOSED` con 2 lineas de regularizacion, 4 de cierre y 4
+de apertura. El rol runtime podia insertar auditoria, pero no modificarla ni
+borrarla, y no podia consultar `_prisma_migrations`.
+
+Al terminar se detuvo la instancia temporal y se eliminaron la base, el rol,
+el usuario de sistema, la unidad, la cache, las cookies y los secretos
+efimeros. Tambien se retiro la clave SSH temporal usada para la operacion. La
+verificacion final confirmo staging en estado `ok`, incluidos PostgreSQL,
+VeriFactu y worker, y su ejercicio principal 2026 permanecio abierto.
+
+Este ensayo no cerro ni modifico el ejercicio de la base principal de staging
+y no accedio a produccion. Tampoco constituye una autorizacion de despliegue
+productivo.

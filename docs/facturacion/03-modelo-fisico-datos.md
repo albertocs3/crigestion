@@ -156,7 +156,7 @@ importadores.
 |---|---|
 | `id` | UUID tecnico. |
 | `invoiceId` | Factura emitida. |
-| `status` | Estado de preparacion/envio. MVP: `PENDING`. |
+| `status` | Estado del placeholder legacy. Puede seguir `PENDING` aunque la proyeccion de la factura sea `NOT_APPLICABLE` cuando VeriFactu esta desactivado; no sustituye a `verifactu_fiscal_records`. |
 | `createdAt` | Instante de creacion del placeholder. |
 | `lastErrorCode` | Codigo funcional si falla preparacion futura. |
 
