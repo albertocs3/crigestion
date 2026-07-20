@@ -74,6 +74,7 @@ jobs:
           VERIFACTU_MIGRATION_DATABASE_URL: postgresql://crigestion_ci:crigestion@postgres:5432/crigestion_ci_test?schema=public
           VERIFACTU_MIGRATION_EXPECTED_DATABASE: crigestion_ci_test
         run: |
+          cp .env.docker.example .env.docker
           docker compose --profile verifactu-test config --quiet
           docker compose --profile verifactu-test build verifactu-migrate-test verifactu-worker-test
 
