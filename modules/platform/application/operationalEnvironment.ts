@@ -1,7 +1,8 @@
 export type OperationalEnvironmentSummary = {
   appEnvironment: "TEST" | "STAGING" | "DEVELOPMENT" | "PRODUCTION" | "UNKNOWN";
+  tfmDemoMode: boolean;
   isTestMode: boolean;
-  expectedDatabaseName: "crigestion_test" | "crigestion_staging" | null;
+  expectedDatabaseName: "crigestion_test" | "crigestion_staging" | "crigestion_prod" | null;
   databaseConfiguredAsTest: boolean;
   verifactuEnabled: boolean;
   verifactuEnvironment: "TEST" | "PRODUCTION" | "INVALID" | "DISABLED";
@@ -15,12 +16,16 @@ export type OperationalEnvironmentSummary = {
 
 export function readOperationalEnvironment(env: NodeJS.ProcessEnv): OperationalEnvironmentSummary {
   const appEnvironment = normalizeAppEnvironment(env.APP_ENV);
-  const isTestMode = env.APP_ENV === "test" || env.APP_ENV === "staging";
+  const tfmDemoRequested = isTfmDemoRequested(env);
+  const tfmDemoConfigured = isTfmDemoRuntimeEnvironment(env);
+  const isTestMode = env.APP_ENV === "test" || env.APP_ENV === "staging" || tfmDemoRequested;
   const expectedDatabaseName = env.APP_ENV === "test"
     ? "crigestion_test"
-    : env.APP_ENV === "staging" ? "crigestion_staging" : null;
+    : env.APP_ENV === "staging" ? "crigestion_staging" : tfmDemoRequested ? tfmDemoDatabaseName : null;
   const databaseConfiguredAsTest = expectedDatabaseName !== null
-    && (env.APP_ENV === "staging"
+    && (tfmDemoRequested
+      ? tfmDemoConfigured
+      : env.APP_ENV === "staging"
       ? isValidStagingRuntimeDatabaseUrl(env.DATABASE_URL)
       : readDatabaseName(env.DATABASE_URL) === expectedDatabaseName);
   const enabledFlag = readBooleanFlag(env.VERIFACTU_ENABLED, false);
@@ -37,6 +42,7 @@ export function readOperationalEnvironment(env: NodeJS.ProcessEnv): OperationalE
   const configurationFlagsValid = enabledFlag.valid && productionFlag.valid && preparationFlag.valid;
   return {
     appEnvironment,
+    tfmDemoMode: tfmDemoRequested,
     isTestMode,
     expectedDatabaseName,
     databaseConfiguredAsTest,
@@ -50,11 +56,13 @@ export function readOperationalEnvironment(env: NodeJS.ProcessEnv): OperationalE
     testIsolationConfigured: isTestMode && databaseConfiguredAsTest && configurationFlagsValid
       && configuredVerifactuEnvironment === "TEST" && configuredWorkerEnvironment === "TEST"
       && !productionWorkerAllowed && !productionPreparationAllowed
+      && (!tfmDemoRequested || tfmDemoConfigured)
   };
 }
 
 export function isVerifactuEnvironmentCoherent(environment: OperationalEnvironmentSummary): boolean {
-  return (environment.isTestMode && environment.verifactuEnvironment === "TEST"
+  return (environment.isTestMode && (!environment.tfmDemoMode || environment.testIsolationConfigured)
+    && environment.verifactuEnvironment === "TEST"
     && environment.workerEnvironment === "TEST" && !environment.productionWorkerAllowed
     && !environment.productionPreparationAllowed)
     || (environment.appEnvironment === "PRODUCTION" && environment.verifactuEnvironment === "PRODUCTION"
@@ -68,7 +76,8 @@ export function isVerifactuPreparationAllowed(env: Readonly<Record<string, strin
   const preparationFlag = readBooleanFlag(env.VERIFACTU_ALLOW_PRODUCTION, false);
   if (!preparationFlag.valid) return false;
   if (environment === "TEST") {
-    return (env.APP_ENV === "test" || env.APP_ENV === "staging") && !preparationFlag.value;
+    return (env.APP_ENV === "test" || env.APP_ENV === "staging" || isTfmDemoRuntimeEnvironment(env))
+      && !preparationFlag.value;
   }
   return environment === "PRODUCTION"
     && env.APP_ENV === "production"
@@ -130,3 +139,8 @@ function isValidReleaseId(value: string | undefined): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(value?.trim() ?? "");
 }
 import { assertStagingDatabaseUrl, stagingRuntimeDatabaseRole } from "./stagingEnvironment";
+import {
+  isTfmDemoRequested,
+  isTfmDemoRuntimeEnvironment,
+  tfmDemoDatabaseName
+} from "./tfmDemoEnvironment";

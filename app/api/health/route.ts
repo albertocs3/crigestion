@@ -3,6 +3,7 @@ import { jsonResponse } from "@/modules/platform/application/http";
 import { readPlatformEnvironment } from "@/modules/platform/application/environment";
 import { classifyWorkerHealth, isVerifactuEnvironmentCoherent, readOperationalEnvironment } from "@/modules/platform/application/operationalEnvironment";
 import { assertStagingRuntimeEnvironment } from "@/modules/platform/application/stagingEnvironment";
+import { assertTfmDemoRuntimeEnvironment, isTfmDemoRequested } from "@/modules/platform/application/tfmDemoEnvironment";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,6 +22,7 @@ export async function GET(request: Request) {
     }>>`SELECT current_database() AS "databaseName", current_user AS "databaseRole",
       inet_server_addr()::text AS "serverAddress", inet_server_port() AS "serverPort"`;
     if (process.env.APP_ENV === "staging") assertStagingRuntimeEnvironment(process.env, database);
+    if (isTfmDemoRequested(process.env)) assertTfmDemoRuntimeEnvironment(process.env, database);
     const environment = readOperationalEnvironment(process.env);
     const databaseAligned = environment.isTestMode
       ? environment.databaseConfiguredAsTest && database?.databaseName === environment.expectedDatabaseName

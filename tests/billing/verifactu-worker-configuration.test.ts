@@ -3,6 +3,7 @@ import {
   assertVerifactuProductionWorkerConfiguration,
   assertVerifactuTestWorkerConfiguration
 } from "@/modules/billing/application/verifactuWorkerConfiguration";
+import { tfmDemoConfirmation } from "@/modules/platform/application/tfmDemoEnvironment";
 
 const valid = {
   APP_ENV: "test",
@@ -73,6 +74,28 @@ describe("VeriFactu TEST worker configuration", () => {
     expect(() => assertVerifactuTestWorkerConfiguration({
       ...valid,
       DATABASE_URL: "postgresql://local:local@postgres:5432/crigestion_test?schema=public"
+    })).toThrow("VERIFACTU_WORKER_DATABASE_URL_INVALID");
+  });
+
+  it("accepts the exact production-hosted TFM demo while keeping AEAT production blocked", () => {
+    const demo = {
+      ...valid,
+      NODE_ENV: "production",
+      APP_ENV: "production",
+      DATABASE_URL: "postgresql://crigestion_app:local@127.0.0.1:5433/crigestion_prod?schema=public",
+      VERIFACTU_TFM_DEMO_CONFIRM: tfmDemoConfirmation,
+      VERIFACTU_PRODUCTION_RELEASE_ID: "",
+      VERIFACTU_WORKER_PRODUCTION_CONFIRM: "",
+      VERIFACTU_WORKER_EXPECTED_DATABASE: "crigestion_prod"
+    };
+    expect(() => assertVerifactuTestWorkerConfiguration(demo)).not.toThrow();
+    expect(() => assertVerifactuTestWorkerConfiguration({
+      ...demo,
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "true"
+    })).toThrow("VERIFACTU_WORKER_TEST_SERVICE_ENVIRONMENT_INVALID");
+    expect(() => assertVerifactuTestWorkerConfiguration({
+      ...demo,
+      VERIFACTU_WORKER_PRODUCTION_CONFIRM: "AEAT_PRODUCTION_AUTHORIZED"
     })).toThrow("VERIFACTU_WORKER_DATABASE_URL_INVALID");
   });
 });

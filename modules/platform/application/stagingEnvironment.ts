@@ -1,3 +1,5 @@
+import { isTfmDemoRequested } from "./tfmDemoEnvironment";
+
 export const stagingDatabaseName = "crigestion_staging";
 export const stagingRuntimeDatabaseRole = "crigestion_staging_app";
 export const stagingMigratorDatabaseRole = "crigestion_staging_migrator";
@@ -93,7 +95,7 @@ export function assertStagingDatabaseIdentity(
 export function isStagingProductionCapabilityForbidden(
   env: Readonly<Record<string, string | undefined>> = process.env
 ): boolean {
-  return env.APP_ENV === "staging";
+  return env.APP_ENV === "staging" || isTfmDemoRequested(env);
 }
 
 function isCanonicalBoolean(value: string | undefined): boolean {

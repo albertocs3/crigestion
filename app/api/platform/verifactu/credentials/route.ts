@@ -52,7 +52,7 @@ export async function POST(request: Request) {
       } });
       return jsonResponse(request, {
         code: "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING",
-        message: "Staging solo admite credenciales AEAT TEST."
+        message: "Este entorno solo admite credenciales AEAT TEST."
       }, { status: 409 });
     }
     pfx = Buffer.from(certificate.value);

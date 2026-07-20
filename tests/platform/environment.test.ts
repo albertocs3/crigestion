@@ -9,6 +9,11 @@ import {
   isVerifactuPreparationAllowed,
   readOperationalEnvironment
 } from "@/modules/platform/application/operationalEnvironment";
+import { isStagingProductionCapabilityForbidden } from "@/modules/platform/application/stagingEnvironment";
+import {
+  isTfmDemoRuntimeEnvironment,
+  tfmDemoConfirmation
+} from "@/modules/platform/application/tfmDemoEnvironment";
 
 const validSecret = "0123456789abcdef0123456789abcdef";
 const validCredentialSecret = "verifactu-idempotency-secret-32-bytes";
@@ -244,6 +249,60 @@ describe("platform environment validation", () => {
       VERIFACTU_ALLOW_PRODUCTION: "true",
       VERIFACTU_PRODUCTION_RELEASE_ID: "release-2026.07.15"
     })).toBe(false);
+  });
+
+  it("allows an explicit TFM demo to use only AEAT TEST on the exact local production database", () => {
+    const demo = {
+      NODE_ENV: "production",
+      APP_ENV: "production",
+      DATABASE_URL: "postgresql://crigestion_app:hidden@127.0.0.1:5433/crigestion_prod?schema=public",
+      VERIFACTU_TFM_DEMO_CONFIRM: tfmDemoConfirmation,
+      VERIFACTU_ENABLED: "true",
+      VERIFACTU_ENVIRONMENT: "TEST",
+      VERIFACTU_ALLOW_PRODUCTION: "false",
+      VERIFACTU_PRODUCTION_RELEASE_ID: "",
+      VERIFACTU_WORKER_ENVIRONMENT: "TEST",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false",
+      VERIFACTU_WORKER_PRODUCTION_CONFIRM: "",
+      VERIFACTU_WORKER_EXPECTED_DATABASE: "crigestion_prod"
+    } satisfies NodeJS.ProcessEnv;
+    expect(isTfmDemoRuntimeEnvironment(demo)).toBe(true);
+    expect(readOperationalEnvironment(demo)).toMatchObject({
+      appEnvironment: "PRODUCTION",
+      tfmDemoMode: true,
+      isTestMode: true,
+      expectedDatabaseName: "crigestion_prod",
+      databaseConfiguredAsTest: true,
+      testIsolationConfigured: true,
+      verifactuEnvironment: "TEST",
+      workerEnvironment: "TEST"
+    });
+    expect(isVerifactuPreparationAllowed(demo)).toBe(true);
+    expect(isStagingProductionCapabilityForbidden(demo)).toBe(true);
+  });
+
+  it.each([
+    ["VERIFACTU_ENVIRONMENT", "PRODUCTION"],
+    ["VERIFACTU_ALLOW_PRODUCTION", "true"],
+    ["VERIFACTU_WORKER_ALLOW_PRODUCTION", "true"],
+    ["VERIFACTU_PRODUCTION_RELEASE_ID", "release-real"],
+    ["VERIFACTU_WORKER_PRODUCTION_CONFIRM", "AEAT_PRODUCTION_AUTHORIZED"],
+    ["VERIFACTU_WORKER_EXPECTED_DATABASE", "crigestion_test"],
+    ["DATABASE_URL", "postgresql://crigestion_app:hidden@127.0.0.1:5432/crigestion_prod?schema=public"]
+  ])("fails closed when the TFM demo has unsafe %s", (name, value) => {
+    const demo = {
+      NODE_ENV: "production", APP_ENV: "production",
+      DATABASE_URL: "postgresql://crigestion_app:hidden@127.0.0.1:5433/crigestion_prod?schema=public",
+      VERIFACTU_TFM_DEMO_CONFIRM: tfmDemoConfirmation,
+      VERIFACTU_ENABLED: "true", VERIFACTU_ENVIRONMENT: "TEST", VERIFACTU_ALLOW_PRODUCTION: "false",
+      VERIFACTU_PRODUCTION_RELEASE_ID: "", VERIFACTU_WORKER_ENVIRONMENT: "TEST",
+      VERIFACTU_WORKER_ALLOW_PRODUCTION: "false", VERIFACTU_WORKER_PRODUCTION_CONFIRM: "",
+      VERIFACTU_WORKER_EXPECTED_DATABASE: "crigestion_prod"
+    } satisfies NodeJS.ProcessEnv;
+    const unsafe = { ...demo, [name]: value };
+    expect(isTfmDemoRuntimeEnvironment(unsafe)).toBe(false);
+    expect(isVerifactuPreparationAllowed(unsafe)).toBe(false);
+    expect(readOperationalEnvironment(unsafe).testIsolationConfigured).toBe(false);
   });
 
   it("marks missing, malformed and non-test database declarations as unverified", () => {
