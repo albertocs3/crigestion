@@ -1,13 +1,18 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertStagingRuntimeEnvironment } from "@/modules/platform/application/stagingEnvironment";
+import {
+  assertTfmDemoRuntimeEnvironment,
+  isTfmDemoRequested,
+  tfmDemoDatabaseName
+} from "@/modules/platform/application/tfmDemoEnvironment";
 
 export function assertVerifactuTestWorkerConfiguration(
   env: Readonly<Record<string, string | undefined>>
 ): void {
   const expectedDatabase = env.APP_ENV === "test"
     ? "crigestion_test"
-    : env.APP_ENV === "staging" ? "crigestion_staging" : null;
+    : env.APP_ENV === "staging" ? "crigestion_staging" : isTfmDemoRequested(env) ? tfmDemoDatabaseName : null;
   if (
     expectedDatabase === null ||
     env.VERIFACTU_ENABLED !== "true" ||
@@ -21,6 +26,11 @@ export function assertVerifactuTestWorkerConfiguration(
   }
   if (env.APP_ENV === "staging") {
     try { assertStagingRuntimeEnvironment(env); }
+    catch { throw new Error("VERIFACTU_WORKER_DATABASE_URL_INVALID"); }
+    return;
+  }
+  if (isTfmDemoRequested(env)) {
+    try { assertTfmDemoRuntimeEnvironment(env); }
     catch { throw new Error("VERIFACTU_WORKER_DATABASE_URL_INVALID"); }
     return;
   }

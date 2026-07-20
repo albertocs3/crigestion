@@ -15,6 +15,7 @@ import type {
 import { commitPreparedVerifactuAltaInTransaction } from "@/modules/billing/application/verifactuPersistence";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { isVerifactuPreparationAllowed } from "@/modules/platform/application/operationalEnvironment";
+import { isTfmDemoRuntimeEnvironment } from "@/modules/platform/application/tfmDemoEnvironment";
 
 const defaultLimit = 25;
 const maxLimit = 100;
@@ -2655,7 +2656,9 @@ function readVerifactuEnvironment(): "TEST" | "PRODUCTION" | null {
   if (!isVerifactuPreparationAllowed(process.env)) return null;
   const value = process.env.VERIFACTU_ENVIRONMENT?.trim().toLowerCase();
   if (value === "production") return "PRODUCTION";
-  if (value === "test" && process.env.APP_ENV !== "production") return "TEST";
+  if (value === "test" && (process.env.APP_ENV !== "production" || isTfmDemoRuntimeEnvironment(process.env))) {
+    return "TEST";
+  }
   return null;
 }
 

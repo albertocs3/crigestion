@@ -35,7 +35,8 @@ RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
 
-# This unit must not be enabled until the production authorization checklist is complete.
+# Enable only after either the production authorization checklist or the
+# explicitly isolated TFM AEAT TEST profile has been validated.
 
 [Install]
 WantedBy=multi-user.target

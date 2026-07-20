@@ -118,7 +118,7 @@ export async function stageVerifactuCredential(
   }
   if (isStagingProductionCapabilityForbidden() && command.allowProduction) {
     pfx.fill(0);
-    return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Staging solo admite credenciales AEAT TEST.");
+    return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Este entorno solo admite credenciales AEAT TEST.");
   }
   try {
     if (isStagingProductionCapabilityForbidden()) {
@@ -127,7 +127,7 @@ export async function stageVerifactuCredential(
         select: { id: true }
       });
       if (!stagingInstallation) {
-        return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Staging solo admite instalaciones SIF TEST activas.");
+        return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Este entorno solo admite instalaciones SIF TEST activas.");
       }
     }
     const existingIdempotency = await prisma.idempotencyRecord.findUnique({ where: { key: context.idempotencyKey }, select: { requestHash: true } });
@@ -164,7 +164,7 @@ export async function testAndActivateVerifactuCredential(
   dependencies: VerifactuCredentialCycleDependencies
 ): Promise<{ ok: true; status: 200; value: { credentialRef: string; versionId: string; version: number; status: "ACTIVE"; testedAt: string; retiredVersionId: string | null } } | CredentialCycleFailure> {
   if (isStagingProductionCapabilityForbidden() && command.targetProductionSifInstallationId) {
-    return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Staging no puede asociar credenciales a instalaciones productivas.");
+    return failure(409, "VERIFACTU_PRODUCTION_FORBIDDEN_IN_STAGING", "Este entorno no puede asociar credenciales a instalaciones productivas.");
   }
   const target = await findActivationTarget(versionId, command);
   if (!target) return failure(404, "VERIFACTU_CREDENTIAL_VERSION_NOT_FOUND", "La version de credencial no existe.");

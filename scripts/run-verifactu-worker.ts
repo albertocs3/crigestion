@@ -10,6 +10,10 @@ import {
 } from "../modules/billing/application/verifactuWorkerConfiguration";
 import { assertStagingRuntimeEnvironment } from "../modules/platform/application/stagingEnvironment";
 import {
+  assertTfmDemoRuntimeEnvironment,
+  isTfmDemoRequested
+} from "../modules/platform/application/tfmDemoEnvironment";
+import {
   acquireVerifactuWorkerLeadership,
   finishVerifactuWorkerRun,
   heartbeatVerifactuWorker,
@@ -161,6 +165,10 @@ async function assertExpectedDatabase(required: boolean): Promise<void> {
   if (identity?.databaseName !== expected) throw new Error("VERIFACTU_WORKER_DATABASE_MISMATCH");
   if (process.env.APP_ENV === "staging") {
     try { assertStagingRuntimeEnvironment(process.env, identity); }
+    catch { throw new Error("VERIFACTU_WORKER_DATABASE_MISMATCH"); }
+  }
+  if (isTfmDemoRequested(process.env)) {
+    try { assertTfmDemoRuntimeEnvironment(process.env, identity); }
     catch { throw new Error("VERIFACTU_WORKER_DATABASE_MISMATCH"); }
   }
 }

@@ -19,7 +19,7 @@ export default function RootLayout({
         {environment.isTestMode ? (
           <aside className={`environment-banner ${environment.testIsolationConfigured ? "" : "environment-banner-unverified"}`}
             aria-label="Entorno de ejecucion">
-            <strong>ENTORNO {environment.appEnvironment} · {environment.databaseConfiguredAsTest
+            <strong>ENTORNO {environment.tfmDemoMode ? "TFM DEMO" : environment.appEnvironment} · {environment.databaseConfiguredAsTest
               ? environment.expectedDatabaseName
               : "BASE NO VERIFICADA"}</strong>
             <span>{environment.testIsolationConfigured
