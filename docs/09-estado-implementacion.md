@@ -13,7 +13,7 @@ Fecha de corte: 2026-07-21.
 | Area | Estado | Alcance verificado |
 |---|---|---|
 | Plataforma | Operativa | Inicializacion, login/logout, sesiones, permisos, auditoria, copias, restauracion y mantenimiento controlado. |
-| Adjuntos seguros | En validacion | Primera rebanada de logotipo empresarial: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. Aun no desplegada. |
+| Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
@@ -48,7 +48,7 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 Evidencia actualizada el 21 de julio de 2026 sobre PostgreSQL desechable:
 
 - El repositorio contiene 82 migraciones; la base desechable las aplica desde cero antes de validar.
-- Vitest: 65 archivos y 595 pruebas superadas.
+- Vitest: 66 archivos y 596 pruebas superadas.
 - TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
@@ -58,6 +58,17 @@ autenticacion, RBAC, sesiones, tesoreria y auditoria desde navegador, se conserv
 
 El build y las pruebas automatizadas forman parte de `verify:release`; deben
 repetirse sobre cada nuevo artefacto candidato antes de desplegarlo.
+
+La release inmutable `staging-2026.07.21-rc17`, commit
+`fa070e7d12287b411a8d6efd09b8caec3f8aac75`, desplego y acepto la primera
+rebanada de adjuntos seguros. El smoke de navegador guardo un logotipo
+sintetico; la verificacion server-side confirmo estado `AVAILABLE`, resultado
+ClamAV `CLEAN`, integridad de tamano y hash, propietario runtime, modo `0600`,
+cuarentena vacia y auditoria sin rutas, hashes ni contenido del fichero. Tras
+crear un dump PostgreSQL actualizado, el paquete integral cifrado supero su
+checksum y el drill aislado termino con `RECOVERY_DRILL_OK attachments=1`, sin
+bases temporales residuales. VeriFactu permanecio en `TEST` y produccion no se
+toco.
 
 La cobertura bancaria incluye importacion, propuesta, conciliacion y deshacer
 desde navegador, contratos HTTP, concurrencia e invariantes PostgreSQL.
@@ -70,18 +81,11 @@ Prioridades pendientes despues de este corte:
    y de despliegue independiente.
 2. Preparar el supervisor equivalente del entorno de despliegue definitivo; en
    Windows TEST ya existe una tarea de instancia unica con reinicio automatico.
-3. Desplegar y ensayar el paquete integral cifrado actualizado para staging:
-   incluye dump, configuracion, keyrings historicos VeriFactu, release e
-   inventario autenticado y el archivo allowlisted de adjuntos definitivos. La
-   cuarentena queda excluida. Replicarlo despues a una custodia externa e
-   inmutable y ejecutar el nuevo drill aislado de coherencia de base, keyrings y
-   adjuntos. Este drill no sustituye todavia un runner de aplicacion total que
-   reinstale release, configuracion, base y adjuntos ante perdida completa. El
-   RPO/RTO ante perdida total exige repetirlo desde esa copia externa.
-4. Ejecutar pruebas de migracion sobre una copia representativa antes de
-   desplegar; la exclusion de rangos requiere `btree_gist` y una ventana de
-   mantenimiento breve.
-5. Definir conciliacion de proveedores y conciliacion directa de remesas.
-6. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
+3. Replicar el paquete integral cifrado ya ensayado a una custodia externa e
+   inmutable y repetir el drill desde esa copia. El drill local no sustituye
+   todavia un runner de aplicacion total que reinstale release, configuracion,
+   base y adjuntos ante perdida completa.
+4. Definir conciliacion de proveedores y conciliacion directa de remesas.
+5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
-7. Refinar el backlog por rebanadas posteriores; [el backlog inicial](07-backlog-tecnico-primera-rebanada.md) se conserva como trazabilidad historica de plataforma.
+6. Refinar el backlog por rebanadas posteriores; [el backlog inicial](07-backlog-tecnico-primera-rebanada.md) se conserva como trazabilidad historica de plataforma.

@@ -234,3 +234,34 @@ VeriFactu y worker, y su ejercicio principal 2026 permanecio abierto.
 Este ensayo no cerro ni modifico el ejercicio de la base principal de staging
 y no accedio a produccion. Tampoco constituye una autorizacion de despliegue
 productivo.
+
+## 11. Adjuntos seguros y recuperacion integral
+
+El 2026-07-21 se desplego en staging la primera rebanada de adjuntos seguros
+mediante la release inmutable `staging-2026.07.21-rc17`, commit
+`fa070e7d12287b411a8d6efd09b8caec3f8aac75`. La candidata supero TypeScript,
+66 archivos con 596 pruebas Vitest, ESLint, build optimizado de Next.js y
+`npm audit --audit-level=high` sin vulnerabilidades.
+
+Durante el smoke del logotipo empresarial, ClamAV fallo inicialmente de forma
+segura: no publico el archivo y devolvio `ANTIVIRUS_UNAVAILABLE`. El diagnostico
+reprodujo que `clamdscan --fdpass` no podia tratar el descriptor como archivo
+regular dentro del espacio de nombres de `ProtectSystem=strict`. La correccion
+usa `clamdscan --stream`, mantiene el aislamiento systemd y el comportamiento
+fail-closed, y fue revisada de forma independiente antes del despliegue.
+
+El reintento con la misma imagen sintetica termino correctamente. La
+verificacion server-side confirmo:
+
+- adjunto `AVAILABLE`, escaneo `CLEAN` y motor `clamdscan`;
+- tamano y SHA-256 coherentes entre PostgreSQL y el fichero privado;
+- propietario `crigestion-staging`, modo `0600` y cuarentena vacia;
+- evento `COMPANY_LOGO_UPLOADED` y rechazos previos auditados sin ruta, hash,
+  bytes ni contenido del fichero.
+
+Se genero despues un dump PostgreSQL actualizado para alinear el RPO con la
+subida. El paquete cifrado
+`crigestion-staging-20260721T171412Z.cgrb` supero su checksum y el simulacro
+aislado termino con `RECOVERY_DRILL_OK attachments=1`. Las bases snapshot y de
+drill se eliminaron, el health local y publico permanecio en `ok`, VeriFactu
+continuo en `TEST` y produccion quedo fuera de alcance.
