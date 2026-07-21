@@ -4,6 +4,7 @@ import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { VerifactuCredentialManagement } from "../application/verifactuCredentials";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
+import { createIdempotencyKey, fingerprintBytes, fingerprintText } from "./idempotencyFingerprint";
 
 type SubmissionState = { status: "idle" | "submitting" | "success" | "error"; message?: string };
 
@@ -53,7 +54,7 @@ export function VerifactuCredentialManager({ management }: { management: Verifac
 
 function CredentialImportForm({ testInstallations }: { testInstallations: VerifactuCredentialManagement["installations"] }) {
   const router = useRouter();
-  const idempotencyRef = useRef<{ requestHash: string; key: string } | null>(null);
+  const idempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -73,10 +74,10 @@ function CredentialImportForm({ testInstallations }: { testInstallations: Verifa
         allowProduction: data.get("allowProduction") === "on"
       };
       const csrfToken = await fetchCsrfToken();
-      const requestHash = await sha256Hex(JSON.stringify({
+      const fingerprint = fingerprintText(JSON.stringify({
         ...fields,
-        passphrase: await sha256Hex(fields.passphrase),
-        pfxSha256: await sha256Bytes(pfxBytes)
+        passphraseFingerprint: fingerprintText(fields.passphrase),
+        pfxFingerprint: fingerprintBytes(pfxBytes)
       }));
       const requestBody = new FormData();
       requestBody.set("sifInstallationId", fields.sifInstallationId);
@@ -85,7 +86,7 @@ function CredentialImportForm({ testInstallations }: { testInstallations: Verifa
       requestBody.set("endpointKind", fields.endpointKind);
       requestBody.set("allowProduction", String(fields.allowProduction));
       requestBody.set("certificate", file, file.name);
-      if (idempotencyRef.current?.requestHash !== requestHash) idempotencyRef.current = { requestHash, key: crypto.randomUUID() };
+      if (idempotencyRef.current?.fingerprint !== fingerprint) idempotencyRef.current = { fingerprint, key: createIdempotencyKey() };
       const response = await fetch("/api/platform/verifactu/credentials", { method: "POST", headers: { "Idempotency-Key": idempotencyRef.current.key, "X-CSRF-Token": csrfToken }, body: requestBody });
       if (response.status < 500) idempotencyRef.current = null;
       const body = await response.json().catch(() => null) as { message?: string; code?: string } | null;
@@ -123,7 +124,7 @@ function CredentialImportForm({ testInstallations }: { testInstallations: Verifa
 
 function CredentialActivationForm({ versionId, testInstallations, productionInstallations, allowProduction, latestTest }: { versionId: string; testInstallations: VerifactuCredentialManagement["installations"]; productionInstallations: VerifactuCredentialManagement["installations"]; allowProduction: boolean; latestTest: VerifactuCredentialManagement["credentials"][number]["versions"][number]["latestTest"] }) {
   const router = useRouter();
-  const idempotencyRef = useRef<{ requestHash: string; key: string } | null>(null);
+  const idempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
   const [installationId, setInstallationId] = useState(testInstallations[0]?.id ?? "");
   const installation = testInstallations.find((item) => item.id === installationId);
@@ -139,8 +140,8 @@ function CredentialActivationForm({ versionId, testInstallations, productionInst
       const csrfToken = await fetchCsrfToken();
       if (!installation) return setState({ status: "error", message: "Selecciona una instalación TEST activa." });
       const requestBody = JSON.stringify({ sifInstallationId: installation.id, fiscalRecordId: String(data.get("fiscalRecordId") ?? ""), ...(target ? { targetProductionSifInstallationId: target } : {}) });
-      const requestHash = await sha256Hex(requestBody);
-      if (idempotencyRef.current?.requestHash !== requestHash) idempotencyRef.current = { requestHash, key: crypto.randomUUID() };
+      const fingerprint = fingerprintText(requestBody);
+      if (idempotencyRef.current?.fingerprint !== fingerprint) idempotencyRef.current = { fingerprint, key: createIdempotencyKey() };
       const response = await fetch(`/api/platform/verifactu/credential-versions/${versionId}/activate`, { method: "POST", headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.key, "X-CSRF-Token": csrfToken }, body: requestBody });
       if (response.status < 500 || response.status === 502) idempotencyRef.current = null;
       const body = await response.json().catch(() => null) as { message?: string; code?: string } | null;
@@ -163,7 +164,5 @@ function CredentialActivationForm({ versionId, testInstallations, productionInst
 
 function CredentialStatus({ status }: { status: string }) { return <span className="status"><span aria-hidden="true" className={`status-dot status-dot-${status.toLowerCase()}`} />{status}</span>; }
 function SubmissionMessage({ state }: { state: SubmissionState }) { if (state.status !== "success" && state.status !== "error") return null; return <p aria-live="polite" role={state.status === "error" ? "alert" : "status"} className={state.status === "error" ? "message error" : "message"}>{state.message}</p>; }
-async function sha256Hex(value: string): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
-async function sha256Bytes(value: Uint8Array): Promise<string> { const copy = new Uint8Array(value.byteLength); copy.set(value); const digest = await crypto.subtle.digest("SHA-256", copy.buffer); copy.fill(0); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function formatDate(value: string): string { return new Date(value).toLocaleString("es-ES"); }
 function formatShortDate(value: string): string { return new Date(value).toLocaleDateString("es-ES"); }
