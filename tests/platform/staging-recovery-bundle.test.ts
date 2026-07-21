@@ -52,8 +52,10 @@ describe("staging recovery bundle deployment", () => {
     expect(unit).toContain("LoadCredential=recovery-bundle.key:");
     expect(unit).toContain("InaccessiblePaths=/etc/crigestion-staging/recovery-bundle.key");
     expect(unit).toContain("EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env");
-    expect(unit).toContain("RECOVERY_BUNDLE_KEY_FILE=%d/recovery-bundle.key");
-    expect(unit).toContain("ExecStartPre=/usr/bin/test -r %d/recovery-bundle.key");
+    const runtimeCredential =
+      "/run/credentials/crigestion-staging-recovery-bundle.service/recovery-bundle.key";
+    expect(unit).toContain(`RECOVERY_BUNDLE_KEY_FILE=${runtimeCredential}`);
+    expect(unit).toContain(`ExecStartPre=/usr/bin/test -r ${runtimeCredential}`);
     expect(unit).toContain("RuntimeDirectoryMode=0700");
     expect(unit).toContain("UMask=0077");
     expect(unit).toContain("ProtectSystem=strict");
