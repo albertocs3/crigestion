@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  getAttachmentClamdScanPath,
+  getAttachmentStorageRoot,
   getSessionCookieSameSite,
   isSessionCookieSecure,
   readPlatformEnvironment,
@@ -164,6 +166,27 @@ describe("platform environment validation", () => {
     vi.stubEnv("AUTH_COOKIE_SECURE", "true");
 
     expect(isSessionCookieSecure()).toBe(true);
+  });
+
+  it("accepts only absolute protected attachment paths", () => {
+    const storageRoot = process.platform === "win32"
+      ? "C:\\var\\lib\\crigestion-test\\attachments"
+      : "/var/lib/crigestion-test/attachments";
+    const scannerPath = process.platform === "win32"
+      ? "C:\\Program Files\\ClamAV\\clamdscan.exe"
+      : "/usr/bin/clamdscan";
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("APP_ENV", "test");
+    vi.stubEnv("ATTACHMENT_STORAGE_ROOT", storageRoot);
+    vi.stubEnv("ATTACHMENT_CLAMD_SCAN_PATH", scannerPath);
+
+    expect(getAttachmentStorageRoot()).toBe(storageRoot);
+    expect(getAttachmentClamdScanPath()).toBe(scannerPath);
+
+    vi.stubEnv("ATTACHMENT_STORAGE_ROOT", "public/uploads");
+    expect(() => getAttachmentStorageRoot()).toThrow("ATTACHMENT_STORAGE_ROOT");
+    vi.stubEnv("ATTACHMENT_CLAMD_SCAN_PATH", "clamdscan");
+    expect(() => getAttachmentClamdScanPath()).toThrow("ATTACHMENT_CLAMD_SCAN_PATH");
   });
 
   it("rejects unsupported SameSite values", () => {

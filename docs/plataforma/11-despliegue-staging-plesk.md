@@ -146,6 +146,7 @@ systemd-analyze verify \
   deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.service \
   deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle-alert.service \
   deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.timer \
+  deploy/plesk/staging/systemd/crigestion-staging-recovery-drill.service \
   deploy/plesk/staging/systemd/crigestion-staging-health-check.service \
   deploy/plesk/staging/systemd/crigestion-staging-health-check.timer \
   deploy/plesk/staging/systemd/crigestion-staging-health-alert.service
@@ -405,14 +406,60 @@ systemctl enable --now crigestion-staging-recovery-bundle.timer
 El resultado esperado del servicio es `RECOVERY_BUNDLE_OK`. El propio proceso
 vuelve a autenticar el artefacto con la credencial antes de publicarlo. El health
 check solo comprueba frescura y SHA-256, pues deliberadamente no recibe la clave
-maestra.
+maestra. El área de trabajo persistente
+`/var/lib/crigestion-staging-recovery-work` evita depender del tamano de `/run`;
+si un `SIGKILL` deja un directorio con plaintext, el siguiente intento falla
+cerrado con `RECOVERY_BUNDLE_STALE_WORKDIR` hasta que un operador lo inspeccione
+y elimine.
 
-Actualmente no existe almacenamiento de uploads fuera de PostgreSQL en el
-producto; el manifiesto lo declara como `not_implemented` en vez de afirmar una
-cobertura inexistente. El artefacto sigue residiendo en el mismo VPS: para cerrar
+Instalar tambien `crigestion-staging-recovery-drill` como `root:root 0750`, su
+unidad como `0644` y `scripts/extract-recovery-bundle.py` dentro de cada release.
+El drill autentica y extrae el bundle en
+`/var/lib/crigestion-staging-recovery-drill`, un estado root-only con limite de
+memoria y comprobacion previa de espacio libre. Liga cabecera autenticada,
+nombre, version y manifiesto, restaura el dump
+en una base `crigestion_recovery_drill_*`, verifica cada adjunto del dump por
+tamano y SHA-256, comprueba tablas ordinarias sin RLS antes de consultar con el
+rol de aplicacion, valida los punteros de logo y elimina base y ficheros al
+terminar. No detiene ni modifica staging principal:
+
+```bash
+systemd-analyze verify \
+  /etc/systemd/system/crigestion-staging-recovery-drill.service
+systemctl daemon-reload
+systemctl start crigestion-staging-recovery-drill.service
+systemctl status crigestion-staging-recovery-drill.service --no-pager
+journalctl -u crigestion-staging-recovery-drill.service -n 100 --no-pager
+```
+
+El resultado exigido es `RECOVERY_DRILL_OK`. Un checksum, inventario, ruta,
+entrada TAR, dump, referencia, hash, falta de espacio o base residual de un
+ensayo anterior hace fallar cerrado el ensayo. La base temporal comparte el
+cluster PostgreSQL de staging, pero usa un nombre aislado, roles sin privilegios
+elevados y no recibe trafico de la aplicacion principal.
+
+El almacenamiento privado de adjuntos reside en
+`/var/lib/crigestion-staging/attachments`, propiedad
+`crigestion-staging:crigestion-staging` y modo `0700`. Antes de desplegar esta
+rebanada, instalar ClamAV daemon, confirmar `clamdscan` y crear el directorio:
+
+```bash
+install -d -o crigestion-staging -g crigestion-staging -m 0700 \
+  /var/lib/crigestion-staging/attachments
+systemctl is-active clamav-daemon.service
+/usr/bin/clamdscan --version
+```
+
+Configurar `ATTACHMENT_STORAGE_ROOT` y `ATTACHMENT_CLAMD_SCAN_PATH` en
+`app.env`. El paquete integral copia solo claves definitivas
+`company-logo/<empresa>/<adjunto>.(png|jpg)` dentro de
+`uploads/attachments.tar`, verifica propietario/modos y excluye `.quarantine`.
+El manifiesto registra recuento y SHA-256 del archivo. El artefacto sigue
+residiendo en el mismo VPS: para cerrar
 la recuperacion integral debe copiarse a almacenamiento externo, cifrado e
-inmutable, y ensayarse su descifrado/restauracion aislada con la clave custodiada.
-Hasta entonces no acredita por si solo el RPO/RTO ante perdida total del servidor.
+inmutable. El drill local acredita la coherencia del artefacto, pero el RPO/RTO
+ante perdida total del servidor solo queda cerrado al repetirlo desde la copia
+externa y con la clave recuperada desde su custodia independiente.
 
 ### 7.2 Restauracion destructiva aislada de PostgreSQL
 

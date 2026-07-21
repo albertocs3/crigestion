@@ -40,6 +40,11 @@ Define las pruebas iniciales de Plataforma para Next.js, TypeScript, PostgreSQL 
 - `tests/platform/audit-routes.test.ts`: contrato HTTP de auditoria, permisos, validacion de query y DTOs sin secretos.
 - `tests/platform/configuration.test.ts`: lectura y actualizacion de configuracion con auditoria sin valores fiscales completos.
 - `tests/platform/configuration-routes.test.ts`: contrato HTTP de configuracion, permisos, CSRF, validacion y DTOs.
+- `tests/platform/company-logo-image.test.ts`: deteccion, limites y normalizacion PNG/JPG.
+- `tests/platform/attachment-storage.test.ts`: claves opacas, no sobrescritura y verificacion SHA-256.
+- `tests/platform/company-logo-attachments.test.ts`: persistencia, reemplazo, idempotencia, antivirus fail-closed, auditoria e integridad de descarga.
+- `tests/platform/staging-recovery-bundle.test.ts`: inclusion allowlisted de adjuntos definitivos en el paquete cifrado y exclusion de cuarentena.
+- `tests/platform/recovery-payload-extractor.test.ts`: extraccion fail-closed, inventario, limites, traversal, enlaces, duplicados y enlace entre cabecera autenticada y manifiesto.
 - `tests/platform/users.test.ts`: creacion, listado DTO, nombres reservados, permisos, cambio de estado y cambio de rol.
 - `tests/platform/users-roles-routes.test.ts`: contrato HTTP de usuarios y roles, edicion de permisos, permisos, CSRF, validacion, conflictos y DTOs sin secretos.
 - `tests/platform/roles.test.ts`: creacion, duplicados, listado, permisos insuficientes y revocacion de sesiones al cambiar permisos de rol.

@@ -33,6 +33,8 @@ Revisar como minimo:
 | `PG_DUMP_BINARY` | Opcional | Por defecto `pg_dump`. |
 | `BACKUP_AUTO_PROCESS` | Opcional | En produccion queda deshabilitado salvo valor `true`; preferir worker gestionado si el despliegue puede cortar tareas en segundo plano. |
 | `BACKUP_RUNNING_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `RUNNING` antiguos como fallidos. |
+| `ATTACHMENT_STORAGE_ROOT` | Obligatoria al habilitar adjuntos | Directorio absoluto privado fuera del repositorio y de `public/`; `0700`, propiedad del usuario web. |
+| `ATTACHMENT_CLAMD_SCAN_PATH` | Obligatoria al habilitar adjuntos | Ruta absoluta a `clamdscan`; el daemon y las firmas deben estar activos y actualizados. |
 | `RESTORE_VALIDATION_TIMEOUT_MINUTES` | Opcional | Por defecto 720; marca `VALIDATING` antiguos como fallidos. |
 | `PG_RESTORE_BINARY` | Opcional | Por defecto `pg_restore`; usado solo por `restore:apply`. |
 | `RESTORE_TARGET_DATABASE_URL` | Obligatoria en produccion si se aplica una restauracion real | Base destino explicita para `pg_restore`; en desarrollo puede omitirse para usar `DATABASE_URL`. |
@@ -104,10 +106,13 @@ Orden recomendado:
 4. Aplicar migraciones con `npm run prisma:deploy`.
 5. Arrancar la aplicacion con variables runtime definitivas.
 6. Verificar health check.
-7. Verificar que el proceso que ejecuta copias, automatico o `npm run backup:run`, tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
-8. Verificar que el proceso que ejecuta `npm run restore:validate` tiene acceso a `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
-9. Si se habilita aplicacion real, verificar que el proceso que ejecuta `npm run restore:apply` o `POST /api/platform/restores/apply` tiene acceso a `pg_restore`, `RESTORE_TARGET_DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
-10. Ejecutar VeriFactu como job Node separado y supervisado. En Windows TEST,
+7. Verificar permisos `0700/0600`, escritura exclusiva del proceso web, ClamAV
+   activo y carga/descarga de un logo de prueba. Confirmar que el paquete
+   integral incluye `uploads/attachments.tar` y excluye `.quarantine`.
+8. Verificar que el proceso que ejecuta copias, automatico o `npm run backup:run`, tiene acceso a `pg_dump`, `DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+9. Verificar que el proceso que ejecuta `npm run restore:validate` tiene acceso a `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+10. Si se habilita aplicacion real, verificar que el proceso que ejecuta `npm run restore:apply` o `POST /api/platform/restores/apply` tiene acceso a `pg_restore`, `RESTORE_TARGET_DATABASE_URL`, `BACKUP_DIRECTORY` y `BACKUP_ENCRYPTION_KEY`.
+11. Ejecutar VeriFactu como job Node separado y supervisado. En Windows TEST,
     preparar `.env.test.local` con la conexion a `crigestion_test`; el instalador
     genera `.env.worker.local` por allowlist y ACL restringida, tomando solo los
     keyrings necesarios de `.env.local`. Instalar con
@@ -119,7 +124,7 @@ Orden recomendado:
     `VERIFACTU_WORKER_PRODUCTION_CONFIRM=AEAT_PRODUCTION_AUTHORIZED` y la base
     real coincidente con `VERIFACTU_WORKER_EXPECTED_DATABASE`. Mantener los dos
     ultimos bloqueos desactivados hasta completar este checklist.
-11. Para Docker TEST, preparar el fichero ignorado `.env.worker.local`, confirmar
+12. Para Docker TEST, preparar el fichero ignorado `.env.worker.local`, confirmar
     `VERIFACTU_WORKER_EXPECTED_DATABASE`, `VERIFACTU_MIGRATION_DATABASE_URL` y
     `VERIFACTU_MIGRATION_EXPECTED_DATABASE`; ambos nombres deben terminar en
     `_test`. Detener la tarea Windows y arrancar
@@ -129,10 +134,12 @@ Orden recomendado:
     Confirmar despues el estado `healthy` del contenedor. Desde el host,
     `npm run verifactu:health` solo valida el despliegue indicado por
     `VERIFACTU_WORKER_DEPLOYMENT_ID` y su fichero de estado local.
-12. En staging, ejecutar manualmente el paquete integral cifrado, exigir
+13. En staging, ejecutar manualmente el paquete integral cifrado, exigir
     `RECOVERY_BUNDLE_OK`, verificar su checksum y solo despues habilitar
     `crigestion-staging-recovery-bundle.timer`. Confirmar que la copia externa no
     contiene la clave maestra y que permanece recuperable desde su custodia.
+    Ejecutar despues `crigestion-staging-recovery-drill.service`, exigir
+    `RECOVERY_DRILL_OK` y confirmar que no quedan bases ni workdirs temporales.
 
 ## 7. Verificacion post-despliegue
 
@@ -228,6 +235,8 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - El paquete integral de staging incluye configuracion y keyrings historicos,
   pero no es recuperacion ante perdida total mientras solo exista en el mismo
   VPS. Replicarlo cifrado a una custodia externa e inmutable y ejecutar drills.
+  El drill actual acredita coherencia de PostgreSQL, keyrings y adjuntos; queda
+  pendiente un runner controlado que reinstale tambien release y configuracion.
 - El paso destructivo de restauracion solo debe activarse con mantenimiento en modo `RESTORE`.
 - El perfil `verifactu-test` es opt-in, no publica puertos y no sustituye el
   paso controlado de migraciones. Nunca debe coexistir con otro worker para la

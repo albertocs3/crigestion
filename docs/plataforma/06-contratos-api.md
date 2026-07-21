@@ -680,6 +680,7 @@ Respuesta `200`:
     "legalName": "CriGestion SL",
     "taxId": "B12345678",
     "email": "admin@example.com",
+    "logo": null,
     "updatedAt": "2026-06-26T10:00:00.000Z"
   },
   "installation": {
@@ -731,6 +732,33 @@ Errores:
 | 409 | `COMPANY_TAX_ID_ALREADY_USED` | El NIF ya pertenece a otra empresa |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | No se envio JSON |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
+
+### `PUT /api/platform/configuration/company/logo`
+
+Endpoint autenticado. Permiso requerido: `Platform.ManageConfiguration`.
+Requiere `X-CSRF-Token`, `Idempotency-Key`, origen permitido y
+`multipart/form-data`. Campos exactos:
+
+- `logo`: un unico PNG o JPG, maximo 5 MiB y 4096 x 4096 px.
+- `expectedLogoId`: UUID del logo visible al iniciar el cambio, o cadena vacia.
+
+Responde `201` al crear y `200` al reemplazar o reproducir idempotentemente. El
+servidor limita el cuerpo antes de parsearlo, analiza original y copia canonica
+con ClamAV, normaliza la imagen y publica sin sobrescritura. Una respuesta
+`503 ANTIVIRUS_UNAVAILABLE` es fail-closed y puede reintentarse sin modificar el
+archivo para reutilizar la clave idempotente.
+
+Errores especificos: `COMPANY_LOGO_CHANGED` e `IDEMPOTENCY_KEY_REUSED` (409),
+`PAYLOAD_TOO_LARGE` (413), validacion de nombre/tipo/imagen/dimensiones (422) y
+`RATE_LIMITED` (429).
+
+### `GET /api/platform/configuration/company/logo`
+
+Endpoint autenticado con el mismo permiso. Sirve solamente el logo activo con
+`Cache-Control: private, no-store`, `nosniff` y politica same-origin. Antes de
+responder verifica tamano y SHA-256 del fichero; devuelve 404 si no existe y
+`503 COMPANY_LOGO_INTEGRITY_FAILED` si el objeto no coincide con PostgreSQL.
+Cada descarga y fallo de integridad queda auditado sin registrar contenido.
 
 ### `PATCH /api/platform/configuration/billing`
 

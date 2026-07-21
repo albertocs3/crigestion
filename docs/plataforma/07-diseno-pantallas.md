@@ -119,6 +119,8 @@ Contenido:
 - Estado tecnico de instalacion.
 - Version de producto.
 - Formulario para nombre legal, NIF y email de empresa.
+- Vista previa del logotipo activo y formulario accesible para cargar o
+  reemplazar PNG/JPG con estado de analisis, exito o error.
 - Redireccion a `/login` si no existe sesion valida.
 - Estado de error cuando falta permiso.
 

@@ -3,6 +3,7 @@ import { getBillingConfiguration } from "@/modules/billing/application/configura
 import { BillingConfigurationForm } from "@/modules/billing/presentation/BillingConfigurationForm";
 import { getPlatformConfiguration } from "@/modules/platform/application/configuration";
 import { CompanyConfigurationForm } from "@/modules/platform/presentation/CompanyConfigurationForm";
+import { CompanyLogoForm } from "@/modules/platform/presentation/CompanyLogoForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
@@ -66,6 +67,7 @@ export default async function ConfigurationPage() {
                 </div>
               </div>
               <CompanyConfigurationForm company={configuration.company} />
+              <CompanyLogoForm logo={configuration.company.logo} />
               <BillingConfigurationForm configuration={billingConfiguration} />
             </>
           ) : (

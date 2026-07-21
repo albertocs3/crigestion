@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { isValidIban, normalizeIban } from "@/modules/customers/application/customers";
 import type { SessionUser } from "@/modules/platform/application/auth";
+import type { CompanyLogoDto } from "@/modules/platform/application/companyLogoAttachments";
 
 const bankIbanSchema = z
   .string()
@@ -45,6 +46,7 @@ export type PlatformConfiguration = {
     email: string | null;
     bankIban: string | null;
     sepaCreditorIdentifier: string | null;
+    logo: CompanyLogoDto | null;
     updatedAt: string;
   };
   installation: {
@@ -87,6 +89,16 @@ export async function getPlatformConfiguration(): Promise<PlatformConfiguration 
           email: true,
           bankIban: true,
           sepaCreditorIdentifier: true,
+          logoAttachment: {
+            select: {
+              id: true,
+              status: true,
+              purpose: true,
+              detectedMimeType: true,
+              sizeBytes: true,
+              updatedAt: true
+            }
+          },
           updatedAt: true
         }
       }
@@ -170,6 +182,16 @@ export async function updateCompanyConfiguration(
           email: true,
           bankIban: true,
           sepaCreditorIdentifier: true,
+          logoAttachment: {
+            select: {
+              id: true,
+              status: true,
+              purpose: true,
+              detectedMimeType: true,
+              sizeBytes: true,
+              updatedAt: true
+            }
+          },
           updatedAt: true
         }
       });
@@ -263,8 +285,17 @@ function mapCompany(company: {
   email: string | null;
   bankIban: string | null;
   sepaCreditorIdentifier: string | null;
+  logoAttachment?: {
+    id: string;
+    status: string;
+    purpose: string;
+    detectedMimeType: string | null;
+    sizeBytes: bigint;
+    updatedAt: Date;
+  } | null;
   updatedAt: Date;
 }): PlatformConfiguration["company"] {
+  const logo = company.logoAttachment;
   return {
     id: company.id,
     legalName: company.legalName,
@@ -272,6 +303,16 @@ function mapCompany(company: {
     email: company.email,
     bankIban: company.bankIban,
     sepaCreditorIdentifier: company.sepaCreditorIdentifier,
+    logo: logo && logo.status === "AVAILABLE" && logo.purpose === "COMPANY_LOGO" &&
+      (logo.detectedMimeType === "image/png" || logo.detectedMimeType === "image/jpeg")
+      ? {
+          id: logo.id,
+          contentType: logo.detectedMimeType,
+          sizeBytes: Number(logo.sizeBytes),
+          updatedAt: logo.updatedAt.toISOString(),
+          downloadUrl: "/api/platform/configuration/company/logo"
+        }
+      : null,
     updatedAt: company.updatedAt.toISOString()
   };
 }

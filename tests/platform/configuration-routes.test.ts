@@ -6,6 +6,10 @@ import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import { PATCH as billingPatch } from "@/app/api/platform/configuration/billing/route";
 import { PATCH as companyPatch } from "@/app/api/platform/configuration/company/route";
+import {
+  GET as companyLogoGet,
+  PUT as companyLogoPut
+} from "@/app/api/platform/configuration/company/logo/route";
 import { GET as configurationGet } from "@/app/api/platform/configuration/route";
 import { POST as credentialStagePost } from "@/app/api/platform/verifactu/credentials/route";
 import { POST as verifactuInterventionPost } from "@/app/api/platform/verifactu/outbox-messages/[messageId]/intervene/route";
@@ -146,6 +150,93 @@ describe("configuration HTTP contracts", () => {
       code: "CSRF_TOKEN_INVALID",
       message: "Token CSRF invalido."
     });
+  });
+
+  it("protects company logo reads and writes with permission and CSRF", async () => {
+    const unauthenticatedRead = await companyLogoGet(
+      apiRequest("/api/platform/configuration/company/logo")
+    );
+    expect(unauthenticatedRead.status).toBe(401);
+
+    await loginWith("admin", adminPassword);
+    const missingCsrf = await companyLogoPut(new Request(
+      "http://localhost/api/platform/configuration/company/logo",
+      { method: "PUT", headers: { "Idempotency-Key": randomUUID() }, body: "not-multipart" }
+    ));
+    expect(missingCsrf.status).toBe(403);
+    expect(await missingCsrf.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+
+    cookieMock.reset();
+    await createLimitedUserWithoutConfigurationPermission();
+    await loginWith("gestion", limitedPassword);
+    const limitedCsrf = await getCsrfToken();
+    const forbiddenRead = await companyLogoGet(
+      apiRequest("/api/platform/configuration/company/logo")
+    );
+    const forbiddenWrite = await companyLogoPut(new Request(
+      "http://localhost/api/platform/configuration/company/logo",
+      {
+        method: "PUT",
+        headers: {
+          "Idempotency-Key": randomUUID(),
+          "X-CSRF-Token": limitedCsrf
+        },
+        body: "not-multipart"
+      }
+    ));
+    expect(forbiddenRead.status).toBe(403);
+    expect(forbiddenWrite.status).toBe(403);
+  });
+
+  it("requires idempotency and bounded multipart for company logos before file processing", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const url = "http://localhost/api/platform/configuration/company/logo";
+    const missingIdempotency = await companyLogoPut(new Request(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+      body: "{}"
+    }));
+    expect(missingIdempotency.status).toBe(400);
+    expect(await missingIdempotency.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REQUIRED" });
+
+    const unsupported = await companyLogoPut(new Request(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": randomUUID(),
+        "X-CSRF-Token": csrfToken
+      },
+      body: "{}"
+    }));
+    expect(unsupported.status).toBe(415);
+    expect(await unsupported.json()).toMatchObject({ code: "UNSUPPORTED_MEDIA_TYPE" });
+
+    const oversized = await companyLogoPut(new Request(url, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(6 * 1024 * 1024),
+        "Content-Type": "multipart/form-data; boundary=logo",
+        "Idempotency-Key": randomUUID(),
+        "X-CSRF-Token": csrfToken
+      },
+      body: "--logo--\r\n"
+    }));
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+
+    const externalOrigin = await companyLogoPut(new Request(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "multipart/form-data; boundary=logo",
+        "Idempotency-Key": randomUUID(),
+        Origin: "https://evil.example",
+        "X-CSRF-Token": csrfToken
+      },
+      body: "--logo--\r\n"
+    }));
+    expect(externalOrigin.status).toBe(403);
+    expect(await externalOrigin.json()).toMatchObject({ code: "ORIGIN_NOT_ALLOWED" });
   });
 
   it("protects VeriFactu credential staging with session, CSRF and its dedicated permission", async () => {

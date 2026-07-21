@@ -216,17 +216,25 @@ El procesador:
 
 Los archivos se guardan fuera de `public/`.
 
+La primera rebanada implementada usa un repositorio privado de sistema de
+archivos (`ATTACHMENT_STORAGE_ROOT`) con claves opacas, permisos `0700/0600` y
+metadatos en PostgreSQL. El logotipo de empresa es el primer proposito admitido:
+PNG/JPG, hasta 5 MiB y 4096 x 4096 px. No se incorpora todavia a facturas ya
+emitidas: ese uso requerira una instantanea inmutable del recurso en cada PDF.
+
 Flujo:
 
 1. Validar tamano y extension.
 2. Guardar en cuarentena.
-3. Detectar tipo real.
-4. Calcular SHA-256.
-5. Analizar con antivirus o adaptador equivalente.
-6. Mover a almacenamiento definitivo.
-7. Guardar metadatos en PostgreSQL.
+3. Analizar el original con ClamAV en modo fail-closed.
+4. Decodificar y recodificar la imagen para eliminar metadatos y contenido no usado.
+5. Analizar de nuevo la representacion canonica y calcular SHA-256.
+6. Publicar sin sobrescritura en almacenamiento definitivo.
+7. Guardar metadatos y cambiar el puntero activo en una transaccion PostgreSQL.
 
-Las descargas pasan por endpoint autorizado.
+Las descargas pasan por endpoint autorizado y vuelven a comprobar tamano y
+SHA-256. Los ficheros definitivos, excluida la cuarentena, forman parte del
+paquete integral cifrado de staging.
 
 ## 14. Certificados VeriFactu
 

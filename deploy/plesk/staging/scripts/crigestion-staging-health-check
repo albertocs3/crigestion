@@ -5,6 +5,7 @@ APP_SERVICE='crigestion-staging-app.service'
 WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
 BACKUP_TIMER='crigestion-staging-backup.timer'
 RECOVERY_TIMER='crigestion-staging-recovery-bundle.timer'
+CLAMAV_SERVICE='clamav-daemon.service'
 BACKUP_DIR='/root/crigestion-staging-backups'
 RECOVERY_DIR='/root/crigestion-staging-recovery'
 BACKUP_MAX_AGE_SECONDS=129600
@@ -24,6 +25,8 @@ systemctl is-active --quiet "$APP_SERVICE"
 systemctl is-active --quiet "$WORKER_SERVICE"
 systemctl is-active --quiet "$BACKUP_TIMER"
 systemctl is-active --quiet "$RECOVERY_TIMER"
+systemctl is-active --quiet "$CLAMAV_SERVICE"
+test -x /usr/bin/clamdscan
 
 LATEST_BACKUP="$(
   find "$BACKUP_DIR" \

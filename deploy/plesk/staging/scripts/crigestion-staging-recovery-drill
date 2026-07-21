@@ -1,0 +1,243 @@
+#!/bin/bash
+set -euo pipefail
+
+umask 077
+
+BUNDLE_DIR='/root/crigestion-staging-recovery'
+RUNTIME_DIR='/var/lib/crigestion-staging-recovery-drill'
+CURRENT_RELEASE='/opt/crigestion-staging/current'
+NODE='/opt/plesk/node/22/bin/node'
+PYTHON='/usr/bin/python3'
+PG_BIN_DIR='/usr/lib/postgresql/14/bin'
+ACTIVE_DB='crigestion_staging'
+BUNDLE="${1:-}"
+DRILL_DB="crigestion_recovery_drill_$(date -u +%Y%m%dt%H%M%Sz)"
+WORK_DIR=''
+CREATED=0
+SUCCESS=0
+RESTORED_COUNT=0
+
+unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER PGPASSWORD PGSERVICE \
+  PGSERVICEFILE PGOPTIONS
+
+guard_drill_database() {
+  [[ "$DRILL_DB" =~ ^crigestion_recovery_drill_[0-9]{8}t[0-9]{6}z$ ]]
+  [ "$DRILL_DB" != "$ACTIVE_DB" ]
+}
+
+cleanup() {
+  local exit_code=$?
+  local cleanup_failed=0
+  trap - EXIT
+  set +e
+  if [ "$CREATED" -eq 1 ] && guard_drill_database; then
+    runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+      -c "ALTER DATABASE \"$DRILL_DB\" ALLOW_CONNECTIONS false;" >/dev/null || cleanup_failed=1
+    runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+          WHERE datname = '$DRILL_DB' AND pid <> pg_backend_pid();" >/dev/null || cleanup_failed=1
+    runuser -u postgres -- "$PG_BIN_DIR/dropdb" --if-exists "$DRILL_DB" >/dev/null || cleanup_failed=1
+  fi
+  if [ -n "$WORK_DIR" ]; then
+    case "$WORK_DIR" in
+      "$RUNTIME_DIR/$DRILL_DB."*) rm -rf -- "$WORK_DIR" || cleanup_failed=1 ;;
+      *) cleanup_failed=1 ;;
+    esac
+  fi
+  if [ "$cleanup_failed" -ne 0 ]; then
+    echo "RECOVERY_DRILL_CLEANUP_FAILED database=$DRILL_DB" >&2
+    exit 1
+  fi
+  if [ "$exit_code" -eq 0 ] && [ "$SUCCESS" -eq 1 ]; then
+    echo "RECOVERY_DRILL_OK database=$DRILL_DB attachments=$RESTORED_COUNT"
+  fi
+  exit "$exit_code"
+}
+trap cleanup EXIT
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo 'RECOVERY_DRILL_ROOT_REQUIRED' >&2
+  exit 1
+fi
+guard_drill_database
+
+install -d -o root -g root -m 0700 "$RUNTIME_DIR"
+exec 9>"$RUNTIME_DIR/.recovery-drill.lock"
+if ! flock -n 9; then
+  echo 'RECOVERY_DRILL_ALREADY_RUNNING' >&2
+  exit 1
+fi
+
+while IFS= read -r -d '' stale_work_dir; do
+  stale_name="$(basename -- "$stale_work_dir")"
+  if [[ "$stale_name" =~ ^crigestion_recovery_drill_[0-9]{8}t[0-9]{6}z\.[A-Za-z0-9]{6}$ ]]; then
+    echo "RECOVERY_DRILL_STALE_WORKDIR path=$stale_work_dir" >&2
+    exit 1
+  fi
+done < <(find "$RUNTIME_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+
+STALE_DRILL_DATABASES="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -Atqc \
+  "SELECT count(*) FROM pg_database WHERE datname LIKE 'crigestion_recovery_drill_%';")"
+test "$STALE_DRILL_DATABASES" = '0'
+
+KEY_FILE=''
+if [ -n "${CREDENTIALS_DIRECTORY:-}" ]; then
+  KEY_FILE="$CREDENTIALS_DIRECTORY/recovery-bundle.key"
+else
+  KEY_FILE="${RECOVERY_BUNDLE_KEY_FILE:-}"
+fi
+test -n "$KEY_FILE"
+test -f "$KEY_FILE"
+test ! -L "$KEY_FILE"
+
+if [ -z "$BUNDLE" ]; then
+  while IFS='|' read -r _ checksum_candidate; do
+    bundle_candidate="${checksum_candidate%.sha256}"
+    if [ -f "$bundle_candidate" ] && [ ! -L "$bundle_candidate" ]; then
+      BUNDLE="$bundle_candidate"
+      break
+    fi
+  done < <(find "$BUNDLE_DIR" -maxdepth 1 -type f \
+    -name 'crigestion-staging-*.cgrb.sha256' -printf '%T@|%p\n' | sort -nr)
+fi
+test -n "$BUNDLE"
+BUNDLE="$(readlink -f -- "$BUNDLE")"
+BUNDLE_NAME="$(basename -- "$BUNDLE")"
+if [ "$(dirname -- "$BUNDLE")" != "$BUNDLE_DIR" ] || ! [[
+  "$BUNDLE_NAME" =~ ^crigestion-staging-[0-9]{8}T[0-9]{6}Z\.cgrb$
+]]; then
+  echo 'RECOVERY_DRILL_BUNDLE_PATH_INVALID' >&2
+  exit 1
+fi
+test -f "$BUNDLE"
+test ! -L "$BUNDLE"
+test -f "$BUNDLE.sha256"
+test ! -L "$BUNDLE.sha256"
+test "$(stat -c '%U|%a' "$BUNDLE")" = 'root|600'
+test "$(stat -c '%U|%a' "$BUNDLE.sha256")" = 'root|600'
+(
+  cd "$BUNDLE_DIR"
+  sha256sum -c "$BUNDLE_NAME.sha256"
+)
+
+BUNDLE_SIZE="$(stat -c '%s' "$BUNDLE")"
+AVAILABLE_BYTES="$(df --output=avail -B1 "$RUNTIME_DIR" | tail -n 1 | tr -d ' ')"
+REQUIRED_BYTES="$((BUNDLE_SIZE * 3))"
+if [ "$REQUIRED_BYTES" -lt 25769803776 ]; then REQUIRED_BYTES=25769803776; fi
+test "$AVAILABLE_BYTES" -ge "$REQUIRED_BYTES"
+WORK_DIR="$(mktemp -d "$RUNTIME_DIR/$DRILL_DB.XXXXXX")"
+chmod 0700 "$WORK_DIR"
+PLAINTEXT="$WORK_DIR/authenticated.tar.gz"
+PAYLOAD="$WORK_DIR/payload"
+ATTACHMENTS="$WORK_DIR/attachments"
+AUTHENTICATED_HEADER="$WORK_DIR/authenticated-header.json"
+
+RECOVERY_BUNDLE_KEY_FILE="$KEY_FILE" \
+  "$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" inspect "$BUNDLE" \
+  > "$AUTHENTICATED_HEADER"
+chmod 0600 "$AUTHENTICATED_HEADER"
+EXPECTED_BUNDLE_ID="${BUNDLE_NAME#crigestion-}"
+EXPECTED_BUNDLE_ID="${EXPECTED_BUNDLE_ID%.cgrb}"
+test "$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["bundleId"])' "$AUTHENTICATED_HEADER")" = "$EXPECTED_BUNDLE_ID"
+
+RECOVERY_BUNDLE_KEY_FILE="$KEY_FILE" \
+  RECOVERY_BUNDLE_WORK_DIRECTORY="$WORK_DIR" \
+  "$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" decrypt "$BUNDLE" \
+  > "$PLAINTEXT"
+chmod 0600 "$PLAINTEXT"
+
+"$PYTHON" "$CURRENT_RELEASE/scripts/extract-recovery-bundle.py" \
+  "$PLAINTEXT" "$PAYLOAD" "$ATTACHMENTS" \
+  --authenticated-header "$AUTHENTICATED_HEADER"
+rm -f -- "$PLAINTEXT"
+"$PG_BIN_DIR/pg_restore" --list "$PAYLOAD/database/crigestion_staging.dump" \
+  >/dev/null
+
+DB_EXISTS="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -Atqc \
+  "SELECT 1 FROM pg_database WHERE datname = '$DRILL_DB';")"
+test -z "$DB_EXISTS"
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+  -c "CREATE DATABASE \"$DRILL_DB\"
+      WITH TEMPLATE template0 ENCODING 'UTF8' ALLOW_CONNECTIONS false;"
+CREATED=1
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 <<SQL
+REVOKE CONNECT ON DATABASE "$DRILL_DB" FROM PUBLIC;
+GRANT CREATE ON DATABASE "$DRILL_DB" TO crigestion_staging_migrator;
+GRANT CONNECT ON DATABASE "$DRILL_DB" TO crigestion_staging_app;
+ALTER DATABASE "$DRILL_DB" ALLOW_CONNECTIONS true;
+SQL
+
+runuser -u postgres -- "$PG_BIN_DIR/pg_restore" \
+  --exit-on-error --single-transaction --no-owner --no-privileges \
+  --role=crigestion_staging_migrator --dbname="$DRILL_DB" \
+  "$PAYLOAD/database/crigestion_staging.dump"
+EXPECTED_TABLES="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$DRILL_DB" -Atqc \
+  "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname IN (
+     'attachments','companies','_prisma_migrations',
+     'verifactu_mtls_credential_versions','verifactu_mtls_credentials',
+     'verifactu_fiscal_records','verifactu_sif_installations',
+     'verifactu_submission_attempts')
+     AND c.relkind IN ('r','p') AND NOT c.relrowsecurity;")"
+test "$EXPECTED_TABLES" = '8'
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$DRILL_DB" -v ON_ERROR_STOP=1 \
+  -c 'GRANT USAGE ON SCHEMA public TO crigestion_staging_app;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO crigestion_staging_app;' >/dev/null
+"$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/verify-staging-recovery-keyrings.ts" \
+  "$PAYLOAD/configuration/app.env" \
+  "$PAYLOAD/configuration/verifactu-worker.env" \
+  "$DRILL_DB"
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+  -c "REVOKE ALL PRIVILEGES ON DATABASE \"$DRILL_DB\"
+      FROM crigestion_staging_migrator;" >/dev/null
+
+INCOMPLETE_MIGRATIONS="$(runuser -u postgres -- "$PG_BIN_DIR/psql" \
+  -X -d "$DRILL_DB" -Atqc \
+  'SELECT count(*) FROM public._prisma_migrations
+   WHERE finished_at IS NULL AND rolled_back_at IS NULL;')"
+test "$INCOMPLETE_MIGRATIONS" = '0'
+
+RESTORED_REFERENCES="$WORK_DIR/restored-attachments.tsv"
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$DRILL_DB" -qAtF $'\t' -c \
+  'SET ROLE crigestion_staging_app;
+   SELECT "storageKey", "sizeBytes", sha256
+   FROM public.attachments
+   WHERE "storageKey" IS NOT NULL
+     AND status <> '\''PHYSICALLY_DELETED'\''
+   ORDER BY "storageKey"' > "$RESTORED_REFERENCES"
+while IFS=$'\t' read -r storage_key expected_size expected_hash; do
+  test -n "$storage_key"
+  [[ "$storage_key" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]
+  [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]]
+  restored_file="$ATTACHMENTS/$storage_key"
+  test -f "$restored_file"
+  test ! -L "$restored_file"
+  test "$(stat -c '%U|%a|%s' "$restored_file")" = "root|600|$expected_size"
+  test "$(sha256sum "$restored_file" | cut -d' ' -f1)" = "$expected_hash"
+  RESTORED_COUNT="$((RESTORED_COUNT + 1))"
+done < "$RESTORED_REFERENCES"
+cmp --silent "$RESTORED_REFERENCES" "$PAYLOAD/uploads/referenced-attachments.tsv"
+MANIFEST_REFERENCED_COUNT="$("$PYTHON" -c \
+  'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["uploads"]["referencedEntries"])' \
+  "$PAYLOAD/manifest.json")"
+test "$RESTORED_COUNT" = "$MANIFEST_REFERENCED_COUNT"
+
+INVALID_ACTIVE_LOGOS="$(runuser -u postgres -- "$PG_BIN_DIR/psql" \
+  -X -d "$DRILL_DB" -Atqc \
+  'SET ROLE crigestion_staging_app;
+   SELECT count(*) FROM public.companies company
+   LEFT JOIN public.attachments attachment
+     ON attachment.id = company."logoAttachmentId"
+   WHERE company."logoAttachmentId" IS NOT NULL
+     AND (attachment.id IS NULL OR attachment."companyId" <> company.id
+       OR attachment.purpose <> '\''COMPANY_LOGO'\''
+       OR attachment.status <> '\''AVAILABLE'\'');')"
+test "$INVALID_ACTIVE_LOGOS" = '0'
+
+systemctl is-active --quiet crigestion-staging-app.service
+systemctl is-active --quiet crigestion-staging-verifactu-worker.service
+SUCCESS=1

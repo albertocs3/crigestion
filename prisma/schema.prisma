@@ -43,6 +43,27 @@ enum PlatformMaintenanceMode {
   RESTORE
 }
 
+enum AttachmentPurpose {
+  COMPANY_LOGO
+}
+
+enum AttachmentStatus {
+  PENDING_VALIDATION
+  SCANNING
+  AVAILABLE
+  REJECTED
+  REPLACED
+  RETENTION_LOCKED
+  PHYSICALLY_DELETED
+}
+
+enum AttachmentScanResult {
+  PENDING
+  CLEAN
+  INFECTED
+  INCONCLUSIVE
+}
+
 enum CustomerType {
   COMPANY
   SELF_EMPLOYED
@@ -333,6 +354,7 @@ model Installation {
 
 model Company {
   id                     String   @id @default(uuid()) @db.Uuid
+  logoAttachmentId       String?  @unique @db.Uuid
   legalName              String   @db.VarChar(200)
   taxId                  String   @unique @db.VarChar(32)
   email                  String?  @db.VarChar(254)
@@ -352,8 +374,50 @@ model Company {
   verifactuFiscalRecords   VerifactuFiscalRecord[]
   verifactuMtlsCredentials VerifactuMtlsCredential[]
   verifactuWorkerRuns      VerifactuWorkerRun[]
+  attachments              Attachment[]               @relation("CompanyAttachments")
+  logoAttachment           Attachment?                @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
+}
+
+model Attachment {
+  id                   String               @id @default(uuid()) @db.Uuid
+  companyId            String               @db.Uuid
+  purpose              AttachmentPurpose
+  originalFileName     String               @db.VarChar(255)
+  description          String?              @db.VarChar(500)
+  extension            String               @db.VarChar(10)
+  declaredMimeType     String               @db.VarChar(100)
+  detectedMimeType     String?              @db.VarChar(100)
+  sizeBytes            BigInt
+  sha256               String?              @db.Char(64)
+  storageKey           String?              @unique @db.VarChar(500)
+  status               AttachmentStatus     @default(PENDING_VALIDATION)
+  scanResult           AttachmentScanResult @default(PENDING)
+  scanEngine           String?              @db.VarChar(80)
+  scanEngineVersion    String?              @db.VarChar(80)
+  scanCompletedAt      DateTime?            @db.Timestamptz(3)
+  rejectionCode        String?              @db.VarChar(100)
+  availableAt          DateTime?            @db.Timestamptz(3)
+  replacedAt           DateTime?            @db.Timestamptz(3)
+  physicallyDeletedAt  DateTime?            @db.Timestamptz(3)
+  replacesAttachmentId String?              @db.Uuid
+  uploadedById         String               @db.Uuid
+  uploadedAt           DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
+
+  company     Company     @relation("CompanyAttachments", fields: [companyId], references: [id], onDelete: Restrict)
+  logoCompany Company?    @relation("CompanyLogo")
+  uploadedBy  User        @relation("AttachmentsUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+  replaces    Attachment? @relation("AttachmentReplacement", fields: [replacesAttachmentId, companyId], references: [id, companyId], onDelete: Restrict)
+  replacedBy  Attachment? @relation("AttachmentReplacement")
+
+  @@unique([id, companyId])
+  @@unique([replacesAttachmentId, companyId])
+  @@index([companyId, purpose, status, uploadedAt, id])
+  @@index([uploadedById, uploadedAt, id])
+  @@index([sha256])
+  @@map("attachments")
 }
 
 model Customer {
@@ -509,6 +573,7 @@ model User {
   updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
 
   role                          Role                                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  uploadedAttachments           Attachment[]                         @relation("AttachmentsUploadedBy")
   sessions                      Session[]
   requestedBackups              BackupOperation[]
   requestedRestores             RestoreOperation[]

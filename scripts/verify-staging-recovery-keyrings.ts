@@ -11,9 +11,16 @@ import { createSecureEnvelopeKeyring } from "../modules/billing/infrastructure/v
 const keyIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 
 async function main(): Promise<void> {
-  const [appEnvironmentPath, workerEnvironmentPath] = process.argv.slice(2);
+  const [appEnvironmentPath, workerEnvironmentPath, expectedDatabaseArgument] = process.argv.slice(2);
   if (!appEnvironmentPath || !workerEnvironmentPath) {
     throw new Error("RECOVERY_KEYRING_ENV_PATHS_REQUIRED");
+  }
+  const expectedDatabase = expectedDatabaseArgument ?? "crigestion_staging";
+  if (
+    expectedDatabase !== "crigestion_staging" &&
+    !/^crigestion_(?:bundle_snapshot|recovery_drill)_[0-9]{8}t[0-9]{6}z$/.test(expectedDatabase)
+  ) {
+    throw new Error("RECOVERY_DATABASE_OVERRIDE_INVALID");
   }
 
   const [appEnvironment, workerEnvironment] = await Promise.all([
@@ -61,8 +68,9 @@ async function main(): Promise<void> {
     throw new Error("RECOVERY_STAGING_VERIFACTU_ENVIRONMENT_UNSAFE");
   }
 
-  const databaseUrl = appEnvironment.DATABASE_URL;
-  if (!databaseUrl) throw new Error("RECOVERY_DATABASE_URL_MISSING");
+  const configuredDatabaseUrl = appEnvironment.DATABASE_URL;
+  if (!configuredDatabaseUrl) throw new Error("RECOVERY_DATABASE_URL_MISSING");
+  const databaseUrl = databaseUrlFor(configuredDatabaseUrl, expectedDatabase);
   const client = new Client({
     connectionString: databaseUrl,
     application_name: "crigestion-staging-recovery-keyring-check"
@@ -73,7 +81,7 @@ async function main(): Promise<void> {
       'SELECT current_database() AS database, current_user AS role'
     );
     if (
-      identity.rows[0]?.database !== "crigestion_staging" ||
+      identity.rows[0]?.database !== expectedDatabase ||
       identity.rows[0]?.role !== "crigestion_staging_app"
     ) {
       throw new Error("RECOVERY_DATABASE_IDENTITY_INVALID");
@@ -91,6 +99,25 @@ async function main(): Promise<void> {
   } finally {
     await client.end();
   }
+}
+
+function databaseUrlFor(configuredUrl: string, expectedDatabase: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(configuredUrl);
+  } catch {
+    throw new Error("RECOVERY_DATABASE_URL_INVALID");
+  }
+  if (
+    (parsed.protocol !== "postgresql:" && parsed.protocol !== "postgres:") ||
+    parsed.hostname !== "127.0.0.1" ||
+    parsed.port !== "5432" ||
+    decodeURIComponent(parsed.username) !== "crigestion_staging_app"
+  ) {
+    throw new Error("RECOVERY_DATABASE_URL_INVALID");
+  }
+  parsed.pathname = `/${expectedDatabase}`;
+  return parsed.toString();
 }
 
 async function readEnvironment(filePath: string): Promise<Record<string, string>> {

@@ -6,13 +6,14 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-07-17.
+Fecha de corte: 2026-07-21.
 
 ## 2. Rebanadas disponibles
 
 | Area | Estado | Alcance verificado |
 |---|---|---|
 | Plataforma | Operativa | Inicializacion, login/logout, sesiones, permisos, auditoria, copias, restauracion y mantenimiento controlado. |
+| Adjuntos seguros | En validacion | Primera rebanada de logotipo empresarial: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. Aun no desplegada. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
@@ -44,10 +45,10 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 ## 4. Evidencia de validacion
 
-Evidencia actualizada el 17 de julio de 2026 sobre PostgreSQL desechable:
+Evidencia actualizada el 21 de julio de 2026 sobre PostgreSQL desechable:
 
-- El repositorio contiene 79 migraciones; CI las aplica desde cero antes de validar.
-- Vitest: 56 archivos y 524 pruebas superadas.
+- El repositorio contiene 82 migraciones; la base desechable las aplica desde cero antes de validar.
+- Vitest: 65 archivos y 595 pruebas superadas.
 - TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
@@ -69,12 +70,14 @@ Prioridades pendientes despues de este corte:
    y de despliegue independiente.
 2. Preparar el supervisor equivalente del entorno de despliegue definitivo; en
    Windows TEST ya existe una tarea de instancia unica con reinicio automatico.
-3. Desplegar y ensayar el paquete integral cifrado ya implementado para staging:
+3. Desplegar y ensayar el paquete integral cifrado actualizado para staging:
    incluye dump, configuracion, keyrings historicos VeriFactu, release e
-   inventario autenticado. Replicarlo despues a una custodia externa e inmutable
-   y acreditar el RPO/RTO mediante un drill aislado. Los uploads se declaran
-   `not_implemented` porque el producto aun no mantiene ficheros fuera de
-   PostgreSQL; incorporar esa fuente cuando exista.
+   inventario autenticado y el archivo allowlisted de adjuntos definitivos. La
+   cuarentena queda excluida. Replicarlo despues a una custodia externa e
+   inmutable y ejecutar el nuevo drill aislado de coherencia de base, keyrings y
+   adjuntos. Este drill no sustituye todavia un runner de aplicacion total que
+   reinstale release, configuracion, base y adjuntos ante perdida completa. El
+   RPO/RTO ante perdida total exige repetirlo desde esa copia externa.
 4. Ejecutar pruebas de migracion sobre una copia representativa antes de
    desplegar; la exclusion de rangos requiere `btree_gist` y una ventana de
    mantenimiento breve.

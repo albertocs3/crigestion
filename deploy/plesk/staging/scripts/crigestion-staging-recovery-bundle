@@ -5,7 +5,8 @@ umask 077
 
 BACKUP_DIR='/root/crigestion-staging-backups'
 BUNDLE_DIR='/root/crigestion-staging-recovery'
-RUNTIME_DIR='/run/crigestion-staging-recovery'
+RUNTIME_DIR='/var/lib/crigestion-staging-recovery-work'
+ATTACHMENT_DIR='/var/lib/crigestion-staging/attachments'
 APP_ENV='/etc/crigestion-staging/app.env'
 WORKER_ENV='/etc/crigestion-staging/verifactu-worker.env'
 CONFIG_DIR='/etc/crigestion-staging'
@@ -15,27 +16,71 @@ PG_BIN_DIR='/usr/lib/postgresql/14/bin'
 KEY_ID="${RECOVERY_BUNDLE_KEY_ID:-}"
 RETENTION_DAYS='14'
 BACKUP_MAX_AGE_SECONDS='129600'
+MAX_ATTACHMENT_ENTRIES='50000'
+MAX_ATTACHMENT_BYTES='5242880'
+MAX_UPLOAD_BYTES='2147483648'
+MAX_PAYLOAD_BYTES='8589934592'
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BUNDLE_ID="staging-$STAMP"
 FINAL="$BUNDLE_DIR/crigestion-$BUNDLE_ID.cgrb"
 CHECKSUM="$FINAL.sha256"
 CHECKSUM_TMP="$CHECKSUM.tmp.$$"
+SNAPSHOT_DB="crigestion_bundle_snapshot_$(date -u +%Y%m%dt%H%M%Sz)"
 WORK_DIR=''
 SUCCESS=0
 PUBLISHED=0
 CHECKSUM_CREATED=0
+SNAPSHOT_DB_CREATED=0
+
+guard_snapshot_database() {
+  [[ "$SNAPSHOT_DB" =~ ^crigestion_bundle_snapshot_[0-9]{8}t[0-9]{6}z$ ]]
+  [ "$SNAPSHOT_DB" != 'crigestion_staging' ]
+}
+
+drop_snapshot_database() {
+  local failed=0
+  guard_snapshot_database || return 1
+  runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+    -c "ALTER DATABASE \"$SNAPSHOT_DB\" ALLOW_CONNECTIONS false;" \
+    >/dev/null || failed=1
+  runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+        WHERE datname = '$SNAPSHOT_DB' AND pid <> pg_backend_pid();" \
+    >/dev/null || failed=1
+  runuser -u postgres -- "$PG_BIN_DIR/dropdb" --if-exists "$SNAPSHOT_DB" \
+    >/dev/null || failed=1
+  if [ "$failed" -eq 0 ]; then
+    SNAPSHOT_DB_CREATED=0
+  fi
+  return "$failed"
+}
 
 cleanup() {
+  local exit_code=$?
+  local cleanup_failed=0
+  trap - EXIT
+  set +e
+  if [ "$SNAPSHOT_DB_CREATED" -eq 1 ]; then
+    drop_snapshot_database || cleanup_failed=1
+  fi
   if [ -n "$WORK_DIR" ]; then
-    rm -rf -- "$WORK_DIR"
+    case "$WORK_DIR" in
+      "$RUNTIME_DIR/$BUNDLE_ID."*) rm -rf -- "$WORK_DIR" || cleanup_failed=1 ;;
+      *) cleanup_failed=1 ;;
+    esac
   fi
   if [ "$SUCCESS" -ne 1 ] && [ "$PUBLISHED" -eq 1 ]; then
-    rm -f -- "$FINAL"
+    rm -f -- "$FINAL" || cleanup_failed=1
   fi
   if [ "$SUCCESS" -ne 1 ] && [ "$CHECKSUM_CREATED" -eq 1 ]; then
-    rm -f -- "$CHECKSUM"
+    rm -f -- "$CHECKSUM" || cleanup_failed=1
   fi
-  rm -f -- "$CHECKSUM_TMP"
+  rm -f -- "$CHECKSUM_TMP" || cleanup_failed=1
+  if [ "$cleanup_failed" -ne 0 ]; then
+    echo "RECOVERY_BUNDLE_SNAPSHOT_CLEANUP_FAILED database=$SNAPSHOT_DB" >&2
+    exit 1
+  fi
+  exit "$exit_code"
 }
 
 trap cleanup EXIT
@@ -74,10 +119,25 @@ if ! flock -n 9; then
   exit 0
 fi
 
+while IFS= read -r -d '' stale_work_dir; do
+  stale_name="$(basename -- "$stale_work_dir")"
+  if [[ "$stale_name" =~ ^staging-[0-9]{8}T[0-9]{6}Z\.[A-Za-z0-9]{6}$ ]]; then
+    echo "RECOVERY_BUNDLE_STALE_WORKDIR path=$stale_work_dir" >&2
+    exit 1
+  fi
+done < <(find "$RUNTIME_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+
+AVAILABLE_BYTES="$(df --output=avail -B1 "$RUNTIME_DIR" | tail -n 1 | tr -d ' ')"
+test "$AVAILABLE_BYTES" -ge 25769803776
+
 if [ -e /var/lib/crigestion-staging-restore/restore-required ]; then
   echo 'RECOVERY_BUNDLE_BLOCKED_BY_RESTORE' >&2
   exit 1
 fi
+
+STALE_SNAPSHOT_DATABASES="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -Atqc \
+  "SELECT count(*) FROM pg_database WHERE datname LIKE 'crigestion_bundle_snapshot_%';")"
+test "$STALE_SNAPSHOT_DATABASES" = '0'
 
 LATEST_BACKUP="$(
   find "$BACKUP_DIR" -maxdepth 1 -type f \
@@ -99,6 +159,8 @@ test "$BACKUP_AGE_SECONDS" -le "$BACKUP_MAX_AGE_SECONDS"
 "$PG_BIN_DIR/pg_restore" --list "$LATEST_BACKUP" > /dev/null
 SOURCE_DUMP_HASH="$(cut -d' ' -f1 "$LATEST_BACKUP.sha256")"
 [[ "$SOURCE_DUMP_HASH" =~ ^[a-f0-9]{64}$ ]]
+SOURCE_DUMP_BYTES="$(stat -c '%s' "$LATEST_BACKUP")"
+test "$SOURCE_DUMP_BYTES" -le "$MAX_PAYLOAD_BYTES"
 
 "$NODE" --conditions=react-server --import tsx \
   "$CURRENT_RELEASE/scripts/verify-staging-recovery-keyrings.ts" \
@@ -117,7 +179,8 @@ mkdir -m 0700 \
   "$WORK_DIR/configuration" \
   "$WORK_DIR/database" \
   "$WORK_DIR/infrastructure" \
-  "$WORK_DIR/release"
+  "$WORK_DIR/release" \
+  "$WORK_DIR/uploads"
 
 for name in "${CONFIG_NAMES[@]}"; do
   source_file="$CONFIG_DIR/$name"
@@ -139,13 +202,57 @@ CONFIG_HASH_COPY="$({
 })"
 test "$CONFIG_HASH_BEFORE" = "$CONFIG_HASH_COPY"
 
+mapfile -t ATTACHMENT_ROOT_DECLARATIONS < <(
+  grep -E '^ATTACHMENT_STORAGE_ROOT=' "$APP_ENV" || true
+)
+test "${#ATTACHMENT_ROOT_DECLARATIONS[@]}" -eq 1
+test "${ATTACHMENT_ROOT_DECLARATIONS[0]}" = "ATTACHMENT_STORAGE_ROOT=$ATTACHMENT_DIR"
+
 cp --preserve=mode,timestamps -- "$LATEST_BACKUP" \
   "$WORK_DIR/database/crigestion_staging.dump"
+test "$(stat -c '%s' "$WORK_DIR/database/crigestion_staging.dump")" = "$SOURCE_DUMP_BYTES"
 test "$(sha256sum "$WORK_DIR/database/crigestion_staging.dump" | cut -d' ' -f1)" = "$SOURCE_DUMP_HASH"
 "$PG_BIN_DIR/pg_restore" --list "$WORK_DIR/database/crigestion_staging.dump" > /dev/null
 printf '%s  %s\n' "$SOURCE_DUMP_HASH" 'crigestion_staging.dump' \
   > "$WORK_DIR/database/crigestion_staging.dump.sha256"
 chmod 0600 "$WORK_DIR/database/crigestion_staging.dump.sha256"
+
+guard_snapshot_database
+SNAPSHOT_DB_EXISTS="$(runuser -u postgres -- "$PG_BIN_DIR/psql" \
+  -X -d postgres -Atqc \
+  "SELECT 1 FROM pg_database WHERE datname = '$SNAPSHOT_DB';")"
+test -z "$SNAPSHOT_DB_EXISTS"
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 \
+  -c "CREATE DATABASE \"$SNAPSHOT_DB\"
+      WITH TEMPLATE template0 ENCODING 'UTF8' ALLOW_CONNECTIONS false;"
+SNAPSHOT_DB_CREATED=1
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -v ON_ERROR_STOP=1 <<SQL
+REVOKE CONNECT ON DATABASE "$SNAPSHOT_DB" FROM PUBLIC;
+GRANT CREATE ON DATABASE "$SNAPSHOT_DB" TO crigestion_staging_migrator;
+GRANT CONNECT ON DATABASE "$SNAPSHOT_DB" TO crigestion_staging_app;
+ALTER DATABASE "$SNAPSHOT_DB" ALLOW_CONNECTIONS true;
+SQL
+runuser -u postgres -- "$PG_BIN_DIR/pg_restore" \
+  --exit-on-error --single-transaction --no-owner --no-privileges \
+  --role=crigestion_staging_migrator --dbname="$SNAPSHOT_DB" \
+  "$WORK_DIR/database/crigestion_staging.dump"
+EXPECTED_TABLES="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$SNAPSHOT_DB" -Atqc \
+  "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND c.relname IN (
+     'attachments','companies','_prisma_migrations',
+     'verifactu_mtls_credential_versions','verifactu_mtls_credentials',
+     'verifactu_fiscal_records','verifactu_sif_installations',
+     'verifactu_submission_attempts')
+     AND c.relkind IN ('r','p') AND NOT c.relrowsecurity;")"
+test "$EXPECTED_TABLES" = '8'
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$SNAPSHOT_DB" -v ON_ERROR_STOP=1 \
+  -c 'GRANT USAGE ON SCHEMA public TO crigestion_staging_app;
+      GRANT SELECT ON ALL TABLES IN SCHEMA public TO crigestion_staging_app;' >/dev/null
+"$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/verify-staging-recovery-keyrings.ts" \
+  "$WORK_DIR/configuration/app.env" \
+  "$WORK_DIR/configuration/verifactu-worker.env" \
+  "$SNAPSHOT_DB"
 
 cat > "$WORK_DIR/database/roles-allowlisted.sql" <<'SQL'
 DO $$
@@ -170,10 +277,15 @@ BUILD_ID="$(tr -d '\r\n' < "$RELEASE_PATH/.next/BUILD_ID")"
 [[ "$BUILD_ID" =~ ^[A-Za-z0-9_-]{10,80}$ ]]
 COMMIT_SHA="$(tr -d '\r\n' < "$RELEASE_PATH/RELEASE_COMMIT")"
 [[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}([a-f0-9]{24})?$ ]]
+PRODUCT_VERSION="$("$NODE" -e \
+  'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(process.argv[1], "utf8")).version; if(typeof value!=="string") process.exit(1); process.stdout.write(value);' \
+  "$RELEASE_PATH/package.json")"
+[[ "$PRODUCT_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$ ]]
 LOCK_HASH="$(sha256sum "$RELEASE_PATH/package-lock.json" | cut -d' ' -f1)"
 MIGRATION_HASH="$(
-  find "$RELEASE_PATH/prisma/migrations" -type f -name migration.sql -print0 |
-  sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+  cd "$RELEASE_PATH"
+  find prisma/migrations -type f -name migration.sql -print0 |
+    sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
 )"
 
 cp --preserve=mode,timestamps -- "$RELEASE_PATH/package.json" "$WORK_DIR/release/"
@@ -193,19 +305,136 @@ while IFS= read -r -d '' link_path; do
     *) echo 'RECOVERY_RELEASE_SYMLINK_ESCAPE' >&2; exit 1 ;;
   esac
 done < <(find "$RELEASE_PATH" -xdev -type l -print0)
-tar --create --numeric-owner --owner=0 --group=0 --one-file-system \
-  --dereference --hard-dereference \
-  --exclude='./.git' --exclude='./.env' --exclude='./.env.*' \
-  --exclude='./.next/cache' --exclude='./node_modules/.cache' \
-  --file="$WORK_DIR/release/application-release.tar" \
-  --directory="$RELEASE_PATH" .
+CURRENT_PAYLOAD_BYTES="$(du -sb "$WORK_DIR" | cut -f1)"
+RELEASE_SOURCE_BYTES="$(du -sb --dereference "$RELEASE_PATH" | cut -f1)"
+test "$((CURRENT_PAYLOAD_BYTES + RELEASE_SOURCE_BYTES))" -le "$MAX_PAYLOAD_BYTES"
+RELEASE_ARCHIVE_LIMIT_KIB="$(((MAX_PAYLOAD_BYTES - CURRENT_PAYLOAD_BYTES) / 1024))"
+test "$RELEASE_ARCHIVE_LIMIT_KIB" -gt 0
+(
+  ulimit -f "$RELEASE_ARCHIVE_LIMIT_KIB"
+  tar --create --numeric-owner --owner=0 --group=0 --one-file-system \
+    --dereference --hard-dereference \
+    --exclude='./.git' --exclude='./.env' --exclude='./.env.*' \
+    --exclude='./.next/cache' --exclude='./node_modules/.cache' \
+    --file="$WORK_DIR/release/application-release.tar" \
+    --directory="$RELEASE_PATH" .
+)
 RELEASE_ARCHIVE_HASH="$(sha256sum "$WORK_DIR/release/application-release.tar" | cut -d' ' -f1)"
+
+test -d "$ATTACHMENT_DIR"
+test ! -L "$ATTACHMENT_DIR"
+test "$(stat -c '%U|%G|%a' "$ATTACHMENT_DIR")" = 'crigestion-staging|crigestion-staging|700'
+if find "$ATTACHMENT_DIR" -xdev -mindepth 1 \
+  ! -path "$ATTACHMENT_DIR/.quarantine" \
+  ! -path "$ATTACHMENT_DIR/.quarantine/*" \
+  ! -type f ! -type d -print -quit | grep -q .; then
+  echo 'RECOVERY_ATTACHMENT_SPECIAL_FILE_REJECTED' >&2
+  exit 1
+fi
+if find "$ATTACHMENT_DIR" -xdev -mindepth 1 \
+  ! -path "$ATTACHMENT_DIR/.quarantine" \
+  ! -path "$ATTACHMENT_DIR/.quarantine/*" \
+  -type l -print -quit | grep -q .; then
+  echo 'RECOVERY_ATTACHMENT_SYMLINK_REJECTED' >&2
+  exit 1
+fi
+
+UPLOAD_LIST="$WORK_DIR/uploads/attachment-files.list"
+UPLOAD_SNAPSHOT="$WORK_DIR/uploads/files"
+mkdir -m 0700 "$UPLOAD_SNAPSHOT"
+: > "$UPLOAD_LIST"
+UPLOAD_BYTES=0
+UPLOAD_ENTRIES=0
+while IFS= read -r -d '' upload_directory; do
+  relative_directory="${upload_directory#"$ATTACHMENT_DIR"/}"
+  if ! [[ "$relative_directory" =~ ^company-logo(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?$ ]]; then
+    echo 'RECOVERY_ATTACHMENT_DIRECTORY_REJECTED' >&2
+    exit 1
+  fi
+  test "$(stat -c '%U|%G|%a' "$upload_directory")" = 'crigestion-staging|crigestion-staging|700'
+done < <(find "$ATTACHMENT_DIR" -xdev -mindepth 1 -type d \
+  ! -path "$ATTACHMENT_DIR/.quarantine" \
+  ! -path "$ATTACHMENT_DIR/.quarantine/*" -print0 | LC_ALL=C sort -z)
+
+while IFS= read -r -d '' upload_file; do
+  relative_path="${upload_file#"$ATTACHMENT_DIR"/}"
+  if ! [[ "$relative_path" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]; then
+    echo 'RECOVERY_ATTACHMENT_PATH_REJECTED' >&2
+    exit 1
+  fi
+  test "$(stat -c '%U|%G|%a|%h' "$upload_file")" = 'crigestion-staging|crigestion-staging|600|1'
+  upload_size="$(stat -c '%s' "$upload_file")"
+  test "$upload_size" -le "$MAX_ATTACHMENT_BYTES"
+  UPLOAD_BYTES="$((UPLOAD_BYTES + upload_size))"
+  UPLOAD_ENTRIES="$((UPLOAD_ENTRIES + 1))"
+  test "$UPLOAD_BYTES" -le "$MAX_UPLOAD_BYTES"
+  test "$UPLOAD_ENTRIES" -le "$MAX_ATTACHMENT_ENTRIES"
+  snapshot_file="$UPLOAD_SNAPSHOT/$relative_path"
+  mkdir -p -m 0700 "$(dirname -- "$snapshot_file")"
+  (
+    ulimit -f "$((MAX_ATTACHMENT_BYTES / 1024))"
+    cp --no-dereference --reflink=auto --preserve=mode,timestamps -- \
+      "$upload_file" "$snapshot_file"
+  )
+  test -f "$snapshot_file"
+  test ! -L "$snapshot_file"
+  chown root:root "$snapshot_file"
+  chmod 0600 "$snapshot_file"
+  test "$(stat -c '%U|%G|%a|%h' "$snapshot_file")" = 'root|root|600|1'
+  test "$(stat -c '%s' "$snapshot_file")" = "$upload_size"
+  printf '%s\0' "$relative_path" >> "$UPLOAD_LIST"
+done < <(find "$ATTACHMENT_DIR" -xdev -type f \
+  ! -path "$ATTACHMENT_DIR/.quarantine/*" -print0 | LC_ALL=C sort -z)
+
+test "$(tr -cd '\0' < "$UPLOAD_LIST" | wc -c)" = "$UPLOAD_ENTRIES"
+SNAPSHOT_UPLOAD_BYTES="$(du -sb "$UPLOAD_SNAPSHOT" | cut -f1)"
+test "$SNAPSHOT_UPLOAD_BYTES" -le "$MAX_UPLOAD_BYTES"
+REFERENCED_UPLOADS="$WORK_DIR/uploads/referenced-attachments.tsv"
+runuser -u postgres -- "$PG_BIN_DIR/psql" \
+  -X --host=/var/run/postgresql --port=5432 --username=postgres \
+  --dbname="$SNAPSHOT_DB" --no-password -qAtF $'\t' -c \
+  'SET ROLE crigestion_staging_app;
+   SELECT "storageKey", "sizeBytes", sha256
+   FROM public.attachments
+   WHERE "storageKey" IS NOT NULL
+     AND status <> '\''PHYSICALLY_DELETED'\''
+   ORDER BY "storageKey"' \
+  > "$REFERENCED_UPLOADS"
+REFERENCED_UPLOAD_ENTRIES=0
+while IFS=$'\t' read -r storage_key expected_size expected_hash; do
+  test -n "$storage_key"
+  [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
+  [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]]
+  [[ "$storage_key" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]
+  referenced_file="$UPLOAD_SNAPSHOT/$storage_key"
+  test -f "$referenced_file"
+  test ! -L "$referenced_file"
+  test "$(stat -c '%s' "$referenced_file")" = "$expected_size"
+  test "$(sha256sum "$referenced_file" | cut -d' ' -f1)" = "$expected_hash"
+  REFERENCED_UPLOAD_ENTRIES="$((REFERENCED_UPLOAD_ENTRIES + 1))"
+done < "$REFERENCED_UPLOADS"
+chmod 0600 "$REFERENCED_UPLOADS"
+ORPHAN_UPLOAD_ENTRIES="$((UPLOAD_ENTRIES - REFERENCED_UPLOAD_ENTRIES))"
+test "$ORPHAN_UPLOAD_ENTRIES" -ge 0
+drop_snapshot_database
+
+tar --create --numeric-owner --owner=0 --group=0 --one-file-system \
+  --no-recursion --null --directory="$UPLOAD_SNAPSHOT" \
+  --files-from="$UPLOAD_LIST" \
+  --file="$WORK_DIR/uploads/attachments.tar"
+rm -rf -- "$UPLOAD_SNAPSHOT"
+UPLOAD_ARCHIVE_HASH="$(sha256sum "$WORK_DIR/uploads/attachments.tar" | cut -d' ' -f1)"
+printf '%s  %s\n' "$UPLOAD_ARCHIVE_HASH" 'attachments.tar' \
+  > "$WORK_DIR/uploads/attachments.tar.sha256"
+rm -f -- "$UPLOAD_LIST"
+chmod 0600 "$WORK_DIR/uploads/attachments.tar" "$WORK_DIR/uploads/attachments.tar.sha256"
 
 for source_file in \
   /usr/local/sbin/crigestion-staging-backup \
   /usr/local/sbin/crigestion-staging-health-alert \
   /usr/local/sbin/crigestion-staging-health-check \
   /usr/local/sbin/crigestion-staging-recovery-bundle \
+  /usr/local/sbin/crigestion-staging-recovery-drill \
   /usr/local/sbin/crigestion-staging-restore \
   /usr/local/sbin/crigestion-staging-restore-drill \
   /etc/systemd/system/crigestion-staging-app.service \
@@ -218,6 +447,7 @@ for source_file in \
   /etc/systemd/system/crigestion-staging-recovery-bundle.service \
   /etc/systemd/system/crigestion-staging-recovery-bundle-alert.service \
   /etc/systemd/system/crigestion-staging-recovery-bundle.timer \
+  /etc/systemd/system/crigestion-staging-recovery-drill.service \
   /etc/systemd/system/crigestion-staging-verifactu-worker.service \
   /etc/systemd/system/crigestion-staging-migrate@.service; do
   test -f "$source_file"
@@ -237,15 +467,29 @@ cat > "$WORK_DIR/manifest.json" <<JSON
   "releaseId": "$RELEASE_ID",
   "commitSha": "$COMMIT_SHA",
   "buildId": "$BUILD_ID",
+  "productVersion": "$PRODUCT_VERSION",
   "releaseArchiveSha256": "$RELEASE_ARCHIVE_HASH",
   "packageLockSha256": "$LOCK_HASH",
   "migrationsSha256": "$MIGRATION_HASH",
-  "uploads": { "status": "not_implemented", "entries": 0 },
+  "uploads": {
+    "status": "included",
+    "entries": $UPLOAD_ENTRIES,
+    "referencedEntries": $REFERENCED_UPLOAD_ENTRIES,
+    "unreferencedEntries": $ORPHAN_UPLOAD_ENTRIES,
+    "archive": "uploads/attachments.tar",
+    "archiveSha256": "$UPLOAD_ARCHIVE_HASH",
+    "quarantineIncluded": false
+  },
   "keyCustody": "external_systemd_credential",
   "verifactuEnvironment": "TEST"
 }
 JSON
 chmod 0600 "$WORK_DIR/manifest.json"
+
+PAYLOAD_BYTES="$(du -sb "$WORK_DIR" | cut -f1)"
+test "$PAYLOAD_BYTES" -le "$MAX_PAYLOAD_BYTES"
+PAYLOAD_ENTRIES="$(find "$WORK_DIR" -type f | wc -l)"
+test "$PAYLOAD_ENTRIES" -le 200000
 
 (
   cd "$WORK_DIR"
@@ -284,10 +528,13 @@ CHECKSUM_CREATED=1
 rm -f -- "$CHECKSUM_TMP"
 sync -f "$BUNDLE_DIR"
 
+case "$WORK_DIR" in
+  "$RUNTIME_DIR/$BUNDLE_ID."*) rm -rf -- "$WORK_DIR" ;;
+  *) echo 'RECOVERY_BUNDLE_WORKDIR_INVALID' >&2; exit 1 ;;
+esac
+WORK_DIR=''
 SUCCESS=1
 trap - EXIT
-rm -rf -- "$WORK_DIR"
-WORK_DIR=''
 
 find "$BUNDLE_DIR" -maxdepth 1 -type f \
   -name 'crigestion-staging-*.cgrb' -mtime "+$RETENTION_DAYS" -delete

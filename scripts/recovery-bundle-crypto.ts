@@ -55,6 +55,15 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (command === "inspect") {
+      if (!filePath || bundleId || keyId) {
+        throw new Error("RECOVERY_BUNDLE_INSPECT_ARGUMENTS_INVALID");
+      }
+      const header = await verifyRecoveryBundle(filePath, masterKey);
+      process.stdout.write(`${JSON.stringify(header)}\n`);
+      return;
+    }
+
     if (command === "decrypt") {
       if (!filePath || bundleId || keyId) {
         throw new Error("RECOVERY_BUNDLE_DECRYPT_ARGUMENTS_INVALID");

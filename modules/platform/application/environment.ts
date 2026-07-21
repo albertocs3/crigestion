@@ -1,5 +1,6 @@
 import "server-only";
 
+import path from "node:path";
 import { z } from "zod";
 
 const sessionSecretPlaceholder = "change-me-in-local-env";
@@ -17,7 +18,9 @@ const baseEnvironmentSchema = z.object({
     .default("crigestion_session"),
   AUTH_COOKIE_SECURE: z.enum(["true", "false"]).optional(),
   AUTH_COOKIE_SAME_SITE: z.enum(["lax", "strict"]).default("lax"),
-  TRUST_PROXY_HEADERS: z.enum(["true", "false"]).default("false")
+  TRUST_PROXY_HEADERS: z.enum(["true", "false"]).default("false"),
+  ATTACHMENT_STORAGE_ROOT: z.string().trim().min(1).optional(),
+  ATTACHMENT_CLAMD_SCAN_PATH: z.string().trim().min(1).optional()
 });
 const environmentSchema = baseEnvironmentSchema.extend({
   APP_SESSION_SECRET: z.string().min(1),
@@ -84,6 +87,26 @@ export function shouldTrustProxyHeaders(): boolean {
   return config.TRUST_PROXY_HEADERS === "true" || !isDeployedAppEnvironment(config.APP_ENV);
 }
 
+export function getAttachmentStorageRoot(): string {
+  const value = readPlatformBaseEnvironment().ATTACHMENT_STORAGE_ROOT;
+
+  if (!value || !path.isAbsolute(value) || isUnsafeStorageRoot(value)) {
+    throw new Error("Invalid platform environment: ATTACHMENT_STORAGE_ROOT must be an absolute protected directory.");
+  }
+
+  return path.resolve(value);
+}
+
+export function getAttachmentClamdScanPath(): string {
+  const value = readPlatformBaseEnvironment().ATTACHMENT_CLAMD_SCAN_PATH;
+
+  if (!value || !path.isAbsolute(value)) {
+    throw new Error("Invalid platform environment: ATTACHMENT_CLAMD_SCAN_PATH must be an absolute executable path.");
+  }
+
+  return path.resolve(value);
+}
+
 function readPlatformBaseEnvironment(
   env: NodeJS.ProcessEnv = process.env
 ): PlatformBaseEnvironment {
@@ -144,4 +167,14 @@ function validateProductionRuntimeEnvironment(config: PlatformBaseEnvironment): 
 
 function isDeployedAppEnvironment(value: PlatformBaseEnvironment["APP_ENV"]): boolean {
   return value === "staging" || value === "production";
+}
+
+function isUnsafeStorageRoot(value: string): boolean {
+  const resolved = path.resolve(value);
+  const root = path.parse(resolved).root;
+  const publicDirectory = path.resolve(process.cwd(), "public");
+  const repositoryDirectory = path.resolve(process.cwd());
+
+  return resolved === root || resolved === publicDirectory || resolved.startsWith(`${publicDirectory}${path.sep}`)
+    || resolved === repositoryDirectory;
 }

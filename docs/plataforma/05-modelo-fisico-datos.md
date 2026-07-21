@@ -30,6 +30,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 |---|---|---|
 | Inicializacion | `Installation` / `installations` | Estado singleton de instalacion |
 | Configuracion | `Company` / `companies` | Empresa inicial |
+| Adjuntos | `Attachment` / `attachments` | Metadatos, integridad, analisis y ciclo de vida de ficheros privados |
 | Identidad | `User` / `users` | Primer administrador y usuarios posteriores |
 | Identidad | `ReservedUserName` / `reserved_user_names` | Nombres de usuario no reutilizables |
 | Identidad | `Session` / `sessions` | Sesiones web activas, caducadas o revocadas |
@@ -52,6 +53,9 @@ erDiagram
     Installation ||--o| User : initial_administrator
     Role ||--o{ User : assigns
     User ||--o{ Session : opens
+    Company ||--o{ Attachment : owns
+    Company ||--o| Attachment : active_logo
+    User ||--o{ Attachment : uploads
     User ||--o{ BackupOperation : requests
     User ||--o{ RestoreOperation : requests
     User ||--o{ PlatformMaintenanceState : enables
@@ -89,6 +93,12 @@ Entidades iniciales:
 
 - `Installation.singletonKey` es unico para garantizar una unica instalacion.
 - `Company.taxId` es unico.
+- `Company.logoAttachmentId` referencia un `Attachment` globalmente unico. Dos
+  triggers diferidos exigen que pertenezca a la misma empresa, tenga proposito
+  `COMPANY_LOGO` y permanezca `AVAILABLE` al confirmar la transaccion.
+- `Attachment` restringe tamano positivo, SHA-256 hexadecimal, clave opaca y la
+  coherencia entre estado, resultado antivirus y marcas temporales. Un indice
+  parcial admite como maximo un logo `AVAILABLE` por empresa.
 - `User.userName` es unico.
 - `User.normalizedUserName` es unico.
 - `ReservedUserName.normalizedUserName` es unico.

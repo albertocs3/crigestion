@@ -1,7 +1,7 @@
 [Unit]
 Description=CriGestion staging web application
-After=network-online.target
-Wants=network-online.target
+After=network-online.target clamav-daemon.service
+Wants=network-online.target clamav-daemon.service
 
 [Service]
 Type=simple
@@ -14,6 +14,7 @@ Environment=HOSTNAME=127.0.0.1
 Environment=PORT=3101
 ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/current/.next/BUILD_ID
 ExecStartPre=/usr/bin/test ! -e /var/lib/crigestion-staging-restore/restore-required
+ExecStartPre=/usr/bin/test -x /usr/bin/clamdscan
 ExecStart=/opt/plesk/node/22/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3101
 Restart=on-failure
 RestartSec=5s
@@ -35,7 +36,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-ReadWritePaths=/var/cache/crigestion-staging
+ReadWritePaths=/var/cache/crigestion-staging /var/lib/crigestion-staging/attachments
 
 [Install]
 WantedBy=multi-user.target

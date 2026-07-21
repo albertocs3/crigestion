@@ -1,8 +1,7 @@
 [Unit]
-Description=Create encrypted CriGestion staging recovery bundle
-After=network-online.target postgresql.service crigestion-staging-backup.service
+Description=Validate a CriGestion staging recovery bundle in isolation
+After=network-online.target postgresql.service
 Wants=network-online.target
-OnFailure=crigestion-staging-recovery-bundle-alert.service
 
 [Service]
 Type=oneshot
@@ -10,13 +9,14 @@ User=root
 Group=root
 WorkingDirectory=/opt/crigestion-staging/current
 Environment=NODE_ENV=production
-EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env
-Environment=RECOVERY_BUNDLE_WORK_DIRECTORY=/var/lib/crigestion-staging-recovery-work
+Environment=RECOVERY_BUNDLE_WORK_DIRECTORY=/var/lib/crigestion-staging-recovery-drill
 LoadCredential=recovery-bundle.key:/etc/crigestion-staging/recovery-bundle.key
-StateDirectory=crigestion-staging-recovery-work
+StateDirectory=crigestion-staging-recovery-drill
 StateDirectoryMode=0700
-ExecStart=/usr/local/sbin/crigestion-staging-recovery-bundle
-TimeoutStartSec=30min
+ExecStartPre=/usr/bin/test -x /usr/bin/python3
+ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/current/scripts/extract-recovery-bundle.py
+ExecStart=/usr/local/sbin/crigestion-staging-recovery-drill
+TimeoutStartSec=60min
 UMask=0077
 
 NoNewPrivileges=true
@@ -32,9 +32,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
-ReadWritePaths=/root/crigestion-staging-recovery
-ReadWritePaths=/var/lib/crigestion-staging-recovery-work
-ReadOnlyPaths=/var/lib/crigestion-staging/attachments
+ReadWritePaths=/var/lib/crigestion-staging-recovery-drill
 InaccessiblePaths=/etc/crigestion-staging/recovery-bundle.key
 MemoryMax=1G
 
