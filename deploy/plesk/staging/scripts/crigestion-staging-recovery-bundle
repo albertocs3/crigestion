@@ -90,8 +90,6 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-cd /
-
 if ! [[ "$KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$ ]]; then
   echo 'RECOVERY_BUNDLE_KEY_ID_INVALID' >&2
   exit 1
