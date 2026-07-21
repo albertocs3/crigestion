@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import packageManifest from "../../package.json";
 
 const root = process.cwd();
 
@@ -25,6 +26,7 @@ describe("staging recovery bundle deployment", () => {
     expect(script).toContain("CONFIG_HASH_AFTER");
     expect(script).toContain("RECOVERY_BUNDLE_OK");
     expect(script).toContain('[ "$PUBLISHED" -eq 1 ]');
+    expect(packageManifest.dependencies.dotenv).toBeDefined();
 
     for (const file of [
       "app.env",
