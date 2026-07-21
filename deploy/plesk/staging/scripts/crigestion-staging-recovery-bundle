@@ -50,9 +50,22 @@ if ! [[ "$KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$ ]]; then
   exit 1
 fi
 
-test -n "${RECOVERY_BUNDLE_KEY_FILE:-}"
-test -f "$RECOVERY_BUNDLE_KEY_FILE"
-test ! -L "$RECOVERY_BUNDLE_KEY_FILE"
+KEY_FILE=''
+if [ -n "${CREDENTIALS_DIRECTORY:-}" ]; then
+  EXPECTED_KEY_FILE="$CREDENTIALS_DIRECTORY/recovery-bundle.key"
+  if [ -n "${RECOVERY_BUNDLE_KEY_FILE:-}" ] && \
+    [ "$RECOVERY_BUNDLE_KEY_FILE" != "$EXPECTED_KEY_FILE" ]; then
+    echo 'RECOVERY_BUNDLE_KEY_SOURCE_CONFLICT' >&2
+    exit 1
+  fi
+  KEY_FILE="$EXPECTED_KEY_FILE"
+else
+  KEY_FILE="${RECOVERY_BUNDLE_KEY_FILE:-}"
+fi
+
+test -n "$KEY_FILE"
+test -f "$KEY_FILE"
+test ! -L "$KEY_FILE"
 
 install -d -o root -g root -m 0700 "$BUNDLE_DIR" "$RUNTIME_DIR"
 exec 9>"$BUNDLE_DIR/.recovery-bundle.lock"
@@ -245,7 +258,8 @@ chmod 0600 "$WORK_DIR/manifest.json"
 
 tar --create --gzip --numeric-owner --owner=0 --group=0 \
   --file=- --directory="$WORK_DIR" . |
-  "$NODE" --conditions=react-server --import tsx \
+  RECOVERY_BUNDLE_KEY_FILE="$KEY_FILE" \
+    "$NODE" --conditions=react-server --import tsx \
     "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" \
     encrypt "$FINAL" "$BUNDLE_ID" "$KEY_ID"
 PUBLISHED=1
@@ -257,7 +271,8 @@ CONFIG_HASH_AFTER="$({
 })"
 test "$CONFIG_HASH_BEFORE" = "$CONFIG_HASH_AFTER"
 
-"$NODE" --conditions=react-server --import tsx \
+RECOVERY_BUNDLE_KEY_FILE="$KEY_FILE" \
+  "$NODE" --conditions=react-server --import tsx \
   "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" verify "$FINAL"
 
 HASH="$(sha256sum "$FINAL" | cut -d' ' -f1)"

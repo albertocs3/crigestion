@@ -120,10 +120,9 @@ oneshot. Ubuntu 22.04 no distribuye `systemd-creds`; por ello el fichero fuente
 queda root-only pero no cifrado en reposo. Proteger el disco del VPS y no incluir
 este fichero en ninguna copia creada dentro del mismo host.
 
-La unidad usa la ruta runtime fija
-`/run/credentials/crigestion-staging-recovery-bundle.service/recovery-bundle.key`:
-systemd 249 admite `LoadCredential`, pero no el especificador `%d` incorporado
-en versiones posteriores.
+La unidad resuelve la copia runtime desde el directorio indicado por
+`CREDENTIALS_DIRECTORY`: systemd 249 admite `LoadCredential` y esa variable,
+pero no el especificador `%d` incorporado en versiones posteriores.
 
 ## 4. Validacion e instalacion de unidades operativas
 

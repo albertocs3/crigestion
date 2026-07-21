@@ -11,12 +11,10 @@ Group=root
 WorkingDirectory=/opt/crigestion-staging/current
 Environment=NODE_ENV=production
 EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env
-Environment=RECOVERY_BUNDLE_KEY_FILE=/run/credentials/crigestion-staging-recovery-bundle.service/recovery-bundle.key
 Environment=RECOVERY_BUNDLE_WORK_DIRECTORY=/run/crigestion-staging-recovery
 LoadCredential=recovery-bundle.key:/etc/crigestion-staging/recovery-bundle.key
 RuntimeDirectory=crigestion-staging-recovery
 RuntimeDirectoryMode=0700
-ExecStartPre=/usr/bin/test -r /run/credentials/crigestion-staging-recovery-bundle.service/recovery-bundle.key
 ExecStart=/usr/local/sbin/crigestion-staging-recovery-bundle
 TimeoutStartSec=30min
 UMask=0077

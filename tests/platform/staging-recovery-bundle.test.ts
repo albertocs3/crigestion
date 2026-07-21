@@ -39,6 +39,9 @@ describe("staging recovery bundle deployment", () => {
   });
 
   it("uses a root-only systemd credential and a root-only runtime directory", async () => {
+    const script = await read(
+      "deploy/plesk/staging/scripts/crigestion-staging-recovery-bundle"
+    );
     const unit = await read(
       "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.service"
     );
@@ -52,10 +55,13 @@ describe("staging recovery bundle deployment", () => {
     expect(unit).toContain("LoadCredential=recovery-bundle.key:");
     expect(unit).toContain("InaccessiblePaths=/etc/crigestion-staging/recovery-bundle.key");
     expect(unit).toContain("EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env");
-    const runtimeCredential =
-      "/run/credentials/crigestion-staging-recovery-bundle.service/recovery-bundle.key";
-    expect(unit).toContain(`RECOVERY_BUNDLE_KEY_FILE=${runtimeCredential}`);
-    expect(unit).toContain(`ExecStartPre=/usr/bin/test -r ${runtimeCredential}`);
+    expect(unit).not.toContain("RECOVERY_BUNDLE_KEY_FILE=");
+    expect(script).toContain(
+      'EXPECTED_KEY_FILE="$CREDENTIALS_DIRECTORY/recovery-bundle.key"'
+    );
+    expect(script).toContain("RECOVERY_BUNDLE_KEY_SOURCE_CONFLICT");
+    expect(script).toContain('RECOVERY_BUNDLE_KEY_FILE="$KEY_FILE"');
+    expect(script).not.toContain("export RECOVERY_BUNDLE_KEY_FILE");
     expect(unit).toContain("RuntimeDirectoryMode=0700");
     expect(unit).toContain("UMask=0077");
     expect(unit).toContain("ProtectSystem=strict");
