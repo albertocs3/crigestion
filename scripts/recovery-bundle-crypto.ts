@@ -18,6 +18,14 @@ async function main(): Promise<void> {
   const masterKey = await readRecoveryBundleMasterKey(keyFile);
 
   try {
+    if (command === "check-key") {
+      if (filePath || bundleId || keyId) {
+        throw new Error("RECOVERY_BUNDLE_CHECK_KEY_ARGUMENTS_INVALID");
+      }
+      process.stdout.write("RECOVERY_BUNDLE_KEY_VALID\n");
+      return;
+    }
+
     if (command === "encrypt") {
       if (!filePath || !bundleId || !keyId) {
         throw new Error("RECOVERY_BUNDLE_ENCRYPT_ARGUMENTS_INVALID");

@@ -50,9 +50,12 @@ Revisar como minimo:
 | `VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET` | Obligatoria | Secreto estable y distinto del de sesiones; conservar durante la retencion idempotente. |
 | `RECOVERY_BUNDLE_KEY_ID` | Obligatoria en el bundle integral de staging | Identificador no secreto de la clave maestra custodiada externamente. |
 
-La clave maestra de recovery no se introduce como variable de entorno. El
-oneshot la recibe mediante `LoadCredentialEncrypted`; conservar fuera del host
-la clave de 32 bytes y todas las generaciones necesarias durante la retencion.
+La clave maestra de recovery no se introduce como variable de entorno. En
+Ubuntu 22.04 el oneshot la recibe mediante `LoadCredential` desde un fichero
+`root:root 0400`, oculto al proceso tras cargarlo; conservar fuera del host la
+clave de 32 bytes y todas las generaciones necesarias durante la retencion.
+Este fallback no cifra el fichero fuente en reposo y exige proteger tambien el
+disco y los backups del sistema.
 
 ## 4. Validacion previa
 

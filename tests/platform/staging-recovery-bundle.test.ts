@@ -38,7 +38,7 @@ describe("staging recovery bundle deployment", () => {
     }
   });
 
-  it("uses an encrypted systemd credential and a root-only runtime directory", async () => {
+  it("uses a root-only systemd credential and a root-only runtime directory", async () => {
     const unit = await read(
       "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.service"
     );
@@ -49,9 +49,11 @@ describe("staging recovery bundle deployment", () => {
       "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle-alert.service"
     );
 
-    expect(unit).toContain("LoadCredentialEncrypted=recovery-bundle.key:");
+    expect(unit).toContain("LoadCredential=recovery-bundle.key:");
+    expect(unit).toContain("InaccessiblePaths=/etc/crigestion-staging/recovery-bundle.key");
     expect(unit).toContain("EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env");
     expect(unit).toContain("RECOVERY_BUNDLE_KEY_FILE=%d/recovery-bundle.key");
+    expect(unit).toContain("ExecStartPre=/usr/bin/test -r %d/recovery-bundle.key");
     expect(unit).toContain("RuntimeDirectoryMode=0700");
     expect(unit).toContain("UMask=0077");
     expect(unit).toContain("ProtectSystem=strict");
@@ -70,6 +72,17 @@ describe("staging recovery bundle deployment", () => {
     expect(health).toContain("CRIGESTION_STAGING_RECOVERY_BUNDLE_STALE");
     expect(health).toContain("sha256sum -c");
     expect(health).not.toContain("RECOVERY_BUNDLE_KEY_FILE");
+  });
+
+  it("validates the master key before atomically publishing its source file", async () => {
+    const cryptoCli = await read("scripts/recovery-bundle-crypto.ts");
+    const runbook = await read("docs/plataforma/11-despliegue-staging-plesk.md");
+
+    expect(cryptoCli).toContain('command === "check-key"');
+    expect(cryptoCli).toContain("RECOVERY_BUNDLE_KEY_VALID");
+    expect(runbook).toContain("mktemp /etc/crigestion-staging/.recovery-bundle.key");
+    expect(runbook).toContain("check-key");
+    expect(runbook).toContain("ln -- \"$KEY_TEMP\" \"$KEY_FINAL\"");
   });
 });
 

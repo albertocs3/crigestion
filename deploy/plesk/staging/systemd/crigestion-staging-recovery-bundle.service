@@ -13,9 +13,10 @@ Environment=NODE_ENV=production
 EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env
 Environment=RECOVERY_BUNDLE_KEY_FILE=%d/recovery-bundle.key
 Environment=RECOVERY_BUNDLE_WORK_DIRECTORY=/run/crigestion-staging-recovery
-LoadCredentialEncrypted=recovery-bundle.key:/etc/crigestion-staging/recovery-bundle.key.cred
+LoadCredential=recovery-bundle.key:/etc/crigestion-staging/recovery-bundle.key
 RuntimeDirectory=crigestion-staging-recovery
 RuntimeDirectoryMode=0700
+ExecStartPre=/usr/bin/test -r %d/recovery-bundle.key
 ExecStart=/usr/local/sbin/crigestion-staging-recovery-bundle
 TimeoutStartSec=30min
 UMask=0077
@@ -34,6 +35,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 SystemCallArchitectures=native
 ReadWritePaths=/root/crigestion-staging-recovery
+InaccessiblePaths=/etc/crigestion-staging/recovery-bundle.key
 
 StandardOutput=journal
 StandardError=journal

@@ -110,12 +110,15 @@ recovery-bundle.env          root:root                          0600
 app.env                      root:crigestion-staging            0640
 migrator.env                 root:crigestion-staging-migrator   0640
 verifactu-worker.env         root:crigestion-staging-verifactu  0640
-recovery-bundle.key.cred     root:root                          0600
+recovery-bundle.key          root:root                          0400
 ```
 
 No registrar ni mostrar su contenido durante verificaciones. La clave maestra
-del paquete de recuperacion no se guarda en ningun `.env`: se conserva fuera
-del VPS y systemd entrega al oneshot una credencial cifrada.
+del paquete de recuperacion no se guarda en ningun `.env`: se conserva tambien
+fuera del VPS y systemd la copia al directorio de credenciales runtime del
+oneshot. Ubuntu 22.04 no distribuye `systemd-creds`; por ello el fichero fuente
+queda root-only pero no cifrado en reposo. Proteger el disco del VPS y no incluir
+este fichero en ninguna copia creada dentro del mismo host.
 
 ## 4. Validacion e instalacion de unidades operativas
 
@@ -348,16 +351,35 @@ siendo necesaria para acreditar su restaurabilidad.
 
 Crear primero `recovery-bundle.env` desde el ejemplo y registrar un identificador
 de clave no secreto. Partiendo de una clave aleatoria de 32 bytes ya depositada
-en la custodia externa, crear la credencial sin mostrarla en terminal:
+en la custodia externa, crear el fichero fuente sin mostrarla en terminal:
 
 ```bash
-install -o root -g root -m 0600 /dev/null \
-  /etc/crigestion-staging/recovery-bundle.key.cred
-systemd-ask-password --no-tty 'Clave maestra de recovery (hex o base64)' | \
-  systemd-creds encrypt --name=recovery-bundle.key - \
-    /etc/crigestion-staging/recovery-bundle.key.cred
-chmod 0600 /etc/crigestion-staging/recovery-bundle.key.cred
+umask 077
+KEY_FINAL=/etc/crigestion-staging/recovery-bundle.key
+KEY_TEMP="$(mktemp /etc/crigestion-staging/.recovery-bundle.key.XXXXXX)"
+trap 'rm -f -- "$KEY_TEMP"' EXIT
+
+test ! -e "$KEY_FINAL"
+systemd-ask-password --no-tty 'Clave maestra de recovery (hex o base64)' \
+  > "$KEY_TEMP"
+chown root:root "$KEY_TEMP"
+chmod 0400 "$KEY_TEMP"
+
+RECOVERY_BUNDLE_KEY_FILE="$KEY_TEMP" \
+  /opt/plesk/node/22/bin/node --conditions=react-server --import tsx \
+  /opt/crigestion-staging/current/scripts/recovery-bundle-crypto.ts check-key
+
+sync -f "$KEY_TEMP"
+ln -- "$KEY_TEMP" "$KEY_FINAL"
+rm -f -- "$KEY_TEMP"
+sync -f /etc/crigestion-staging
+trap - EXIT
 ```
+
+Antes de activar el servicio, comprobar sin leer el contenido que la fuente es
+regular, no symlink, `root:root 0400`, y que `/etc/crigestion-staging` no permite
+escritura a grupo u otros. Excluir expresamente `recovery-bundle.key` de snapshots
+y backups Plesk que puedan contener tambien base, configuracion o bundles.
 
 Instalar conjuntamente script, servicio, timer y fichero de entorno. Validar
 las unidades, recargar systemd y ejecutar el oneshot manualmente antes de
