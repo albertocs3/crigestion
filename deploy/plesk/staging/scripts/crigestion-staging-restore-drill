@@ -136,6 +136,7 @@ CREATED=1
 runuser -u postgres -- "$PG_BIN_DIR/psql" \
   -X -v ON_ERROR_STOP=1 -d postgres <<SQL
 REVOKE CONNECT ON DATABASE "$DRILL_DB" FROM PUBLIC;
+GRANT CREATE ON DATABASE "$DRILL_DB" TO crigestion_staging_migrator;
 ALTER DATABASE "$DRILL_DB" ALLOW_CONNECTIONS true;
 SQL
 
@@ -147,6 +148,12 @@ runuser -u postgres -- "$PG_BIN_DIR/pg_restore" \
   --role=crigestion_staging_migrator \
   --dbname="$DRILL_DB" \
   < "$BACKUP"
+
+runuser -u postgres -- "$PG_BIN_DIR/psql" \
+  -X -v ON_ERROR_STOP=1 -d postgres <<SQL
+REVOKE ALL PRIVILEGES ON DATABASE "$DRILL_DB"
+  FROM crigestion_staging_migrator;
+SQL
 
 SUMMARY_SQL="
 SELECT concat_ws(
@@ -220,11 +227,16 @@ CONNECT_PRIVILEGES="$(
          'crigestion_staging_migrator',
          '$DRILL_DB',
          'CONNECT'
+       ),
+       has_database_privilege(
+         'crigestion_staging_migrator',
+         '$DRILL_DB',
+         'CREATE'
        );"
 )"
 
 echo "RUNTIME_CONNECT_PRIVILEGES=$CONNECT_PRIVILEGES"
-test "$CONNECT_PRIVILEGES" = 'f|f'
+test "$CONNECT_PRIVILEGES" = 'f|f|f'
 
 cleanup
 trap - EXIT

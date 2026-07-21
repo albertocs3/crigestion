@@ -60,6 +60,13 @@ describe("staging isolated restore runner", () => {
     );
 
     expect(drill).toContain("--role=crigestion_staging_migrator");
+    expect(drill).toContain(
+      'GRANT CREATE ON DATABASE "$DRILL_DB" TO crigestion_staging_migrator;'
+    );
+    expect(drill).toContain(
+      'REVOKE ALL PRIVILEGES ON DATABASE "$DRILL_DB"'
+    );
+    expect(drill).toContain("test \"$CONNECT_PRIVILEGES\" = 'f|f|f'");
     expect(drill).toContain("RESTORE_DRILL_OK");
   });
 });
