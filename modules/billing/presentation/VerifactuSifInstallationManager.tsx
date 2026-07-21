@@ -5,6 +5,7 @@ import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { VerifactuSifInstallationManagement } from "../application/verifactuSifInstallations";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
+import { createIdempotencyKey, fingerprintText } from "./idempotencyFingerprint";
 
 type Management = NonNullable<VerifactuSifInstallationManagement>;
 type SubmissionState = { status: "idle" | "submitting" | "success" | "error"; message?: string };
@@ -25,7 +26,7 @@ export function VerifactuSifInstallationManager({ management }: { management: Ma
 
 function CreateInstallationForm({ management }: { management: Management }) {
   const router = useRouter();
-  const idempotencyRef = useRef<{ hash: string; key: string } | null>(null);
+  const idempotencyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -44,8 +45,8 @@ function CreateInstallationForm({ management }: { management: Management }) {
     setState({ status: "submitting" });
     try {
       const serialized = JSON.stringify(body);
-      const hash = await sha256Hex(serialized);
-      if (idempotencyRef.current?.hash !== hash) idempotencyRef.current = { hash, key: crypto.randomUUID() };
+      const fingerprint = fingerprintText(serialized);
+      if (idempotencyRef.current?.fingerprint !== fingerprint) idempotencyRef.current = { fingerprint, key: createIdempotencyKey() };
       const response = await fetch("/api/platform/verifactu/sif-installations", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyRef.current.key, "X-CSRF-Token": await fetchCsrfToken() },
@@ -81,4 +82,3 @@ function CreateInstallationForm({ management }: { management: Management }) {
 }
 
 function Data({ label, value }: { label: string; value: string }) { return <div><span className="data-label">{label}</span><strong>{value}</strong></div>; }
-async function sha256Hex(value: string): Promise<string> { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""); }
