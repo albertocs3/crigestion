@@ -30,6 +30,7 @@ describe("staging recovery bundle deployment", () => {
     expect(script).toContain("SNAPSHOT_UPLOAD_BYTES");
     expect(script).toContain("crigestion_bundle_snapshot_");
     expect(script).toContain('--dbname="$SNAPSHOT_DB"');
+    expect(script).toContain('< "$WORK_DIR/database/crigestion_staging.dump"');
     expect(script).toContain("RECOVERY_BUNDLE_SNAPSHOT_CLEANUP_FAILED");
     expect(script).toContain("SET ROLE crigestion_staging_app");
     expect(script).toContain('"productVersion": "$PRODUCT_VERSION"');
@@ -132,6 +133,7 @@ describe("staging recovery bundle deployment", () => {
     expect(drill).toContain("crigestion_recovery_drill_");
     expect(drill).toContain("extract-recovery-bundle.py");
     expect(drill).toContain("pg_restore");
+    expect(drill).toContain('< "$PAYLOAD/database/crigestion_staging.dump"');
     expect(drill).toContain('test "$(sha256sum "$restored_file"');
     expect(drill).toContain("RECOVERY_DRILL_OK");
     expect(drill).toContain("RECOVERY_DRILL_CLEANUP_FAILED");

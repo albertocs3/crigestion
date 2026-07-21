@@ -90,6 +90,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+cd /
+
 if ! [[ "$KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$ ]]; then
   echo 'RECOVERY_BUNDLE_KEY_ID_INVALID' >&2
   exit 1
@@ -235,7 +237,7 @@ SQL
 runuser -u postgres -- "$PG_BIN_DIR/pg_restore" \
   --exit-on-error --single-transaction --no-owner --no-privileges \
   --role=crigestion_staging_migrator --dbname="$SNAPSHOT_DB" \
-  "$WORK_DIR/database/crigestion_staging.dump"
+  < "$WORK_DIR/database/crigestion_staging.dump"
 EXPECTED_TABLES="$(runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$SNAPSHOT_DB" -Atqc \
   "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relname IN (
