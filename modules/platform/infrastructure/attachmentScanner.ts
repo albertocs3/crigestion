@@ -21,7 +21,7 @@ export class ClamdAttachmentScanner implements AttachmentScanner {
     return new Promise((resolve) => {
       const child = spawn(
         this.executablePath,
-        ["--fdpass", "--no-summary", "--infected", "--", filePath],
+        clamdScanArguments(filePath),
         {
           shell: false,
           windowsHide: true,
@@ -60,6 +60,10 @@ export class ClamdAttachmentScanner implements AttachmentScanner {
       });
     });
   }
+}
+
+export function clamdScanArguments(filePath: string): string[] {
+  return ["--stream", "--no-summary", "--infected", "--", filePath];
 }
 
 function inconclusive(): AttachmentScanResult {

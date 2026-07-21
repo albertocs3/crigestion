@@ -450,6 +450,14 @@ systemctl is-active clamav-daemon.service
 /usr/bin/clamdscan --version
 ```
 
+La aplicacion usa `clamdscan --stream`, no `--fdpass`. El streaming mantiene
+el escaneo funcional dentro del espacio de nombres creado por
+`ProtectSystem=strict`; `--fdpass` puede hacer que `clamd` rechace el descriptor
+como no regular al cruzar ese limite. La validacion previa a una release debe
+ejecutar un archivo inocuo como `crigestion-staging` con el mismo aislamiento
+systemd de la unidad web y exigir codigo de salida `0`. No relajar
+`ProtectSystem` ni convertir un resultado inconcluso en aceptacion.
+
 Configurar `ATTACHMENT_STORAGE_ROOT` y `ATTACHMENT_CLAMD_SCAN_PATH` en
 `app.env`. El paquete integral copia solo claves definitivas
 `company-logo/<empresa>/<adjunto>.(png|jpg)` dentro de
