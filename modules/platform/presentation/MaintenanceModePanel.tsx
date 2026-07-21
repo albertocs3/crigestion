@@ -49,15 +49,22 @@ export function MaintenanceModePanel({
         body: JSON.stringify({})
       });
       const body = (await response.json().catch(() => null)) as
-        | { status?: string; message?: string; code?: string; errorCode?: string }
+        | {
+            status?: string;
+            message?: string;
+            code?: string;
+            errorCode?: string;
+            restartRequired?: boolean;
+          }
         | null;
 
       if (response.ok) {
         setState({
           status: "success",
-          message: "Restauracion completada."
+          message: body?.restartRequired
+            ? "Restauracion completada. Todas las sesiones se han invalidado. Reinicia la aplicacion antes de desactivar el mantenimiento."
+            : "Restauracion completada."
         });
-        router.refresh();
         return;
       }
 
@@ -143,14 +150,21 @@ export function MaintenanceModePanel({
           </p>
           <button
             className="button button-secondary"
-            disabled={state.status === "submitting"}
+            disabled={maintenance.restartRequired || state.status === "submitting"}
             type="button"
             onClick={handleDisable}
           >
-            {state.status === "submitting" && state.action === "maintenance"
+            {maintenance.restartRequired
+              ? "Reinicio obligatorio"
+              : state.status === "submitting" && state.action === "maintenance"
               ? "Actualizando..."
               : "Desactivar mantenimiento"}
           </button>
+          {maintenance.restartRequired ? (
+            <p className="message error">
+              Reinicia la aplicacion y sus workers antes de desactivar el mantenimiento.
+            </p>
+          ) : null}
           {maintenance.mode === "RESTORE" &&
           maintenance.restoreOperation?.status === "VALIDATED" ? (
             <button

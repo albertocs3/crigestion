@@ -4,7 +4,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import type { PrismaClient, RestoreOperation } from "@prisma/client";
+import type { Prisma, PrismaClient, RestoreOperation } from "@prisma/client";
 import { z } from "zod";
 import { productVersion } from "@/modules/platform/productVersion";
 import {
@@ -72,6 +72,9 @@ export type RestoreApplyExecutorResult =
       status: "COMPLETED";
       backupOperationId: string;
       preRestoreBackupOperationId: string;
+      revokedSessionCount: number;
+      versionedUserCount: number;
+      restartRequired: true;
     }
   | {
       processed: true;
@@ -274,7 +277,7 @@ export async function processNextValidatedRestoreApply(
       env
     });
 
-    await recordRestoreApplyCompleted(options.prisma, {
+    const completion = await recordRestoreApplyCompleted(options.prisma, {
       operation,
       sourceBackup: verifiedSourceBackupSnapshot(operation.backupOperation),
       preRestoreBackup,
@@ -287,7 +290,10 @@ export async function processNextValidatedRestoreApply(
       operationId: operation.id,
       status: "COMPLETED",
       backupOperationId: operation.backupOperationId,
-      preRestoreBackupOperationId: preRestoreBackup.id
+      preRestoreBackupOperationId: preRestoreBackup.id,
+      revokedSessionCount: completion.revokedSessionCount,
+      versionedUserCount: completion.versionedUserCount,
+      restartRequired: true
     };
   } catch (error) {
     const errorCode = classifyRestoreApplyError(error);
@@ -624,11 +630,11 @@ async function recordRestoreApplyCompleted(
     completedAt: Date;
     actor?: RestoreApplyExecutorOptions["actor"];
   }
-): Promise<void> {
-  await prisma.$transaction([
-    upsertVerifiedBackup(prisma, context.sourceBackup),
-    upsertVerifiedBackup(prisma, context.preRestoreBackup),
-    prisma.restoreOperation.upsert({
+): Promise<{ revokedSessionCount: number; versionedUserCount: number }> {
+  return prisma.$transaction(async (transaction) => {
+    await upsertVerifiedBackup(transaction, context.sourceBackup);
+    await upsertVerifiedBackup(transaction, context.preRestoreBackup);
+    await transaction.restoreOperation.upsert({
       where: { id: context.operation.id },
       update: {
         status: "COMPLETED",
@@ -649,8 +655,59 @@ async function recordRestoreApplyCompleted(
         preRestoreBackupOperationId: context.preRestoreBackup.id,
         errorCode: null
       }
-    }),
-    prisma.auditEvent.create({
+    });
+
+    await transaction.platformMaintenanceState.upsert({
+      where: { singletonKey: 1 },
+      update: {
+        enabled: true,
+        mode: "RESTORE",
+        reason: "Reinicio obligatorio despues de restauracion",
+        restoreOperationId: context.operation.id,
+        enabledById: context.operation.requestedById,
+        disabledById: null,
+        enabledAt: context.completedAt,
+        disabledAt: null,
+        restartRequiredAt: context.completedAt
+      },
+      create: {
+        singletonKey: 1,
+        enabled: true,
+        mode: "RESTORE",
+        reason: "Reinicio obligatorio despues de restauracion",
+        restoreOperationId: context.operation.id,
+        enabledById: context.operation.requestedById,
+        enabledAt: context.completedAt,
+        restartRequiredAt: context.completedAt
+      }
+    });
+
+    const versionedUsers = await transaction.user.updateMany({
+      data: {
+        securityVersion: { increment: 1 }
+      }
+    });
+    const revokedSessions = await transaction.session.updateMany({
+      where: { revokedAt: null },
+      data: {
+        revokedAt: context.completedAt,
+        revokeReason: "RESTORE_COMPLETED"
+      }
+    });
+
+    await transaction.auditEvent.create({
+      data: {
+        eventType: "RESTORE_SESSIONS_INVALIDATED",
+        actorType: restoreApplyActorType(context),
+        payload: {
+          ...restoreApplyActorPayload(context),
+          restoreOperationId: context.operation.id,
+          revokedSessionCount: revokedSessions.count,
+          versionedUserCount: versionedUsers.count
+        }
+      }
+    });
+    await transaction.auditEvent.create({
       data: {
         eventType: "RESTORE_COMPLETED",
         actorType: restoreApplyActorType(context),
@@ -659,11 +716,19 @@ async function recordRestoreApplyCompleted(
           restoreOperationId: context.operation.id,
           backupOperationId: context.operation.backupOperationId,
           preRestoreBackupOperationId: context.preRestoreBackup.id,
-          status: "COMPLETED"
+          status: "COMPLETED",
+          revokedSessionCount: revokedSessions.count,
+          versionedUserCount: versionedUsers.count,
+          restartRequired: true
         }
       }
-    })
-  ]);
+    });
+
+    return {
+      revokedSessionCount: revokedSessions.count,
+      versionedUserCount: versionedUsers.count
+    };
+  });
 }
 
 async function recordRestoreApplyFailed(
@@ -751,7 +816,7 @@ function restoreApplyActorPayload(context: {
 }
 
 function upsertVerifiedBackup(
-  prisma: PrismaClient,
+  prisma: PrismaClient | Prisma.TransactionClient,
   backup: VerifiedBackupOperationSnapshot
 ) {
   return prisma.backupOperation.upsert({

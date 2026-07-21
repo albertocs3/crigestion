@@ -8,6 +8,7 @@ SENDER="${CRIGESTION_ALERT_SENDER:-}"
 SENDMAIL='/usr/sbin/sendmail'
 HEALTH_UNIT='crigestion-staging-health-check.service'
 BACKUP_UNIT='crigestion-staging-backup.service'
+RECOVERY_BUNDLE_UNIT='crigestion-staging-recovery-bundle.service'
 STATE_DIR='/var/lib/crigestion-staging-alerts'
 COOLDOWN_SECONDS=3600
 MODE="${1:-health-failure}"
@@ -39,6 +40,12 @@ case "$MODE" in
     MONITORED_UNIT="$BACKUP_UNIT"
     ALERT_KEY='backup'
     SUBJECT='[CriGestion staging] PostgreSQL backup failed'
+    IS_FAILURE=1
+    ;;
+  recovery-bundle-failure)
+    MONITORED_UNIT="$RECOVERY_BUNDLE_UNIT"
+    ALERT_KEY='recovery-bundle'
+    SUBJECT='[CriGestion staging] recovery bundle failed'
     IS_FAILURE=1
     ;;
   --dry-run)

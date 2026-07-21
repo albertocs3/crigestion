@@ -1,0 +1,77 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const root = process.cwd();
+
+describe("staging recovery bundle deployment", () => {
+  it("builds an encrypted allowlisted bundle without nesting its master key", async () => {
+    const script = await read("deploy/plesk/staging/scripts/crigestion-staging-recovery-bundle");
+
+    expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("umask 077");
+    expect(script).toContain("verify-staging-recovery-keyrings.ts");
+    expect(script).toContain("recovery-bundle-crypto.ts");
+    expect(script).toContain("RECOVERY_BUNDLE_KEY_FILE");
+    expect(script).not.toContain("BACKUP_ENCRYPTION_KEY");
+    expect(script).not.toContain("recovery-bundle.key.cred");
+    expect(script).toContain('"uploads": { "status": "not_implemented"');
+    expect(script).toContain("roles-allowlisted.sql");
+    expect(script).toContain("application-release.tar");
+    expect(script).toContain("RELEASE_COMMIT");
+    expect(script).toContain("--dereference --hard-dereference");
+    expect(script).toContain("CONFIG_HASH_BEFORE");
+    expect(script).toContain("CONFIG_HASH_AFTER");
+    expect(script).toContain("RECOVERY_BUNDLE_OK");
+    expect(script).toContain('[ "$PUBLISHED" -eq 1 ]');
+
+    for (const file of [
+      "app.env",
+      "verifactu-worker.env",
+      "migrator.env",
+      "alert.env",
+      "build.env",
+      "recovery-bundle.env"
+    ]) {
+      expect(script).toContain(file);
+    }
+  });
+
+  it("uses an encrypted systemd credential and a root-only runtime directory", async () => {
+    const unit = await read(
+      "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.service"
+    );
+    const timer = await read(
+      "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.timer"
+    );
+    const alert = await read(
+      "deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle-alert.service"
+    );
+
+    expect(unit).toContain("LoadCredentialEncrypted=recovery-bundle.key:");
+    expect(unit).toContain("EnvironmentFile=/etc/crigestion-staging/recovery-bundle.env");
+    expect(unit).toContain("RECOVERY_BUNDLE_KEY_FILE=%d/recovery-bundle.key");
+    expect(unit).toContain("RuntimeDirectoryMode=0700");
+    expect(unit).toContain("UMask=0077");
+    expect(unit).toContain("ProtectSystem=strict");
+    expect(unit).toContain("OnFailure=crigestion-staging-recovery-bundle-alert.service");
+    expect(timer).toContain("Persistent=true");
+    expect(timer).toContain("crigestion-staging-recovery-bundle.service");
+    expect(alert).toContain("recovery-bundle-failure");
+  });
+
+  it("monitors freshness and transport checksum without loading the decryption key", async () => {
+    const health = await read(
+      "deploy/plesk/staging/scripts/crigestion-staging-health-check"
+    );
+
+    expect(health).toContain("crigestion-staging-recovery-bundle.timer");
+    expect(health).toContain("CRIGESTION_STAGING_RECOVERY_BUNDLE_STALE");
+    expect(health).toContain("sha256sum -c");
+    expect(health).not.toContain("RECOVERY_BUNDLE_KEY_FILE");
+  });
+});
+
+async function read(relativePath: string): Promise<string> {
+  return readFile(path.join(root, relativePath), "utf8");
+}

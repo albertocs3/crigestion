@@ -48,6 +48,11 @@ Revisar como minimo:
 | `VERIFACTU_CREDENTIAL_ACTIVE_KEY_ID` / `VERIFACTU_CREDENTIAL_KEYS` | Obligatorias | Keyring separado para PFX; custodiar fuera del repositorio. |
 | `VERIFACTU_RESPONSE_ACTIVE_KEY_ID` / `VERIFACTU_RESPONSE_KEYS` | Obligatorias | Keyring separado para respuestas AEAT cifradas. |
 | `VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET` | Obligatoria | Secreto estable y distinto del de sesiones; conservar durante la retencion idempotente. |
+| `RECOVERY_BUNDLE_KEY_ID` | Obligatoria en el bundle integral de staging | Identificador no secreto de la clave maestra custodiada externamente. |
+
+La clave maestra de recovery no se introduce como variable de entorno. El
+oneshot la recibe mediante `LoadCredentialEncrypted`; conservar fuera del host
+la clave de 32 bytes y todas las generaciones necesarias durante la retencion.
 
 ## 4. Validacion previa
 
@@ -121,6 +126,10 @@ Orden recomendado:
     Confirmar despues el estado `healthy` del contenedor. Desde el host,
     `npm run verifactu:health` solo valida el despliegue indicado por
     `VERIFACTU_WORKER_DEPLOYMENT_ID` y su fichero de estado local.
+12. En staging, ejecutar manualmente el paquete integral cifrado, exigir
+    `RECOVERY_BUNDLE_OK`, verificar su checksum y solo despues habilitar
+    `crigestion-staging-recovery-bundle.timer`. Confirmar que la copia externa no
+    contiene la clave maestra y que permanece recuperable desde su custodia.
 
 ## 7. Verificacion post-despliegue
 
@@ -207,6 +216,15 @@ No revertir migraciones de produccion manualmente sin plan de datos revisado.
 - Las restauraciones se validan primero de forma no destructiva con `npm run restore:validate`; este comando no ejecuta `pg_restore` ni modifica datos de negocio.
 - Antes de una restauracion real debe activarse modo mantenimiento; las mutaciones normales quedan bloqueadas, pero login/logout/sesion/CSRF y el endpoint de mantenimiento siguen disponibles para evitar lockout.
 - La aplicacion real de una restauracion debe crear antes una copia previa verificada y conservar su identificador en `preRestoreBackupOperationId`.
+- Tras una restauracion correcta, comprobar `revokedSessionCount`,
+  `versionedUserCount` y `restartRequired: true`; reiniciar aplicacion, workers y
+  schedulers antes de desactivar el mantenimiento.
+- En staging, una recuperacion desde el dump PostgreSQL diario debe usar
+  `crigestion-staging-restore`: nunca ejecutar `pg_restore` manualmente sobre la
+  base activa ni retirar un sentinel `RECOVERY_REQUIRED` sin diagnostico.
+- El paquete integral de staging incluye configuracion y keyrings historicos,
+  pero no es recuperacion ante perdida total mientras solo exista en el mismo
+  VPS. Replicarlo cifrado a una custodia externa e inmutable y ejecutar drills.
 - El paso destructivo de restauracion solo debe activarse con mantenimiento en modo `RESTORE`.
 - El perfil `verifactu-test` es opt-in, no publica puertos y no sustituye el
   paso controlado de migraciones. Nunca debe coexistir con otro worker para la

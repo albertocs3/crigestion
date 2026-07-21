@@ -4,15 +4,25 @@ set -euo pipefail
 APP_SERVICE='crigestion-staging-app.service'
 WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
 BACKUP_TIMER='crigestion-staging-backup.timer'
+RECOVERY_TIMER='crigestion-staging-recovery-bundle.timer'
 BACKUP_DIR='/root/crigestion-staging-backups'
+RECOVERY_DIR='/root/crigestion-staging-recovery'
 BACKUP_MAX_AGE_SECONDS=129600
+RECOVERY_MAX_AGE_SECONDS=129600
 PUBLIC_HEALTH='https://gestion-test.crisoft.es/api/health'
 LOCAL_HEALTH='http://127.0.0.1:3101/api/health'
 NODE='/opt/plesk/node/22/bin/node'
+RESTORE_SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
+
+if [ -e "$RESTORE_SENTINEL" ]; then
+  echo 'HEALTH_BLOCKED_BY_RESTORE' >&2
+  exit 1
+fi
 
 systemctl is-active --quiet "$APP_SERVICE"
 systemctl is-active --quiet "$WORKER_SERVICE"
 systemctl is-active --quiet "$BACKUP_TIMER"
+systemctl is-active --quiet "$RECOVERY_TIMER"
 
 LATEST_BACKUP="$(
   find "$BACKUP_DIR" \
@@ -50,6 +60,34 @@ ACTUAL_HASH="$(/usr/bin/sha256sum "$LATEST_BACKUP" | cut -d' ' -f1)"
 test "$ACTUAL_HASH" = "$EXPECTED_HASH"
 
 /usr/bin/pg_restore --list "$LATEST_BACKUP" > /dev/null
+
+LATEST_RECOVERY="$(
+  find "$RECOVERY_DIR" \
+    -maxdepth 1 \
+    -type f \
+    -name 'crigestion-staging-*.cgrb' \
+    -printf '%T@ %p\n' |
+  sort -nr |
+  head -n 1 |
+  cut -d' ' -f2-
+)"
+
+test -n "$LATEST_RECOVERY"
+test -f "$LATEST_RECOVERY.sha256"
+RECOVERY_MTIME="$(stat -c '%Y' "$LATEST_RECOVERY")"
+
+if ((
+  NOW_EPOCH < RECOVERY_MTIME ||
+  NOW_EPOCH - RECOVERY_MTIME > RECOVERY_MAX_AGE_SECONDS
+)); then
+  echo 'CRIGESTION_STAGING_RECOVERY_BUNDLE_STALE' >&2
+  exit 1
+fi
+
+(
+  cd "$RECOVERY_DIR"
+  /usr/bin/sha256sum -c "$(basename -- "$LATEST_RECOVERY").sha256"
+)
 
 LOCAL_RESPONSE="$(
   curl \

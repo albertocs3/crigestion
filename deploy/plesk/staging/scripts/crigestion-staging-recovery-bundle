@@ -1,0 +1,281 @@
+#!/bin/bash
+set -euo pipefail
+
+umask 077
+
+BACKUP_DIR='/root/crigestion-staging-backups'
+BUNDLE_DIR='/root/crigestion-staging-recovery'
+RUNTIME_DIR='/run/crigestion-staging-recovery'
+APP_ENV='/etc/crigestion-staging/app.env'
+WORKER_ENV='/etc/crigestion-staging/verifactu-worker.env'
+CONFIG_DIR='/etc/crigestion-staging'
+CURRENT_RELEASE='/opt/crigestion-staging/current'
+NODE='/opt/plesk/node/22/bin/node'
+KEY_ID="${RECOVERY_BUNDLE_KEY_ID:-}"
+RETENTION_DAYS='14'
+BACKUP_MAX_AGE_SECONDS='129600'
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BUNDLE_ID="staging-$STAMP"
+FINAL="$BUNDLE_DIR/crigestion-$BUNDLE_ID.cgrb"
+CHECKSUM="$FINAL.sha256"
+CHECKSUM_TMP="$CHECKSUM.tmp.$$"
+WORK_DIR=''
+SUCCESS=0
+PUBLISHED=0
+CHECKSUM_CREATED=0
+
+cleanup() {
+  if [ -n "$WORK_DIR" ]; then
+    rm -rf -- "$WORK_DIR"
+  fi
+  if [ "$SUCCESS" -ne 1 ] && [ "$PUBLISHED" -eq 1 ]; then
+    rm -f -- "$FINAL"
+  fi
+  if [ "$SUCCESS" -ne 1 ] && [ "$CHECKSUM_CREATED" -eq 1 ]; then
+    rm -f -- "$CHECKSUM"
+  fi
+  rm -f -- "$CHECKSUM_TMP"
+}
+
+trap cleanup EXIT
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo 'RECOVERY_BUNDLE_ROOT_REQUIRED' >&2
+  exit 1
+fi
+
+if ! [[ "$KEY_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,119}$ ]]; then
+  echo 'RECOVERY_BUNDLE_KEY_ID_INVALID' >&2
+  exit 1
+fi
+
+test -n "${RECOVERY_BUNDLE_KEY_FILE:-}"
+test -f "$RECOVERY_BUNDLE_KEY_FILE"
+test ! -L "$RECOVERY_BUNDLE_KEY_FILE"
+
+install -d -o root -g root -m 0700 "$BUNDLE_DIR" "$RUNTIME_DIR"
+exec 9>"$BUNDLE_DIR/.recovery-bundle.lock"
+if ! flock -n 9; then
+  echo 'RECOVERY_BUNDLE_ALREADY_RUNNING'
+  exit 0
+fi
+
+if [ -e /var/lib/crigestion-staging-restore/restore-required ]; then
+  echo 'RECOVERY_BUNDLE_BLOCKED_BY_RESTORE' >&2
+  exit 1
+fi
+
+LATEST_BACKUP="$(
+  find "$BACKUP_DIR" -maxdepth 1 -type f \
+    -name 'crigestion_staging-auto-*.dump' -printf '%T@ %p\n' |
+  sort -nr | head -n 1 | cut -d' ' -f2-
+)"
+test -n "$LATEST_BACKUP"
+test ! -L "$LATEST_BACKUP"
+test ! -L "$LATEST_BACKUP.sha256"
+test "$(stat -c '%U|%a' "$LATEST_BACKUP")" = 'root|600'
+test "$(stat -c '%U|%a' "$LATEST_BACKUP.sha256")" = 'root|600'
+BACKUP_AGE_SECONDS="$(( $(date -u +%s) - $(stat -c '%Y' "$LATEST_BACKUP") ))"
+test "$BACKUP_AGE_SECONDS" -ge 0
+test "$BACKUP_AGE_SECONDS" -le "$BACKUP_MAX_AGE_SECONDS"
+(
+  cd "$BACKUP_DIR"
+  /usr/bin/sha256sum -c "$(basename -- "$LATEST_BACKUP").sha256"
+)
+/usr/bin/pg_restore --list "$LATEST_BACKUP" > /dev/null
+SOURCE_DUMP_HASH="$(cut -d' ' -f1 "$LATEST_BACKUP.sha256")"
+[[ "$SOURCE_DUMP_HASH" =~ ^[a-f0-9]{64}$ ]]
+
+"$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/verify-staging-recovery-keyrings.ts" \
+  "$APP_ENV" "$WORKER_ENV"
+
+CONFIG_NAMES=(app.env verifactu-worker.env migrator.env alert.env build.env recovery-bundle.env)
+CONFIG_HASH_BEFORE="$({
+  for name in "${CONFIG_NAMES[@]}"; do
+    sha256sum "$CONFIG_DIR/$name" | cut -d' ' -f1
+  done
+})"
+
+WORK_DIR="$(mktemp -d "$RUNTIME_DIR/$BUNDLE_ID.XXXXXX")"
+chmod 0700 "$WORK_DIR"
+mkdir -m 0700 \
+  "$WORK_DIR/configuration" \
+  "$WORK_DIR/database" \
+  "$WORK_DIR/infrastructure" \
+  "$WORK_DIR/release"
+
+for name in "${CONFIG_NAMES[@]}"; do
+  source_file="$CONFIG_DIR/$name"
+  test -f "$source_file"
+  test ! -L "$source_file"
+  case "$name" in
+    app.env) expected='root|crigestion-staging|640' ;;
+    verifactu-worker.env) expected='root|crigestion-staging-verifactu|640' ;;
+    migrator.env) expected='root|crigestion-staging-migrator|640' ;;
+    *) expected='root|root|600' ;;
+  esac
+  test "$(stat -c '%U|%G|%a' "$source_file")" = "$expected"
+  cp --preserve=mode,timestamps -- "$source_file" "$WORK_DIR/configuration/$name"
+done
+CONFIG_HASH_COPY="$({
+  for name in "${CONFIG_NAMES[@]}"; do
+    sha256sum "$WORK_DIR/configuration/$name" | cut -d' ' -f1
+  done
+})"
+test "$CONFIG_HASH_BEFORE" = "$CONFIG_HASH_COPY"
+
+cp --preserve=mode,timestamps -- "$LATEST_BACKUP" \
+  "$WORK_DIR/database/crigestion_staging.dump"
+test "$(sha256sum "$WORK_DIR/database/crigestion_staging.dump" | cut -d' ' -f1)" = "$SOURCE_DUMP_HASH"
+/usr/bin/pg_restore --list "$WORK_DIR/database/crigestion_staging.dump" > /dev/null
+printf '%s  %s\n' "$SOURCE_DUMP_HASH" 'crigestion_staging.dump' \
+  > "$WORK_DIR/database/crigestion_staging.dump.sha256"
+chmod 0600 "$WORK_DIR/database/crigestion_staging.dump.sha256"
+
+cat > "$WORK_DIR/database/roles-allowlisted.sql" <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'crigestion_staging_app') THEN
+    CREATE ROLE crigestion_staging_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'crigestion_staging_migrator') THEN
+    CREATE ROLE crigestion_staging_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+  END IF;
+END
+$$;
+-- Rotate both role passwords through the secret store before opening traffic.
+SQL
+chmod 0600 "$WORK_DIR/database/roles-allowlisted.sql"
+
+RELEASE_PATH="$(readlink -f -- "$CURRENT_RELEASE")"
+RELEASE_ID="$(basename -- "$RELEASE_PATH")"
+[[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$ ]]
+test "$RELEASE_PATH" = "/opt/crigestion-staging/releases/$RELEASE_ID"
+BUILD_ID="$(tr -d '\r\n' < "$RELEASE_PATH/.next/BUILD_ID")"
+[[ "$BUILD_ID" =~ ^[A-Za-z0-9_-]{10,80}$ ]]
+COMMIT_SHA="$(tr -d '\r\n' < "$RELEASE_PATH/RELEASE_COMMIT")"
+[[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}([a-f0-9]{24})?$ ]]
+LOCK_HASH="$(sha256sum "$RELEASE_PATH/package-lock.json" | cut -d' ' -f1)"
+MIGRATION_HASH="$(
+  find "$RELEASE_PATH/prisma/migrations" -type f -name migration.sql -print0 |
+  sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+)"
+
+cp --preserve=mode,timestamps -- "$RELEASE_PATH/package.json" "$WORK_DIR/release/"
+cp --preserve=mode,timestamps -- "$RELEASE_PATH/package-lock.json" "$WORK_DIR/release/"
+cp --preserve=mode,timestamps -- "$RELEASE_PATH/prisma/schema.prisma" "$WORK_DIR/release/"
+printf '%s\n' "$BUILD_ID" > "$WORK_DIR/release/BUILD_ID"
+printf '%s\n' "$COMMIT_SHA" > "$WORK_DIR/release/RELEASE_COMMIT"
+
+if find "$RELEASE_PATH" -xdev ! -type f ! -type d ! -type l -print -quit | grep -q .; then
+  echo 'RECOVERY_RELEASE_SPECIAL_FILE_REJECTED' >&2
+  exit 1
+fi
+while IFS= read -r -d '' link_path; do
+  link_target="$(readlink -f -- "$link_path")"
+  case "$link_target" in
+    "$RELEASE_PATH"/*) ;;
+    *) echo 'RECOVERY_RELEASE_SYMLINK_ESCAPE' >&2; exit 1 ;;
+  esac
+done < <(find "$RELEASE_PATH" -xdev -type l -print0)
+tar --create --numeric-owner --owner=0 --group=0 --one-file-system \
+  --dereference --hard-dereference \
+  --exclude='./.git' --exclude='./.env' --exclude='./.env.*' \
+  --exclude='./.next/cache' --exclude='./node_modules/.cache' \
+  --file="$WORK_DIR/release/application-release.tar" \
+  --directory="$RELEASE_PATH" .
+RELEASE_ARCHIVE_HASH="$(sha256sum "$WORK_DIR/release/application-release.tar" | cut -d' ' -f1)"
+
+for source_file in \
+  /usr/local/sbin/crigestion-staging-backup \
+  /usr/local/sbin/crigestion-staging-health-alert \
+  /usr/local/sbin/crigestion-staging-health-check \
+  /usr/local/sbin/crigestion-staging-recovery-bundle \
+  /usr/local/sbin/crigestion-staging-restore \
+  /usr/local/sbin/crigestion-staging-restore-drill \
+  /etc/systemd/system/crigestion-staging-app.service \
+  /etc/systemd/system/crigestion-staging-backup-alert.service \
+  /etc/systemd/system/crigestion-staging-backup.service \
+  /etc/systemd/system/crigestion-staging-backup.timer \
+  /etc/systemd/system/crigestion-staging-health-alert.service \
+  /etc/systemd/system/crigestion-staging-health-check.service \
+  /etc/systemd/system/crigestion-staging-health-check.timer \
+  /etc/systemd/system/crigestion-staging-recovery-bundle.service \
+  /etc/systemd/system/crigestion-staging-recovery-bundle-alert.service \
+  /etc/systemd/system/crigestion-staging-recovery-bundle.timer \
+  /etc/systemd/system/crigestion-staging-verifactu-worker.service \
+  /etc/systemd/system/crigestion-staging-migrate@.service; do
+  test -f "$source_file"
+  test ! -L "$source_file"
+  cp --preserve=mode,timestamps -- "$source_file" "$WORK_DIR/infrastructure/"
+done
+
+cat > "$WORK_DIR/manifest.json" <<JSON
+{
+  "format": "CRIGESTION-RECOVERY-BUNDLE-v1",
+  "bundleId": "$BUNDLE_ID",
+  "createdAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "environment": "staging",
+  "database": "crigestion_staging",
+  "sourceDump": "$(basename -- "$LATEST_BACKUP")",
+  "sourceDumpSha256": "$SOURCE_DUMP_HASH",
+  "releaseId": "$RELEASE_ID",
+  "commitSha": "$COMMIT_SHA",
+  "buildId": "$BUILD_ID",
+  "releaseArchiveSha256": "$RELEASE_ARCHIVE_HASH",
+  "packageLockSha256": "$LOCK_HASH",
+  "migrationsSha256": "$MIGRATION_HASH",
+  "uploads": { "status": "not_implemented", "entries": 0 },
+  "keyCustody": "external_systemd_credential",
+  "verifactuEnvironment": "TEST"
+}
+JSON
+chmod 0600 "$WORK_DIR/manifest.json"
+
+(
+  cd "$WORK_DIR"
+  find . -type f ! -name inventory.tsv ! -name inventory.sha256 \
+    -printf '%P\t%m\t%U\t%G\t%s\n' | LC_ALL=C sort > inventory.tsv
+  find . -type f ! -name inventory.sha256 -print0 | LC_ALL=C sort -z | \
+    xargs -0 sha256sum > inventory.sha256
+  chmod 0600 inventory.tsv inventory.sha256
+)
+
+tar --create --gzip --numeric-owner --owner=0 --group=0 \
+  --file=- --directory="$WORK_DIR" . |
+  "$NODE" --conditions=react-server --import tsx \
+    "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" \
+    encrypt "$FINAL" "$BUNDLE_ID" "$KEY_ID"
+PUBLISHED=1
+
+CONFIG_HASH_AFTER="$({
+  for name in "${CONFIG_NAMES[@]}"; do
+    sha256sum "$CONFIG_DIR/$name" | cut -d' ' -f1
+  done
+})"
+test "$CONFIG_HASH_BEFORE" = "$CONFIG_HASH_AFTER"
+
+"$NODE" --conditions=react-server --import tsx \
+  "$CURRENT_RELEASE/scripts/recovery-bundle-crypto.ts" verify "$FINAL"
+
+HASH="$(sha256sum "$FINAL" | cut -d' ' -f1)"
+printf '%s  %s\n' "$HASH" "$(basename -- "$FINAL")" > "$CHECKSUM_TMP"
+chmod 0600 "$FINAL" "$CHECKSUM_TMP"
+sync -f "$FINAL" "$CHECKSUM_TMP"
+ln -- "$CHECKSUM_TMP" "$CHECKSUM"
+CHECKSUM_CREATED=1
+rm -f -- "$CHECKSUM_TMP"
+sync -f "$BUNDLE_DIR"
+
+SUCCESS=1
+trap - EXIT
+rm -rf -- "$WORK_DIR"
+WORK_DIR=''
+
+find "$BUNDLE_DIR" -maxdepth 1 -type f \
+  -name 'crigestion-staging-*.cgrb' -mtime "+$RETENTION_DAYS" -delete
+find "$BUNDLE_DIR" -maxdepth 1 -type f \
+  -name 'crigestion-staging-*.cgrb.sha256' -mtime "+$RETENTION_DAYS" -delete
+
+echo "RECOVERY_BUNDLE_OK name=$(basename -- "$FINAL") sha256=$HASH"

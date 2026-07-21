@@ -31,6 +31,17 @@ const applyRestoreSchema = z.object({}).strict();
 export async function POST(request: Request) {
   const correlationId = getCorrelationId(request);
 
+  if (process.env.NODE_ENV === "production") {
+    return jsonResponse(
+      request,
+      {
+        code: "RESTORE_APPLY_REQUIRES_OPERATIVE_RUNNER",
+        message: "La restauracion debe ejecutarse mediante el proceso operativo aislado."
+      },
+      { status: 503 }
+    );
+  }
+
   if (!isAllowedOrigin(request)) {
     return jsonResponse(request, originNotAllowed(), { status: 403 });
   }

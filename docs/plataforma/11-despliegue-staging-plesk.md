@@ -106,19 +106,24 @@ Nunca copiar los `CHANGE_ME` ni conservar la extension `.example`. Permisos:
 ```text
 build.env                    root:root                          0600
 alert.env                    root:root                          0600
+recovery-bundle.env          root:root                          0600
 app.env                      root:crigestion-staging            0640
 migrator.env                 root:crigestion-staging-migrator   0640
 verifactu-worker.env         root:crigestion-staging-verifactu  0640
+recovery-bundle.key.cred     root:root                          0600
 ```
 
-No registrar ni mostrar su contenido durante verificaciones.
+No registrar ni mostrar su contenido durante verificaciones. La clave maestra
+del paquete de recuperacion no se guarda en ningun `.env`: se conserva fuera
+del VPS y systemd entrega al oneshot una credencial cifrada.
 
 ## 4. Validacion e instalacion de unidades operativas
 
-Crear antes el directorio de backups:
+Crear antes los directorios root-only de backups y paquetes de recuperacion:
 
 ```bash
 install -d -o root -g root -m 0700 /root/crigestion-staging-backups
+install -d -o root -g root -m 0700 /root/crigestion-staging-recovery
 ```
 
 Validar todas las unidades en Ubuntu 22.04:
@@ -131,6 +136,9 @@ systemd-analyze verify \
   deploy/plesk/staging/systemd/crigestion-staging-backup.service \
   deploy/plesk/staging/systemd/crigestion-staging-backup.timer \
   deploy/plesk/staging/systemd/crigestion-staging-backup-alert.service \
+  deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.service \
+  deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle-alert.service \
+  deploy/plesk/staging/systemd/crigestion-staging-recovery-bundle.timer \
   deploy/plesk/staging/systemd/crigestion-staging-health-check.service \
   deploy/plesk/staging/systemd/crigestion-staging-health-check.timer \
   deploy/plesk/staging/systemd/crigestion-staging-health-alert.service
@@ -171,6 +179,12 @@ parametrizado sin su env romperia el aviso instalado.
 
 3. Revisar el SQL de todas las migraciones pendientes.
 4. Crear y publicar un tag inmutable; verificar tag y SHA remotos y en el VPS.
+   Materializar el commit verificado en la release antes de publicarla:
+
+   ```bash
+   git rev-parse HEAD > RELEASE_COMMIT
+   chmod 0644 RELEASE_COMMIT
+   ```
 5. Crear y verificar un backup recuperable antes de migrar.
 6. Detener siempre el worker durante migraciones y cambio de release para
    impedir procesamiento AEAT concurrente. Detener la web o activar
@@ -298,6 +312,130 @@ runuser -u postgres -- psql -X -d postgres -Atqc \
   "SELECT datname FROM pg_database
    WHERE datname LIKE 'crigestion_restore_drill_%';"
 ```
+
+### 7.1 Paquete integral cifrado de recuperacion
+
+`crigestion-staging-recovery-bundle.timer` se ejecuta despues del backup diario
+y genera un artefacto `CRIGESTION-RECOVERY-BUNDLE-v1`. El contenido se cifra y
+autentica completo con AES-256-GCM; cada paquete usa una clave derivada mediante
+HKDF-SHA256 a partir de una clave maestra de 32 bytes y una sal aleatoria. La
+clave maestra es distinta de las claves de backup de la aplicacion, sesiones y
+VeriFactu, nunca se incluye en el paquete y debe conservarse historicamente en
+una custodia externa al VPS.
+
+El paquete incluye:
+
+- el ultimo dump automatico verificado y su checksum;
+- `app.env`, worker, migrador, alertas y configuracion publica del bundle, que
+  contienen los keyrings historicos necesarios para descifrar PFX, payloads y
+  respuestas fiscales;
+- roles PostgreSQL permitidos sin contrasenas y con instruccion de rotacion;
+- release ejecutable completa (incluidos build y dependencias runtime, sin
+  caches, `.git` ni ficheros `.env`), commit, lockfile, esquema Prisma,
+  `BUILD_ID`, scripts y unidades operativas instaladas;
+- manifiesto, inventario de modo/propietario/tamano y SHA-256 de cada fichero.
+
+Antes de empaquetar, el verificador consulta la base activa y falla si cualquier
+`encryptionKeyId` historico referenciado no esta presente en el keyring que le
+corresponde. Ademas autentica y descifra, sin registrar el contenido, un envelope
+real por cada clave historica: credenciales, payloads y respuestas; en estos dos
+ultimos casos contrasta tambien el SHA-256 del texto claro. Tambien exige que
+aplicacion y worker sigan en AEAT `TEST`. Esta comprobacion protege la
+configuracion actual; la prueba de recuperacion del artefacto concreto sigue
+siendo necesaria para acreditar su restaurabilidad.
+
+Crear primero `recovery-bundle.env` desde el ejemplo y registrar un identificador
+de clave no secreto. Partiendo de una clave aleatoria de 32 bytes ya depositada
+en la custodia externa, crear la credencial sin mostrarla en terminal:
+
+```bash
+install -o root -g root -m 0600 /dev/null \
+  /etc/crigestion-staging/recovery-bundle.key.cred
+systemd-ask-password --no-tty 'Clave maestra de recovery (hex o base64)' | \
+  systemd-creds encrypt --name=recovery-bundle.key - \
+    /etc/crigestion-staging/recovery-bundle.key.cred
+chmod 0600 /etc/crigestion-staging/recovery-bundle.key.cred
+```
+
+Instalar conjuntamente script, servicio, timer y fichero de entorno. Validar
+las unidades, recargar systemd y ejecutar el oneshot manualmente antes de
+activar el timer y el health check:
+
+```bash
+systemd-analyze verify \
+  /etc/systemd/system/crigestion-staging-recovery-bundle.service \
+  /etc/systemd/system/crigestion-staging-recovery-bundle.timer
+systemctl daemon-reload
+systemctl start crigestion-staging-recovery-bundle.service
+systemctl status crigestion-staging-recovery-bundle.service --no-pager
+cd /root/crigestion-staging-recovery
+sha256sum -c "$(find . -maxdepth 1 -type f -name '*.cgrb.sha256' \
+  -printf '%T@ %f\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+systemctl enable --now crigestion-staging-recovery-bundle.timer
+```
+
+El resultado esperado del servicio es `RECOVERY_BUNDLE_OK`. El propio proceso
+vuelve a autenticar el artefacto con la credencial antes de publicarlo. El health
+check solo comprueba frescura y SHA-256, pues deliberadamente no recibe la clave
+maestra.
+
+Actualmente no existe almacenamiento de uploads fuera de PostgreSQL en el
+producto; el manifiesto lo declara como `not_implemented` en vez de afirmar una
+cobertura inexistente. El artefacto sigue residiendo en el mismo VPS: para cerrar
+la recuperacion integral debe copiarse a almacenamiento externo, cifrado e
+inmutable, y ensayarse su descifrado/restauracion aislada con la clave custodiada.
+Hasta entonces no acredita por si solo el RPO/RTO ante perdida total del servidor.
+
+### 7.2 Restauracion destructiva aislada de PostgreSQL
+
+`crigestion-staging-restore` es el runner exclusivo para recuperar la base
+`crigestion_staging` desde uno de los dumps automaticos root-only. No sustituye
+una copia integral: estos dumps siguen sin incluir uploads, ficheros de entorno
+ni keyrings. No usar este runner en produccion ni contra otra base.
+
+Antes de habilitarlo, sincronizar los scripts de restore, drill, backup y health,
+y las unidades de aplicacion y worker como un conjunto. Los scripts se instalan
+`root:root 0750`, las unidades `root:root 0644`; despues ejecutar
+`systemctl daemon-reload` y `systemd-analyze verify`.
+
+El runner exige una ruta canonica, no symlink, `root:root 0600`, checksum valido,
+catalogo legible, espacio libre y confirmacion literal del destino. Primero
+ejecuta el drill aislado, después crea una copia pre-restore y solo entonces
+detiene conexiones y comienza el paso destructivo:
+
+```bash
+BACKUP=/root/crigestion-staging-backups/crigestion_staging-auto-AAAAMMDDTHHMMSSZ.dump
+systemd-run \
+  --unit="crigestion-staging-restore-$(date -u +%Y%m%dt%H%M%Sz)" \
+  --property=Type=oneshot \
+  --property=RemainAfterExit=yes \
+  --property=TimeoutStartSec=60min \
+  /usr/local/sbin/crigestion-staging-restore \
+  "$BACKUP" \
+  --confirm=crigestion_staging
+```
+
+Fases relevantes:
+
+1. Crea lock, sentinel y diario externos bajo
+   `/var/lib/crigestion-staging-restore`, con permisos root-only.
+2. Verifica identidad `crigestion_staging|postgres|5432`, checksum y drill.
+3. Detiene health/backup, VeriFactu y web, y comprueba que no quedan conexiones.
+4. Crea y verifica `crigestion_staging-pre-restore-*.dump`.
+5. Restaura en una transaccion con ownership del migrador.
+6. Ejecuta migraciones forward y reaplica el hardening del runtime.
+7. Incrementa `securityVersion`, revoca todas las sesiones y verifica estructura.
+8. Retira el sentinel, reinicia solo los servicios que estaban activos y exige
+   health local y publico antes de devolver `RESTORE_OK`.
+
+Si falla antes del paso destructivo, el runner retira el sentinel y recupera el
+estado previo de servicios. Desde `DESTRUCTIVE_STEP_STARTED`, cualquier fallo
+deja `phase=RECOVERY_REQUIRED`, aplicacion y worker detenidos, y termina con
+`RESTORE_RECOVERY_REQUIRED`. En ese caso no volver a ejecutar el runner ni
+borrar manualmente el sentinel: preservar el diario indicado, verificar la base
+y decidir de forma explicita si se completa la recuperacion o se usa la copia
+`pre-restore`. El health, el backup, la web y VeriFactu rechazan arrancar mientras
+permanezca el sentinel.
 
 ## 8. Registro de implantacion inicial
 

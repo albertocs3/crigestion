@@ -1063,6 +1063,10 @@ mantenimiento activo:
    contrasena solo como `PGPASSWORD`. En Windows puede usar shell solo cuando el
    binario configurado sea `.cmd` o `.bat`.
 6. `RESTORING -> COMPLETED` si termina correctamente.
+   Antes de responder, repone el mantenimiento `RESTORE`, incrementa la
+   `securityVersion` de todos los usuarios y revoca todas las sesiones activas.
+   El resultado queda marcado con `restartRequired: true`; el mantenimiento no
+   debe desactivarse hasta reiniciar todos los procesos de la aplicacion.
 7. `RESTORING -> FAILED` si la configuracion del destino no es valida.
 8. `RESTORING -> REQUIRES_RECOVERY` si falla el puerto destructivo despues de
    la copia previa.
@@ -1073,6 +1077,7 @@ Eventos auditables de aplicacion:
 - `PRE_RESTORE_BACKUP_VERIFIED`.
 - `RESTORE_APPLY_STARTED`.
 - `RESTORE_COMPLETED`.
+- `RESTORE_SESSIONS_INVALIDATED`.
 - `RESTORE_APPLY_FAILED`.
 - `RESTORE_REQUIRES_RECOVERY`.
 
@@ -1122,17 +1127,28 @@ Respuesta `200` si la restauracion finaliza:
   "operationId": "uuid",
   "status": "COMPLETED",
   "backupOperationId": "uuid",
-  "preRestoreBackupOperationId": "uuid"
+  "preRestoreBackupOperationId": "uuid",
+  "revokedSessionCount": 3,
+  "versionedUserCount": 3,
+  "restartRequired": true
 }
 ```
 
 Reglas:
 
 - No acepta `restoreOperationId` desde el navegador.
+- En produccion no ejecuta el paso destructivo y devuelve
+  `503 RESTORE_APPLY_REQUIRES_OPERATIVE_RUNNER`; debe usarse el runner operativo
+  con la aplicacion y los workers detenidos.
 - Aplica la siguiente restauracion `VALIDATED` que tenga mantenimiento activo en modo `RESTORE`.
 - Crea y verifica una copia previa antes de ejecutar `pg_restore`.
 - En desarrollo, si `RESTORE_TARGET_DATABASE_URL` no esta definida, puede usar `DATABASE_URL` como destino.
 - En produccion, `RESTORE_TARGET_DATABASE_URL` debe estar definida explicitamente.
+- Una finalizacion correcta repone el mantenimiento, invalida todas las sesiones
+  por revocacion y cambio de version de seguridad, y exige reiniciar la aplicacion
+  antes de desactivar mantenimiento.
+- `PATCH /api/platform/maintenance` devuelve `409 RESTORE_RESTART_REQUIRED` si
+  el proceso que intenta desactivar mantenimiento se inicio antes del restore.
 
 Errores:
 
@@ -1147,6 +1163,7 @@ Errores:
 | 409 | `NO_VALIDATED_RESTORE_IN_MAINTENANCE` | No hay restauracion validada con mantenimiento activo |
 | 422 | `VALIDATION_ERROR` | Payload invalido |
 | 500 | Ver tabla de errores de restauracion | El worker registro la restauracion como fallida o requiere recuperacion |
+| 503 | `RESTORE_APPLY_REQUIRES_OPERATIVE_RUNNER` | El apply HTTP esta deshabilitado en produccion |
 
 Errores de worker:
 

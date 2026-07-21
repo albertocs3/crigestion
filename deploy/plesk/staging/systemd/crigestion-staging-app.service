@@ -13,6 +13,7 @@ Environment=NODE_ENV=production
 Environment=HOSTNAME=127.0.0.1
 Environment=PORT=3101
 ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/current/.next/BUILD_ID
+ExecStartPre=/usr/bin/test ! -e /var/lib/crigestion-staging-restore/restore-required
 ExecStart=/opt/plesk/node/22/bin/node node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3101
 Restart=on-failure
 RestartSec=5s

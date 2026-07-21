@@ -153,6 +153,28 @@ describe("restore apply HTTP contract", () => {
       message: "No hay una restauracion validada con mantenimiento activo."
     });
   });
+
+  it("requires the isolated operative runner in production", async () => {
+    const { POST: restoreApplyPost } = await import(
+      "@/app/api/platform/restores/apply/route"
+    );
+    vi.stubEnv("NODE_ENV", "production");
+
+    try {
+      const response = await restoreApplyPost(
+        jsonRequest("/api/platform/restores/apply", {})
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(503);
+      expect(body).toEqual({
+        code: "RESTORE_APPLY_REQUIRES_OPERATIVE_RUNNER",
+        message: "La restauracion debe ejecutarse mediante el proceso operativo aislado."
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 async function createLimitedUserWithoutMaintenance(): Promise<void> {

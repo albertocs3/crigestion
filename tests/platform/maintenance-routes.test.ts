@@ -226,6 +226,34 @@ describe("maintenance HTTP contracts", () => {
     });
   });
 
+  it("requires a new application process before disabling restored maintenance", async () => {
+    await loginWith("admin", adminPassword);
+    const csrfToken = await getCsrfToken();
+    const restore = await createValidatedRestore();
+    await enableMaintenance(restore.id, csrfToken);
+    await prisma.platformMaintenanceState.update({
+      where: { singletonKey: 1 },
+      data: { restartRequiredAt: new Date("2999-01-01T00:00:00.000Z") }
+    });
+
+    const stateResponse = await maintenanceGet(apiRequest("/api/platform/maintenance"));
+    const stateBody = await stateResponse.json();
+    const disableResponse = await maintenancePatch(
+      jsonRequest("/api/platform/maintenance", { enabled: false }, { csrfToken })
+    );
+    const disableBody = await disableResponse.json();
+
+    expect(stateBody).toMatchObject({
+      enabled: true,
+      restartRequired: true
+    });
+    expect(disableResponse.status).toBe(409);
+    expect(disableBody).toEqual({
+      code: "RESTORE_RESTART_REQUIRED",
+      message: "Debes reiniciar la aplicacion antes de desactivar el mantenimiento."
+    });
+  });
+
   it("rejects maintenance activation for a restore that is not validated", async () => {
     await loginWith("admin", adminPassword);
     const csrfToken = await getCsrfToken();

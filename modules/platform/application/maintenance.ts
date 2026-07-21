@@ -9,6 +9,7 @@ import type {
 
 const singletonKey = 1;
 const operationExclusionAdvisoryLockKey = 72072072;
+const applicationProcessStartedAt = new Date(Date.now() - process.uptime() * 1_000);
 
 export const updateMaintenanceModeSchema = z.discriminatedUnion("enabled", [
   z.object({
@@ -47,6 +48,7 @@ export type MaintenanceModeState = {
   };
   enabledAt: string | null;
   disabledAt: string | null;
+  restartRequired: boolean;
 };
 
 export type UpdateMaintenanceModeResult =
@@ -59,7 +61,8 @@ export type UpdateMaintenanceModeResult =
           | "RESTORE_OPERATION_NOT_FOUND"
           | "RESTORE_OPERATION_NOT_VALIDATED"
           | "MAINTENANCE_MODE_ALREADY_ENABLED"
-          | "MAINTENANCE_MODE_NOT_ENABLED";
+          | "MAINTENANCE_MODE_NOT_ENABLED"
+          | "RESTORE_RESTART_REQUIRED";
         message: string;
       };
     };
@@ -186,7 +189,8 @@ async function enableMaintenanceMode(
         enabledById: actor.id,
         disabledById: null,
         enabledAt: now,
-        disabledAt: null
+        disabledAt: null,
+        restartRequiredAt: null
       },
       create: {
         singletonKey,
@@ -195,7 +199,8 @@ async function enableMaintenanceMode(
         reason: command.reason,
         restoreOperationId: restoreOperation.id,
         enabledById: actor.id,
-        enabledAt: now
+        enabledAt: now,
+        restartRequiredAt: null
       },
       select: maintenanceStateSelect
     });
@@ -268,7 +273,8 @@ async function disableMaintenanceMode(
       select: {
         id: true,
         mode: true,
-        restoreOperationId: true
+        restoreOperationId: true,
+        restartRequiredAt: true
       }
     });
 
@@ -276,12 +282,20 @@ async function disableMaintenanceMode(
       return null;
     }
 
+    if (
+      activeState.restartRequiredAt &&
+      activeState.restartRequiredAt >= applicationProcessStartedAt
+    ) {
+      return { kind: "restartRequired" } as const;
+    }
+
     const state = await tx.platformMaintenanceState.update({
       where: { singletonKey },
       data: {
         enabled: false,
         disabledById: actor.id,
-        disabledAt: new Date()
+        disabledAt: new Date(),
+        restartRequiredAt: null
       },
       select: maintenanceStateSelect
     });
@@ -299,7 +313,7 @@ async function disableMaintenanceMode(
       }
     });
 
-    return state;
+    return { kind: "disabled", state } as const;
   });
 
   if (!result) {
@@ -313,10 +327,21 @@ async function disableMaintenanceMode(
     };
   }
 
+  if (result.kind === "restartRequired") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "RESTORE_RESTART_REQUIRED",
+        message: "Debes reiniciar la aplicacion antes de desactivar el mantenimiento."
+      }
+    };
+  }
+
   return {
     ok: true,
     status: 200,
-    value: mapMaintenanceState(result)
+    value: mapMaintenanceState(result.state)
   };
 }
 
@@ -326,6 +351,7 @@ const maintenanceStateSelect = {
   reason: true,
   enabledAt: true,
   disabledAt: true,
+  restartRequiredAt: true,
   restoreOperation: {
     select: {
       id: true,
@@ -355,6 +381,7 @@ function mapMaintenanceState(state: {
   reason: string | null;
   enabledAt: Date | null;
   disabledAt: Date | null;
+  restartRequiredAt: Date | null;
   restoreOperation: null | {
     id: string;
     status: string;
@@ -379,7 +406,10 @@ function mapMaintenanceState(state: {
     enabledBy: state.enabledBy,
     disabledBy: state.disabledBy,
     enabledAt: state.enabledAt?.toISOString() ?? null,
-    disabledAt: state.disabledAt?.toISOString() ?? null
+    disabledAt: state.disabledAt?.toISOString() ?? null,
+    restartRequired:
+      state.restartRequiredAt !== null &&
+      state.restartRequiredAt >= applicationProcessStartedAt
   };
 }
 
@@ -392,7 +422,8 @@ function emptyMaintenanceState(): MaintenanceModeState {
     enabledBy: null,
     disabledBy: null,
     enabledAt: null,
-    disabledAt: null
+    disabledAt: null,
+    restartRequired: false
   };
 }
 

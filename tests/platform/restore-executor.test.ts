@@ -273,6 +273,17 @@ describe("restore executor", () => {
   it("applies a validated restore only when restore maintenance is active", async () => {
     const backup = await createVerifiedBackupFromDump(backupDirectory);
     const restore = await createValidatedRestore(backup.id);
+    const adminBeforeRestore = await prisma.user.findUniqueOrThrow({
+      where: { normalizedUserName: "admin" }
+    });
+    const activeSession = await prisma.session.create({
+      data: {
+        userId: adminBeforeRestore.id,
+        tokenHash: "restore-session-token-hash",
+        expiresAt: new Date("2026-07-03T10:00:00.000Z"),
+        securityVersion: adminBeforeRestore.securityVersion
+      }
+    });
 
     const idleResult = await processNextValidatedRestoreApply({
       prisma,
@@ -310,6 +321,18 @@ describe("restore executor", () => {
     const completedEvent = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "RESTORE_COMPLETED" }
     });
+    const invalidationEvent = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "RESTORE_SESSIONS_INVALIDATED" }
+    });
+    const revokedSession = await prisma.session.findUniqueOrThrow({
+      where: { id: activeSession.id }
+    });
+    const adminAfterRestore = await prisma.user.findUniqueOrThrow({
+      where: { id: adminBeforeRestore.id }
+    });
+    const maintenance = await prisma.platformMaintenanceState.findUniqueOrThrow({
+      where: { singletonKey: 1 }
+    });
 
     expect(idleResult).toEqual({
       processed: false,
@@ -320,7 +343,10 @@ describe("restore executor", () => {
       operationId: restore.id,
       status: "COMPLETED",
       backupOperationId: backup.id,
-      preRestoreBackupOperationId: preRestoreBackup.id
+      preRestoreBackupOperationId: preRestoreBackup.id,
+      revokedSessionCount: 1,
+      versionedUserCount: 1,
+      restartRequired: true
     });
     expect(updatedRestore.status).toBe("COMPLETED");
     expect(updatedRestore.completedAt?.toISOString()).toBe("2026-07-02T10:00:00.000Z");
@@ -331,7 +357,29 @@ describe("restore executor", () => {
       restoreOperationId: restore.id,
       backupOperationId: backup.id,
       preRestoreBackupOperationId: preRestoreBackup.id,
-      status: "COMPLETED"
+      status: "COMPLETED",
+      revokedSessionCount: 1,
+      versionedUserCount: 1,
+      restartRequired: true
+    });
+    expect(invalidationEvent.payload).toMatchObject({
+      restoreOperationId: restore.id,
+      revokedSessionCount: 1,
+      versionedUserCount: 1
+    });
+    expect(revokedSession.revokedAt?.toISOString()).toBe(
+      "2026-07-02T10:00:00.000Z"
+    );
+    expect(revokedSession.revokeReason).toBe("RESTORE_COMPLETED");
+    expect(adminAfterRestore.securityVersion).toBe(
+      adminBeforeRestore.securityVersion + 1
+    );
+    expect(maintenance).toMatchObject({
+      enabled: true,
+      mode: "RESTORE",
+      restoreOperationId: restore.id,
+      disabledAt: null,
+      restartRequiredAt: new Date("2026-07-02T10:00:00.000Z")
     });
     expect(completedEvent.actorType).toBe("USER");
     expect(JSON.stringify(completedEvent.payload)).not.toContain("storageKey");
@@ -393,6 +441,15 @@ describe("restore executor", () => {
     expect(sourceBackup.status).toBe("VERIFIED");
     expect(sourceBackup.storageKey).toBe(backup.storageKey);
     expect(preRestoreBackup.status).toBe("VERIFIED");
+    const maintenance = await prisma.platformMaintenanceState.findUniqueOrThrow({
+      where: { singletonKey: 1 }
+    });
+    expect(maintenance).toMatchObject({
+      enabled: true,
+      mode: "RESTORE",
+      restoreOperationId: restore.id,
+      restartRequiredAt: new Date("2026-07-02T10:00:00.000Z")
+    });
   });
 
   it("requires recovery when the destructive apply step fails after the pre-restore backup", async () => {

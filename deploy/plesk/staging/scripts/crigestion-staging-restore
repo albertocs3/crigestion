@@ -1,0 +1,389 @@
+#!/bin/bash
+set -euo pipefail
+
+umask 077
+
+BACKUP_DIR='/root/crigestion-staging-backups'
+DATABASE='crigestion_staging'
+RUNTIME_ROLE='crigestion_staging_app'
+MIGRATOR_ROLE='crigestion_staging_migrator'
+STATE_DIR='/var/lib/crigestion-staging-restore'
+JOURNAL_DIR="$STATE_DIR/journal"
+SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
+LOCK_FILE="$STATE_DIR/restore.lock"
+APP_SERVICE='crigestion-staging-app.service'
+WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
+BACKUP_TIMER='crigestion-staging-backup.timer'
+BACKUP_SERVICE='crigestion-staging-backup.service'
+HEALTH_TIMER='crigestion-staging-health-check.timer'
+HEALTH_SERVICE='crigestion-staging-health-check.service'
+PUBLIC_HEALTH='https://gestion-test.crisoft.es/api/health'
+BACKUP="${1:-}"
+CONFIRMATION="${2:-}"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+JOURNAL="$JOURNAL_DIR/$RUN_ID.log"
+PHASE='INITIALIZING'
+DESTRUCTIVE_STARTED=0
+SUCCESS=0
+APP_WAS_ACTIVE=0
+WORKER_WAS_ACTIVE=0
+BACKUP_TIMER_WAS_ACTIVE=0
+HEALTH_TIMER_WAS_ACTIVE=0
+
+unset \
+  PGHOST \
+  PGHOSTADDR \
+  PGPORT \
+  PGDATABASE \
+  PGUSER \
+  PGPASSWORD \
+  PGSERVICE \
+  PGSERVICEFILE \
+  PGOPTIONS
+
+write_state() {
+  local state="$1"
+  local temporary
+
+  temporary="$(mktemp "$STATE_DIR/.restore-required.XXXXXX")"
+  {
+    printf 'run_id=%s\n' "$RUN_ID"
+    printf 'database=%s\n' "$DATABASE"
+    printf 'phase=%s\n' "$state"
+    printf 'journal=%s\n' "$JOURNAL"
+    printf 'updated_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$temporary"
+  chmod 0600 "$temporary"
+  mv -f -- "$temporary" "$SENTINEL"
+}
+
+journal() {
+  local event="$1"
+  local detail="${2:-none}"
+
+  printf '%s|%s|%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$event" \
+    "$detail" \
+    >> "$JOURNAL"
+}
+
+set_phase() {
+  PHASE="$1"
+  write_state "$PHASE"
+  journal "$PHASE"
+}
+
+restore_previous_services() {
+  if [ "$APP_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start "$APP_SERVICE" || true
+  fi
+  if [ "$WORKER_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start "$WORKER_SERVICE" || true
+  fi
+  if [ "$BACKUP_TIMER_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start "$BACKUP_TIMER" || true
+  fi
+  if [ "$HEALTH_TIMER_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start "$HEALTH_TIMER" || true
+  fi
+}
+
+on_exit() {
+  local exit_code=$?
+
+  trap - EXIT
+
+  if [ "$SUCCESS" -eq 1 ]; then
+    exit 0
+  fi
+
+  set +e
+  journal 'FAILED' "phase=$PHASE exit=$exit_code"
+
+  if [ "$DESTRUCTIVE_STARTED" -eq 1 ]; then
+    PHASE='RECOVERY_REQUIRED'
+    write_state "$PHASE"
+    systemctl stop "$WORKER_SERVICE" "$APP_SERVICE" >/dev/null 2>&1 || true
+    journal 'RECOVERY_REQUIRED' 'services_stopped=true'
+    echo "RESTORE_RECOVERY_REQUIRED run_id=$RUN_ID journal=$JOURNAL" >&2
+  else
+    rm -f -- "$SENTINEL"
+    restore_previous_services
+    journal 'ABORTED_SAFE' 'database_not_modified=true'
+    echo "RESTORE_ABORTED_SAFE run_id=$RUN_ID journal=$JOURNAL" >&2
+  fi
+
+  exit "$exit_code"
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo 'RESTORE_ROOT_REQUIRED' >&2
+  exit 1
+fi
+
+if [ "$CONFIRMATION" != '--confirm=crigestion_staging' ]; then
+  echo 'RESTORE_CONFIRMATION_REQUIRED' >&2
+  exit 1
+fi
+
+if [ -z "$BACKUP" ]; then
+  echo 'RESTORE_BACKUP_REQUIRED' >&2
+  exit 1
+fi
+
+if [ -L "$BACKUP" ] || [ -L "$BACKUP.sha256" ]; then
+  echo 'RESTORE_BACKUP_SYMLINK_FORBIDDEN' >&2
+  exit 1
+fi
+
+install -d -o root -g root -m 0700 "$STATE_DIR" "$JOURNAL_DIR"
+touch "$JOURNAL"
+chmod 0600 "$JOURNAL"
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo 'RESTORE_ALREADY_RUNNING' >&2
+  exit 1
+fi
+
+if [ -e "$SENTINEL" ]; then
+  echo 'RESTORE_RECOVERY_ALREADY_REQUIRED' >&2
+  exit 1
+fi
+
+trap on_exit EXIT
+
+BACKUP="$(readlink -f -- "$BACKUP")"
+BACKUP_NAME="$(basename -- "$BACKUP")"
+
+if [ "$(dirname -- "$BACKUP")" != "$BACKUP_DIR" ] || ! [[
+  "$BACKUP_NAME" =~ ^crigestion_staging-auto-[0-9]{8}T[0-9]{6}Z\.dump$
+]]; then
+  echo 'RESTORE_BACKUP_PATH_INVALID' >&2
+  exit 1
+fi
+
+test -f "$BACKUP"
+test -f "$BACKUP.sha256"
+test "$(stat -c '%U|%a' "$BACKUP")" = 'root|600'
+test "$(stat -c '%U|%a' "$BACKUP.sha256")" = 'root|600'
+
+BACKUP_SIZE="$(stat -c '%s' "$BACKUP")"
+AVAILABLE_BYTES="$(df --output=avail -B1 "$BACKUP_DIR" | tail -n 1 | tr -d ' ')"
+test "$BACKUP_SIZE" -gt 0
+test "$AVAILABLE_BYTES" -gt "$((BACKUP_SIZE * 2))"
+
+APP_WAS_ACTIVE="$(systemctl is-active --quiet "$APP_SERVICE" && echo 1 || echo 0)"
+WORKER_WAS_ACTIVE="$(systemctl is-active --quiet "$WORKER_SERVICE" && echo 1 || echo 0)"
+BACKUP_TIMER_WAS_ACTIVE="$(systemctl is-active --quiet "$BACKUP_TIMER" && echo 1 || echo 0)"
+HEALTH_TIMER_WAS_ACTIVE="$(systemctl is-active --quiet "$HEALTH_TIMER" && echo 1 || echo 0)"
+
+test "$APP_WAS_ACTIVE" -eq 1
+test "$WORKER_WAS_ACTIVE" -eq 1
+
+set_phase 'PRECHECKING'
+journal 'SOURCE_BACKUP' "name=$BACKUP_NAME"
+
+IDENTITY="$(
+  runuser -u postgres -- /usr/bin/psql \
+    -X --host=/var/run/postgresql --port=5432 --username=postgres \
+    --dbname="$DATABASE" --no-password -AtF'|' -c \
+    "SELECT current_database(), current_user, inet_server_port();"
+)"
+test "$IDENTITY" = 'crigestion_staging|postgres|5432'
+
+(
+  cd "$BACKUP_DIR"
+  /usr/bin/sha256sum -c "$BACKUP_NAME.sha256"
+)
+/usr/bin/pg_restore --list "$BACKUP" > /dev/null
+/usr/local/sbin/crigestion-staging-restore-drill "$BACKUP"
+
+set_phase 'STOPPING_SERVICES'
+systemctl stop "$HEALTH_TIMER" "$BACKUP_TIMER"
+systemctl stop "$HEALTH_SERVICE" "$BACKUP_SERVICE" || true
+systemctl stop "$WORKER_SERVICE" "$APP_SERVICE"
+
+! systemctl is-active --quiet "$APP_SERVICE"
+! systemctl is-active --quiet "$WORKER_SERVICE"
+! systemctl is-active --quiet "$BACKUP_TIMER"
+! systemctl is-active --quiet "$HEALTH_TIMER"
+
+set_phase 'CREATING_PRE_RESTORE_BACKUP'
+PRE_BACKUP_NAME="crigestion_staging-pre-restore-$RUN_ID.dump"
+PRE_BACKUP="$BACKUP_DIR/$PRE_BACKUP_NAME"
+PRE_BACKUP_TEMP="$(mktemp "$BACKUP_DIR/.${PRE_BACKUP_NAME}.XXXXXX.incomplete")"
+
+runuser -u postgres -- /usr/bin/pg_dump \
+  --format=custom \
+  --no-owner \
+  --no-privileges \
+  --host=/var/run/postgresql \
+  --port=5432 \
+  --username=postgres \
+  --no-password \
+  --dbname="$DATABASE" \
+  > "$PRE_BACKUP_TEMP"
+
+test -s "$PRE_BACKUP_TEMP"
+/usr/bin/pg_restore --list "$PRE_BACKUP_TEMP" > /dev/null
+PRE_BACKUP_HASH="$(/usr/bin/sha256sum "$PRE_BACKUP_TEMP" | cut -d' ' -f1)"
+printf '%s  %s\n' "$PRE_BACKUP_HASH" "$PRE_BACKUP_NAME" > "$PRE_BACKUP.sha256"
+mv -- "$PRE_BACKUP_TEMP" "$PRE_BACKUP"
+chmod 0600 "$PRE_BACKUP" "$PRE_BACKUP.sha256"
+journal 'PRE_RESTORE_BACKUP_VERIFIED' "name=$PRE_BACKUP_NAME sha256=$PRE_BACKUP_HASH"
+
+set_phase 'QUIESCING_DATABASE'
+runuser -u postgres -- /usr/bin/psql \
+  -X -v ON_ERROR_STOP=1 -d postgres <<SQL
+REVOKE CONNECT ON DATABASE "$DATABASE" FROM PUBLIC;
+REVOKE CONNECT ON DATABASE "$DATABASE" FROM "$RUNTIME_ROLE";
+REVOKE CONNECT ON DATABASE "$DATABASE" FROM "$MIGRATOR_ROLE";
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = '$DATABASE'
+  AND pid <> pg_backend_pid();
+SQL
+
+ACTIVE_CONNECTIONS="$(
+  runuser -u postgres -- /usr/bin/psql -X -d postgres -Atqc \
+    "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DATABASE';"
+)"
+test "$ACTIVE_CONNECTIONS" = '0'
+
+(
+  cd "$BACKUP_DIR"
+  /usr/bin/sha256sum -c "$BACKUP_NAME.sha256"
+)
+/usr/bin/pg_restore --list "$BACKUP" > /dev/null
+
+set_phase 'RESTORING_DATABASE'
+DESTRUCTIVE_STARTED=1
+journal 'DESTRUCTIVE_STEP_STARTED' "source=$BACKUP_NAME"
+
+runuser -u postgres -- /usr/bin/pg_restore \
+  --clean \
+  --if-exists \
+  --exit-on-error \
+  --single-transaction \
+  --no-owner \
+  --no-privileges \
+  --role="$MIGRATOR_ROLE" \
+  --host=/var/run/postgresql \
+  --port=5432 \
+  --username=postgres \
+  --dbname="$DATABASE" \
+  "$BACKUP"
+
+journal 'DATABASE_RESTORED' "source=$BACKUP_NAME"
+
+runuser -u postgres -- /usr/bin/psql -X -v ON_ERROR_STOP=1 -d postgres <<SQL
+GRANT CONNECT ON DATABASE "$DATABASE" TO "$MIGRATOR_ROLE";
+GRANT CONNECT ON DATABASE "$DATABASE" TO "$RUNTIME_ROLE";
+SQL
+
+set_phase 'MIGRATING_AND_HARDENING'
+CURRENT_RELEASE="$(readlink -f -- /opt/crigestion-staging/current)"
+RELEASE_ID="$(basename -- "$CURRENT_RELEASE")"
+[[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$ ]]
+test "$CURRENT_RELEASE" = "/opt/crigestion-staging/releases/$RELEASE_ID"
+
+systemctl reset-failed "crigestion-staging-migrate@$RELEASE_ID.service" || true
+systemctl start "crigestion-staging-migrate@$RELEASE_ID.service"
+test "$(systemctl show --property=Result --value "crigestion-staging-migrate@$RELEASE_ID.service")" = 'success'
+
+set_phase 'INVALIDATING_SESSIONS'
+POST_RESTORE_COUNTS="$(
+  runuser -u postgres -- /usr/bin/psql \
+    -X -q -v ON_ERROR_STOP=1 -d "$DATABASE" -AtF'|' <<'SQL'
+BEGIN;
+UPDATE public.users
+SET "securityVersion" = "securityVersion" + 1,
+    "updatedAt" = CURRENT_TIMESTAMP;
+WITH revoked AS (
+  UPDATE public.sessions
+  SET "revokedAt" = CURRENT_TIMESTAMP,
+      "revokeReason" = 'RESTORE_COMPLETED'
+  WHERE "revokedAt" IS NULL
+  RETURNING 1
+)
+SELECT
+  (SELECT count(*) FROM public.users),
+  (SELECT count(*) FROM revoked);
+UPDATE public.platform_maintenance_state
+SET enabled = false,
+    "disabledAt" = CURRENT_TIMESTAMP,
+    "restartRequiredAt" = NULL,
+    "updatedAt" = CURRENT_TIMESTAMP;
+COMMIT;
+SQL
+)"
+journal 'SESSIONS_INVALIDATED' "users_and_sessions=$POST_RESTORE_COUNTS"
+
+set_phase 'VERIFYING_DATABASE'
+DATABASE_SUMMARY="$(
+  runuser -u postgres -- /usr/bin/psql \
+    -X -v ON_ERROR_STOP=1 -d "$DATABASE" -AtF'|' -c \
+    "SELECT
+       (SELECT count(*) FROM public._prisma_migrations
+        WHERE finished_at IS NULL AND rolled_back_at IS NULL),
+       (SELECT count(*) FROM public.sessions WHERE \"revokedAt\" IS NULL),
+       (SELECT count(*) FROM pg_tables WHERE schemaname = 'public'),
+       (SELECT count(*) FROM pg_extension WHERE extname = 'btree_gist');"
+)"
+journal 'DATABASE_SUMMARY' "$DATABASE_SUMMARY"
+IFS='|' read -r INCOMPLETE_MIGRATIONS ACTIVE_SESSIONS TABLE_COUNT BTREE_GIST_COUNT \
+  <<< "$DATABASE_SUMMARY"
+test "$INCOMPLETE_MIGRATIONS" = '0'
+test "$ACTIVE_SESSIONS" = '0'
+test "$TABLE_COUNT" -gt 0
+test "$BTREE_GIST_COUNT" = '1'
+
+set_phase 'RESTARTING_SERVICES'
+rm -f -- "$SENTINEL"
+
+if [ "$APP_WAS_ACTIVE" -eq 1 ]; then
+  systemctl start "$APP_SERVICE"
+fi
+if [ "$WORKER_WAS_ACTIVE" -eq 1 ]; then
+  systemctl start "$WORKER_SERVICE"
+fi
+
+HEALTH_OK=0
+for _ in $(seq 1 12); do
+  if /usr/bin/curl \
+    --silent --show-error --fail \
+    --connect-timeout 5 --max-time 15 \
+    http://127.0.0.1:3101/api/health \
+    > /dev/null; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 5
+done
+test "$HEALTH_OK" -eq 1
+
+/usr/bin/curl \
+  --silent --show-error --fail \
+  --proto '=https' --tlsv1.2 \
+  --connect-timeout 5 --max-time 20 \
+  "$PUBLIC_HEALTH" \
+  > /dev/null
+
+if [ "$BACKUP_TIMER_WAS_ACTIVE" -eq 1 ]; then
+  systemctl start "$BACKUP_TIMER"
+fi
+if [ "$HEALTH_TIMER_WAS_ACTIVE" -eq 1 ]; then
+  systemctl start "$HEALTH_TIMER"
+fi
+
+systemctl is-active --quiet "$APP_SERVICE"
+systemctl is-active --quiet "$WORKER_SERVICE"
+
+PHASE='COMPLETED'
+journal 'COMPLETED' "pre_restore_backup=$PRE_BACKUP_NAME"
+SUCCESS=1
+trap - EXIT
+
+echo "RESTORE_OK run_id=$RUN_ID journal=$JOURNAL pre_restore_backup=$PRE_BACKUP_NAME"

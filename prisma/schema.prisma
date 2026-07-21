@@ -1683,6 +1683,7 @@ model PlatformMaintenanceState {
   disabledById       String?                  @db.Uuid
   enabledAt          DateTime?                @db.Timestamptz(3)
   disabledAt         DateTime?                @db.Timestamptz(3)
+  restartRequiredAt  DateTime?                @db.Timestamptz(3)
   createdAt          DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime                 @updatedAt @db.Timestamptz(3)
 

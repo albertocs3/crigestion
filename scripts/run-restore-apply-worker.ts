@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
   if (result.status === "COMPLETED") {
     console.log(
-      `Restore ${result.operationId} completed with pre-restore backup ${result.preRestoreBackupOperationId}.`
+      `Restore ${result.operationId} completed with pre-restore backup ${result.preRestoreBackupOperationId}. ${result.revokedSessionCount} sessions revoked and ${result.versionedUserCount} users versioned. Application restart is required before leaving maintenance mode.`
     );
     return;
   }

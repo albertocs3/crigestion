@@ -6,6 +6,7 @@ umask 077
 BACKUP_DIR='/root/crigestion-staging-backups'
 DATABASE='crigestion_staging'
 RETENTION_DAYS='14'
+RESTORE_SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
 
 unset \
   PGHOST \
@@ -16,6 +17,11 @@ unset \
   PGSERVICE \
   PGSERVICEFILE \
   PGOPTIONS
+
+if [ -e "$RESTORE_SENTINEL" ]; then
+  echo 'BACKUP_BLOCKED_BY_RESTORE' >&2
+  exit 1
+fi
 
 if [ "$BACKUP_DIR" != '/root/crigestion-staging-backups' ]; then
   echo 'BACKUP_DIRECTORY_INVALID' >&2

@@ -143,6 +143,7 @@ runuser -u postgres -- /usr/bin/pg_restore \
   --single-transaction \
   --no-owner \
   --no-privileges \
+  --role=crigestion_staging_migrator \
   --dbname="$DRILL_DB" \
   < "$BACKUP"
 

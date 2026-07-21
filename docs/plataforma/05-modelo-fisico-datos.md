@@ -107,6 +107,8 @@ Entidades iniciales:
 - La migracion `20260702210000_add_restore_validation_state` incorpora `VALIDATED` y `validatedAt` para registrar la validacion no destructiva del artefacto cifrado.
 - Las solicitudes HTTP de copia y restauracion toman un advisory lock transaccional de PostgreSQL antes de comprobar operaciones activas, para serializar la exclusion entre `backup_operations` y `restore_operations`.
 - `PlatformMaintenanceState.singletonKey` es unico y la migracion `20260702214500_harden_platform_maintenance` refuerza por SQL que solo pueda valer `1`.
+- `PlatformMaintenanceState.restartRequiredAt` conserva el instante del restore;
+  una instancia iniciada antes de ese instante no puede retirar el mantenimiento.
 - Si `PlatformMaintenanceState.enabled = true`, la base exige `mode`, `enabledAt` y `enabledById`.
 - Para `mode = RESTORE`, la base exige `restoreOperationId`.
 

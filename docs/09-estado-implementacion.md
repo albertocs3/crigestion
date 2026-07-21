@@ -69,8 +69,12 @@ Prioridades pendientes despues de este corte:
    y de despliegue independiente.
 2. Preparar el supervisor equivalente del entorno de despliegue definitivo; en
    Windows TEST ya existe una tarea de instancia unica con reinicio automatico.
-3. Ejecutar un simulacro real de backup y restauracion con custodia recuperable
-   de todos los keyrings historicos VeriFactu y evidencia externa de RPO/RTO.
+3. Desplegar y ensayar el paquete integral cifrado ya implementado para staging:
+   incluye dump, configuracion, keyrings historicos VeriFactu, release e
+   inventario autenticado. Replicarlo despues a una custodia externa e inmutable
+   y acreditar el RPO/RTO mediante un drill aislado. Los uploads se declaran
+   `not_implemented` porque el producto aun no mantiene ficheros fuera de
+   PostgreSQL; incorporar esa fuente cuando exista.
 4. Ejecutar pruebas de migracion sobre una copia representativa antes de
    desplegar; la exclusion de rangos requiere `btree_gist` y una ventana de
    mantenimiento breve.
