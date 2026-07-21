@@ -46,6 +46,8 @@ const platformPermissions = [
   ["Platform.ManageMaintenance", "Gestionar modo mantenimiento"],
   ["Customers.View", "Consultar clientes"],
   ["Customers.Manage", "Gestionar clientes"],
+  ["Suppliers.View", "Consultar proveedores"],
+  ["Suppliers.Manage", "Gestionar proveedores"],
   ["Catalog.View", "Consultar catalogo"],
   ["Catalog.Manage", "Gestionar catalogo"],
   ["Billing.View", "Consultar facturas"],

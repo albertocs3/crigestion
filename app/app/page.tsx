@@ -44,6 +44,9 @@ export default async function AppHomePage() {
     permissions.includes("Customers.View")
       ? { href: "/app/customers", label: "Clientes", tone: "customers" }
       : null,
+    permissions.includes("Suppliers.View")
+      ? { href: "/app/suppliers", label: "Proveedores", tone: "customers" }
+      : null,
     permissions.includes("Catalog.View")
       ? { href: "/app/catalog", label: "Catalogo", tone: "catalog" }
       : null,

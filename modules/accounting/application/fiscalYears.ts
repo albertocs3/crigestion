@@ -276,6 +276,7 @@ export async function closeAccountingFiscalYear(
         accounts: {
           create: source.accounts.map((account) => ({
             sourceAccountId: account.id,
+            supplierId: account.supplierId,
             code: account.code,
             name: account.name,
             status: account.status,

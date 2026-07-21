@@ -50,6 +50,8 @@ Revisar como minimo:
 | `VERIFACTU_CREDENTIAL_ACTIVE_KEY_ID` / `VERIFACTU_CREDENTIAL_KEYS` | Obligatorias | Keyring separado para PFX; custodiar fuera del repositorio. |
 | `VERIFACTU_RESPONSE_ACTIVE_KEY_ID` / `VERIFACTU_RESPONSE_KEYS` | Obligatorias | Keyring separado para respuestas AEAT cifradas. |
 | `VERIFACTU_CREDENTIAL_IDEMPOTENCY_SECRET` | Obligatoria | Secreto estable y distinto del de sesiones; conservar durante la retencion idempotente. |
+| `SENSITIVE_DATA_ACTIVE_KEY_ID` / `SENSITIVE_DATA_KEYS` | Obligatorias al habilitar proveedores | Keyring AES-256-GCM de datos personales; conservar claves historicas durante toda la retencion. |
+| `SENSITIVE_DATA_LOOKUP_SECRET` | Obligatoria al habilitar proveedores | Secreto HMAC estable, distinto de claves y sesiones, para unicidad sin texto claro. |
 | `RECOVERY_BUNDLE_KEY_ID` | Obligatoria en el bundle integral de staging | Identificador no secreto de la clave maestra custodiada externamente. |
 
 La clave maestra de recovery no se introduce como variable de entorno. En

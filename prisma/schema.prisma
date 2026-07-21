@@ -75,6 +75,23 @@ enum CustomerStatus {
   INACTIVE
 }
 
+enum SupplierStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum SupplierPaymentMethod {
+  BANK_TRANSFER
+  CASH
+  DIRECT_DEBIT
+}
+
+enum SupplierPaymentTermsType {
+  IMMEDIATE
+  DAYS
+  FIXED_DAY_OF_MONTH
+}
+
 enum CustomerFiscalTreatment {
   DOMESTIC
   EU
@@ -375,6 +392,7 @@ model Company {
   verifactuMtlsCredentials VerifactuMtlsCredential[]
   verifactuWorkerRuns      VerifactuWorkerRun[]
   attachments              Attachment[]               @relation("CompanyAttachments")
+  suppliers                Supplier[]
   logoAttachment           Attachment?                @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
@@ -463,6 +481,55 @@ model Customer {
   @@index([createdAt, id])
   @@index([createdById, createdAt])
   @@map("customers")
+}
+
+model Supplier {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  companyId            String                   @db.Uuid
+  sequenceNumber       Int
+  code                 String                   @db.VarChar(20)
+  accountingCode       String                   @db.VarChar(9)
+  status               SupplierStatus           @default(ACTIVE)
+  legalName            String                   @db.VarChar(200)
+  tradeName            String?                  @db.VarChar(160)
+  taxIdEncrypted       Bytes                    @db.ByteA
+  taxIdLookupHash      String                   @db.Char(64)
+  taxIdLast4           String                   @db.VarChar(4)
+  fiscalAddressLine    String                   @db.VarChar(240)
+  fiscalPostalCode     String                   @db.VarChar(20)
+  fiscalCity           String                   @db.VarChar(120)
+  fiscalProvince       String?                  @db.VarChar(120)
+  fiscalCountry        String                   @db.VarChar(2)
+  contactName          String?                  @db.VarChar(160)
+  emailEncrypted       Bytes?                   @db.ByteA
+  phoneEncrypted       Bytes?                   @db.ByteA
+  bankIbanEncrypted    Bytes?                   @db.ByteA
+  bankIbanLast4        String?                  @db.VarChar(4)
+  bankBicEncrypted     Bytes?                   @db.ByteA
+  defaultPaymentMethod SupplierPaymentMethod    @default(BANK_TRANSFER)
+  paymentTermsType     SupplierPaymentTermsType @default(IMMEDIATE)
+  paymentDays          Int?
+  paymentFixedDay      Int?
+  notes                String?                  @db.VarChar(1000)
+  createdById          String                   @db.Uuid
+  updatedById          String?                  @db.Uuid
+  version              Int                      @default(1)
+  createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
+
+  company   Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy User                @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?               @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  accounts  AccountingAccount[]
+
+  @@unique([companyId, sequenceNumber])
+  @@unique([companyId, code])
+  @@unique([companyId, taxIdLookupHash])
+  @@unique([id, accountingCode])
+  @@index([companyId, status, legalName, id])
+  @@index([companyId, createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("suppliers")
 }
 
 model CustomerSepaMandate {
@@ -581,6 +648,8 @@ model User {
   disabledMaintenances          PlatformMaintenanceState[]           @relation("MaintenanceDisabledBy")
   createdCustomers              Customer[]                           @relation("CustomersCreatedBy")
   updatedCustomers              Customer[]                           @relation("CustomersUpdatedBy")
+  createdSuppliers              Supplier[]                           @relation("SuppliersCreatedBy")
+  updatedSuppliers              Supplier[]                           @relation("SuppliersUpdatedBy")
   createdCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
   updatedCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
   createdCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
@@ -1185,6 +1254,7 @@ model AccountingAccount {
   id              String                  @id @default(uuid()) @db.Uuid
   fiscalYearId    String                  @db.Uuid
   sourceAccountId String?                 @db.Uuid
+  supplierId      String?                 @db.Uuid
   code            String                  @db.VarChar(9)
   name            String                  @db.VarChar(180)
   status          AccountingAccountStatus @default(ACTIVE)
@@ -1198,12 +1268,15 @@ model AccountingAccount {
   fiscalYear     AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
   sourceAccount  AccountingAccount?      @relation("AccountingAccountCopies", fields: [sourceAccountId], references: [id], onDelete: Restrict)
   copiedAccounts AccountingAccount[]     @relation("AccountingAccountCopies")
+  supplier       Supplier?               @relation(fields: [supplierId, code], references: [id, accountingCode], onDelete: Restrict)
   createdBy      User                    @relation("AccountingAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   lines          AccountingJournalLine[]
 
   @@unique([fiscalYearId, code])
+  @@unique([fiscalYearId, supplierId])
   @@index([fiscalYearId, status, code])
   @@index([sourceAccountId])
+  @@index([supplierId, fiscalYearId])
   @@map("accounting_accounts")
 }
 

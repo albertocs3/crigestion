@@ -30,6 +30,7 @@ Este documento traduce el modelo de dominio de Plataforma a un diseno fisico ini
 |---|---|---|
 | Inicializacion | `Installation` / `installations` | Estado singleton de instalacion |
 | Configuracion | `Company` / `companies` | Empresa inicial |
+| Compras | `Supplier` / `suppliers` | Maestro fiscal y condiciones de proveedores |
 | Adjuntos | `Attachment` / `attachments` | Metadatos, integridad, analisis y ciclo de vida de ficheros privados |
 | Identidad | `User` / `users` | Primer administrador y usuarios posteriores |
 | Identidad | `ReservedUserName` / `reserved_user_names` | Nombres de usuario no reutilizables |
@@ -96,6 +97,11 @@ Entidades iniciales:
 - `Company.logoAttachmentId` referencia un `Attachment` globalmente unico. Dos
   triggers diferidos exigen que pertenezca a la misma empresa, tenga proposito
   `COMPANY_LOGO` y permanezca `AVAILABLE` al confirmar la transaccion.
+- `Supplier` aisla consecutivo, codigo y huella fiscal por empresa. Conserva
+  NIF/VAT, email, telefono, IBAN y BIC como sobres autenticados cifrados; solo
+  guarda los cuatro ultimos caracteres necesarios para enmascarado.
+- `AccountingAccount.supplierId + code` referencia el proveedor y su
+  `accountingCode`; solo puede existir una subcuenta del proveedor por ejercicio.
 - `Attachment` restringe tamano positivo, SHA-256 hexadecimal, clave opaca y la
   coherencia entre estado, resultado antivirus y marcas temporales. Un indice
   parcial admite como maximo un logo `AVAILABLE` por empresa.

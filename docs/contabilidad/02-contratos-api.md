@@ -17,6 +17,29 @@ Permisos:
 | `Accounting.ManageEntries` | Crear cuentas y asientos manuales. |
 | `Accounting.ManageExercises` | Crear la primera contabilidad. |
 | `Accounting.CloseExercises` | Cerrar ejercicios y crear el siguiente. |
+| `Suppliers.View` | Consultar el maestro de proveedores. |
+| `Suppliers.Manage` | Crear, editar y cambiar el estado de proveedores. |
+
+## 1.b Maestro de proveedores
+
+- `GET /api/suppliers`: lista por empresa, estado y busqueda por codigo o nombre.
+- `GET /api/suppliers/{supplierId}`: devuelve el detalle operativo.
+- `POST /api/suppliers`: crea un proveedor y su subcuenta `400xxxxxx` en cada
+  ejercicio abierto. Requiere CSRF e `Idempotency-Key`.
+- `PATCH /api/suppliers/{supplierId}`: edita o activa/inactiva. Requiere CSRF,
+  `Idempotency-Key` y `expectedVersion` para concurrencia optimista.
+
+El codigo `PROVxxxxx` y la cuenta `400xxxxxx` proceden del mismo consecutivo por
+empresa. NIF/VAT, email, telefono, IBAN y BIC se cifran con AES-256-GCM y contexto
+autenticado; el NIF usa ademas una huella HMAC para unicidad. Los contratos no
+devuelven esos valores completos: exponen mascara o indicadores de presencia.
+Una edicion sensible usa `keep`, `clear` o `replace` para no reenviar secretos al
+navegador. No existe borrado fisico en este corte.
+
+Errores funcionales principales: `SUPPLIER_NOT_FOUND`,
+`SUPPLIER_TAX_ID_ALREADY_USED`, `SUPPLIER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN`,
+`SUPPLIER_VERSION_CONFLICT`, `SUPPLIER_ACCOUNTS_INCOMPLETE` e
+`IDEMPOTENCY_KEY_REUSED`.
 
 ## 1.a Ejercicios contables
 
