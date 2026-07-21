@@ -9,6 +9,7 @@ describe("staging recovery bundle deployment", () => {
     const script = await read("deploy/plesk/staging/scripts/crigestion-staging-recovery-bundle");
 
     expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("PG_BIN_DIR='/usr/lib/postgresql/14/bin'");
     expect(script).toContain("umask 077");
     expect(script).toContain("verify-staging-recovery-keyrings.ts");
     expect(script).toContain("recovery-bundle-crypto.ts");

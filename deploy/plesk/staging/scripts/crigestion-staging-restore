@@ -5,6 +5,7 @@ umask 077
 
 BACKUP_DIR='/root/crigestion-staging-backups'
 DATABASE='crigestion_staging'
+PG_BIN_DIR='/usr/lib/postgresql/14/bin'
 RUNTIME_ROLE='crigestion_staging_app'
 MIGRATOR_ROLE='crigestion_staging_migrator'
 STATE_DIR='/var/lib/crigestion-staging-restore'
@@ -186,7 +187,7 @@ set_phase 'PRECHECKING'
 journal 'SOURCE_BACKUP' "name=$BACKUP_NAME"
 
 IDENTITY="$(
-  runuser -u postgres -- /usr/bin/psql \
+  runuser -u postgres -- "$PG_BIN_DIR/psql" \
     -X --host=/var/run/postgresql --port=5432 --username=postgres \
     --dbname="$DATABASE" --no-password -AtF'|' -c \
     "SELECT current_database(), current_user, inet_server_port();"
@@ -197,7 +198,7 @@ test "$IDENTITY" = 'crigestion_staging|postgres|5432'
   cd "$BACKUP_DIR"
   /usr/bin/sha256sum -c "$BACKUP_NAME.sha256"
 )
-/usr/bin/pg_restore --list "$BACKUP" > /dev/null
+"$PG_BIN_DIR/pg_restore" --list "$BACKUP" > /dev/null
 /usr/local/sbin/crigestion-staging-restore-drill "$BACKUP"
 
 set_phase 'STOPPING_SERVICES'
@@ -215,7 +216,7 @@ PRE_BACKUP_NAME="crigestion_staging-pre-restore-$RUN_ID.dump"
 PRE_BACKUP="$BACKUP_DIR/$PRE_BACKUP_NAME"
 PRE_BACKUP_TEMP="$(mktemp "$BACKUP_DIR/.${PRE_BACKUP_NAME}.XXXXXX.incomplete")"
 
-runuser -u postgres -- /usr/bin/pg_dump \
+runuser -u postgres -- "$PG_BIN_DIR/pg_dump" \
   --format=custom \
   --no-owner \
   --no-privileges \
@@ -227,7 +228,7 @@ runuser -u postgres -- /usr/bin/pg_dump \
   > "$PRE_BACKUP_TEMP"
 
 test -s "$PRE_BACKUP_TEMP"
-/usr/bin/pg_restore --list "$PRE_BACKUP_TEMP" > /dev/null
+"$PG_BIN_DIR/pg_restore" --list "$PRE_BACKUP_TEMP" > /dev/null
 PRE_BACKUP_HASH="$(/usr/bin/sha256sum "$PRE_BACKUP_TEMP" | cut -d' ' -f1)"
 printf '%s  %s\n' "$PRE_BACKUP_HASH" "$PRE_BACKUP_NAME" > "$PRE_BACKUP.sha256"
 mv -- "$PRE_BACKUP_TEMP" "$PRE_BACKUP"
@@ -235,7 +236,7 @@ chmod 0600 "$PRE_BACKUP" "$PRE_BACKUP.sha256"
 journal 'PRE_RESTORE_BACKUP_VERIFIED' "name=$PRE_BACKUP_NAME sha256=$PRE_BACKUP_HASH"
 
 set_phase 'QUIESCING_DATABASE'
-runuser -u postgres -- /usr/bin/psql \
+runuser -u postgres -- "$PG_BIN_DIR/psql" \
   -X -v ON_ERROR_STOP=1 -d postgres <<SQL
 REVOKE CONNECT ON DATABASE "$DATABASE" FROM PUBLIC;
 REVOKE CONNECT ON DATABASE "$DATABASE" FROM "$RUNTIME_ROLE";
@@ -247,7 +248,7 @@ WHERE datname = '$DATABASE'
 SQL
 
 ACTIVE_CONNECTIONS="$(
-  runuser -u postgres -- /usr/bin/psql -X -d postgres -Atqc \
+  runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d postgres -Atqc \
     "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DATABASE';"
 )"
 test "$ACTIVE_CONNECTIONS" = '0'
@@ -256,13 +257,13 @@ test "$ACTIVE_CONNECTIONS" = '0'
   cd "$BACKUP_DIR"
   /usr/bin/sha256sum -c "$BACKUP_NAME.sha256"
 )
-/usr/bin/pg_restore --list "$BACKUP" > /dev/null
+"$PG_BIN_DIR/pg_restore" --list "$BACKUP" > /dev/null
 
 set_phase 'RESTORING_DATABASE'
 DESTRUCTIVE_STARTED=1
 journal 'DESTRUCTIVE_STEP_STARTED' "source=$BACKUP_NAME"
 
-runuser -u postgres -- /usr/bin/pg_restore \
+runuser -u postgres -- "$PG_BIN_DIR/pg_restore" \
   --clean \
   --if-exists \
   --exit-on-error \
@@ -278,7 +279,7 @@ runuser -u postgres -- /usr/bin/pg_restore \
 
 journal 'DATABASE_RESTORED' "source=$BACKUP_NAME"
 
-runuser -u postgres -- /usr/bin/psql -X -v ON_ERROR_STOP=1 -d postgres <<SQL
+runuser -u postgres -- "$PG_BIN_DIR/psql" -X -v ON_ERROR_STOP=1 -d postgres <<SQL
 GRANT CONNECT ON DATABASE "$DATABASE" TO "$MIGRATOR_ROLE";
 GRANT CONNECT ON DATABASE "$DATABASE" TO "$RUNTIME_ROLE";
 SQL
@@ -295,7 +296,7 @@ test "$(systemctl show --property=Result --value "crigestion-staging-migrate@$RE
 
 set_phase 'INVALIDATING_SESSIONS'
 POST_RESTORE_COUNTS="$(
-  runuser -u postgres -- /usr/bin/psql \
+  runuser -u postgres -- "$PG_BIN_DIR/psql" \
     -X -q -v ON_ERROR_STOP=1 -d "$DATABASE" -AtF'|' <<'SQL'
 BEGIN;
 UPDATE public.users
@@ -323,7 +324,7 @@ journal 'SESSIONS_INVALIDATED' "users_and_sessions=$POST_RESTORE_COUNTS"
 
 set_phase 'VERIFYING_DATABASE'
 DATABASE_SUMMARY="$(
-  runuser -u postgres -- /usr/bin/psql \
+  runuser -u postgres -- "$PG_BIN_DIR/psql" \
     -X -v ON_ERROR_STOP=1 -d "$DATABASE" -AtF'|' -c \
     "SELECT
        (SELECT count(*) FROM public._prisma_migrations

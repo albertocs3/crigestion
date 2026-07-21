@@ -262,6 +262,8 @@ actual; revisar su frecuencia cuando la base crezca.
 un retraso aleatorio maximo de 15 minutos. La version canonica de cada copia:
 
 - usa socket PostgreSQL local, puerto 5432 y usuario de sistema `postgres`;
+- fija `psql`, `pg_dump` y `pg_restore` a PostgreSQL 14 bajo
+  `/usr/lib/postgresql/14/bin`, evitando mezclar formatos de distintas versiones;
 - verifica `current_database()` y `current_user` antes del dump;
 - usa `--no-owner` y `--no-privileges`;
 - valida el catalogo con `pg_restore --list`;

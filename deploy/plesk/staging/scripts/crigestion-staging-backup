@@ -7,6 +7,11 @@ BACKUP_DIR='/root/crigestion-staging-backups'
 DATABASE='crigestion_staging'
 RETENTION_DAYS='14'
 RESTORE_SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
+PG_BIN_DIR='/usr/lib/postgresql/14/bin'
+
+test -x "$PG_BIN_DIR/psql"
+test -x "$PG_BIN_DIR/pg_dump"
+test -x "$PG_BIN_DIR/pg_restore"
 
 unset \
   PGHOST \
@@ -52,7 +57,7 @@ trap cleanup EXIT
 cd /tmp
 
 IDENTITY="$(
-  runuser -u postgres -- /usr/bin/psql \
+  runuser -u postgres -- "$PG_BIN_DIR/psql" \
     -X \
     --host=/var/run/postgresql \
     --port=5432 \
@@ -64,7 +69,7 @@ IDENTITY="$(
 
 test "$IDENTITY" = 'crigestion_staging|postgres'
 
-runuser -u postgres -- /usr/bin/pg_dump \
+runuser -u postgres -- "$PG_BIN_DIR/pg_dump" \
   --format=custom \
   --no-owner \
   --no-privileges \
@@ -76,7 +81,7 @@ runuser -u postgres -- /usr/bin/pg_dump \
   > "$TEMP"
 
 test -s "$TEMP"
-/usr/bin/pg_restore --list "$TEMP" > /dev/null
+"$PG_BIN_DIR/pg_restore" --list "$TEMP" > /dev/null
 
 HASH="$(/usr/bin/sha256sum "$TEMP" | cut -d' ' -f1)"
 printf '%s  %s\n' "$HASH" "$NAME" > "$CHECKSUM_TEMP"

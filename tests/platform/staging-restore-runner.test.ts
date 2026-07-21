@@ -9,6 +9,7 @@ describe("staging isolated restore runner", () => {
     const script = await read("deploy/plesk/staging/scripts/crigestion-staging-restore");
 
     expect(script).toContain("set -euo pipefail");
+    expect(script).toContain("PG_BIN_DIR='/usr/lib/postgresql/14/bin'");
     expect(script).toContain("umask 077");
     expect(script).toContain("--confirm=crigestion_staging");
     expect(script).toContain("RESTORE_BACKUP_SYMLINK_FORBIDDEN");
