@@ -350,3 +350,56 @@ evidencia inmutable de staging. Al cierre, `rc4`, aplicacion y worker estaban
 activos, y los health local y publico devolvian `database`, `verifactu` y
 `worker` en `ok`. VeriFactu continuo en `TEST`; produccion quedo fuera de
 alcance.
+
+## 14. Rectificacion total de compras de proveedor
+
+El 2026-07-22 se desplego la rectificacion total de compras mediante la
+release inmutable `staging-2026.07.22-rc5`, commit
+`0e630abe4ec6d09bb7693f4cc27a44605c2698fc`, build ID
+`1oZdF87paTpJ-jMhgwsPT`. Antes de migrar se creo y verifico el dump
+`crigestion_staging-auto-20260722T120105Z.dump`. Las migraciones
+`20260722170000_add_purchase_rectification_enum_values` y
+`20260722170100_add_purchase_rectifications` terminaron correctamente mediante
+el rol migrador controlado, con la aplicacion y el worker detenidos durante el
+cambio. El resultado dejo 87 migraciones terminadas y ninguna incompleta.
+
+La candidata habia superado `npm run verify:release`: TypeScript, 71 archivos
+con 619 pruebas Vitest, ESLint, build optimizado de Next.js y auditoria npm sin
+vulnerabilidades. Tras el despliegue se comprobaron el SHA y build activos,
+los privilegios endurecidos del runtime y migrador, los cuatro bloqueos
+VeriFactu en `TEST`/`false`, los servicios y los health local y publico.
+
+La UAT uso la compra sintetica `UAT-RC5-20260722-RECT-01`, con 10,00 EUR de
+base, 2,10 EUR de IVA y 12,10 EUR de total. Se registro sin pagos y despues se
+creo `UAT-RC5-20260722-RECT-01-R` como rectificacion total por devolucion. Se
+verifico:
+
+- original `RECTIFIED` y `NOT_APPLICABLE`, y rectificativa `REGISTERED` y
+  `NOT_APPLICABLE` por -12,10 EUR;
+- una unica rectificativa vinculada al original, sin duplicados;
+- lineas e IVA exactamente opuestos a los originales;
+- asiento original `2026/000016` y reverso `2026/000017`, con cuentas y debe y
+  haber invertidos y enlace `reversesEntryId` correcto;
+- entrada de una unidad de stock de 3 a 4 y salida enlazada de -1 unidad de 4
+  a 3, dejando el stock final original en 3;
+- el unico vencimiento original en `CANCELLED` y ningun vencimiento creado para
+  la rectificativa;
+- evento `PURCHASE_RECTIFICATION_CREATED` con identificadores tecnicos y
+  conteos, sin secretos, credenciales ni datos fiscales en claro;
+- permiso `Purchases.Rectify` asignado exclusivamente a `Administrador`;
+- rechazo de la mutacion publica con `403 ORIGIN_NOT_ALLOWED` sin origen y
+  `401 UNAUTHENTICATED` con origen valido pero sin sesion;
+- bloqueo visible de la rectificacion sobre la compra UAT anterior ya pagada.
+
+El proveedor y el articulo sinteticos se devolvieron a estado `INACTIVE`; la
+compra, la rectificativa y sus historicos se conservaron como evidencia
+inmutable. Despues se creo y verifico el dump
+`crigestion_staging-auto-20260722T141138Z.dump`. El paquete cifrado
+`crigestion-staging-20260722T141139Z.cgrb` supero su checksum y el simulacro
+aislado termino con `RECOVERY_DRILL_OK
+database=crigestion_recovery_drill_20260722t141233z attachments=1`. No quedaron
+bases temporales.
+
+Al cierre, `rc5`, aplicacion, worker y timers estaban activos, y el health
+publico devolvia `database`, `verifactu` y `worker` en `ok`. VeriFactu continuo
+en `TEST` con produccion bloqueada. Produccion no se consulto ni se modifico.
