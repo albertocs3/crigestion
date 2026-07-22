@@ -47,13 +47,16 @@ export default async function AppHomePage() {
     permissions.includes("Suppliers.View")
       ? { href: "/app/suppliers", label: "Proveedores", tone: "customers" }
       : null,
+    permissions.includes("Purchases.View")
+      ? { href: "/app/purchases", label: "Compras", tone: "billing" }
+      : null,
     permissions.includes("Catalog.View")
       ? { href: "/app/catalog", label: "Catalogo", tone: "catalog" }
       : null,
     permissions.includes("Billing.View")
       ? { href: "/app/invoices", label: "Facturas", tone: "billing" }
       : null,
-    permissions.includes("Treasury.ManagePayments")
+    permissions.includes("Treasury.ManagePayments") || permissions.includes("Treasury.ManageSupplierPayments") || permissions.includes("Treasury.ViewSupplierPayments")
       ? { href: "/app/treasury", label: "Tesoreria", tone: "treasury" }
       : null,
     permissions.includes("Accounting.View")

@@ -526,8 +526,9 @@ No se calculará un saldo previsto acumulado.
 El primer corte tecnico calcula una prevision mensual basica de cobros de
 clientes desde vencimientos reales de facturas emitidas con saldo pendiente.
 Los vencimientos anteriores a la fecha de referencia se muestran en el mes
-actual como atrasados. No incluye todavia pagos de proveedor, gastos periodicos
-ni simulaciones persistidas.
+actual como atrasados. Los vencimientos y pagos manuales de proveedor ya forman
+parte del registro operativo, aunque su incorporacion a esta prevision agregada,
+los gastos periodicos y las simulaciones persistidas quedan pendientes.
 
 ### Orígenes de cobro
 

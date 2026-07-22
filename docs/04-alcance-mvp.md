@@ -289,7 +289,7 @@ No forma parte del MVP mínimo.
 - Fusión de clientes y proveedores.
 - Anticipos completos.
 - Conversión parcial de presupuestos.
-- Cobros y pagos muchos a muchos.
+- Cobros muchos a muchos y pantalla de agrupacion avanzada de pagos.
 - Renumeración de asientos.
 - Paneles e indicadores avanzados.
 - Informes comparativos.

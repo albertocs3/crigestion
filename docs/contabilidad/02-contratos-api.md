@@ -7,7 +7,8 @@ contabilizados. Incluye el PGC PYMES y la copia del plan al siguiente ejercicio.
 No incluye todavia adjuntos, anulaciones, modificacion de asientos ni
 reaperturas. La emision de facturas ordinarias y rectificativas crea ya su
 asiento automatico. Los cobros manuales crean tambien su asiento; las
-devoluciones, cobros de remesas y pagos se incorporaran en cortes posteriores.
+devoluciones y cobros de remesas se incorporan en cortes posteriores. El corte
+de compras incorpora ya facturas de proveedor, vencimientos y pagos manuales.
 
 Permisos:
 
@@ -19,6 +20,11 @@ Permisos:
 | `Accounting.CloseExercises` | Cerrar ejercicios y crear el siguiente. |
 | `Suppliers.View` | Consultar el maestro de proveedores. |
 | `Suppliers.Manage` | Crear, editar y cambiar el estado de proveedores. |
+| `Purchases.View` | Consultar facturas de compra y vencimientos de proveedor. |
+| `Purchases.ManageDrafts` | Crear y editar borradores, lineas y vencimientos. |
+| `Purchases.Register` | Registrar definitivamente una compra. |
+| `Treasury.ManageSupplierPayments` | Registrar pagos parciales o totales de proveedor. |
+| `Treasury.ViewSupplierPayments` | Consultar vencimientos y pagos de proveedor. |
 
 ## 1.b Maestro de proveedores
 
@@ -40,6 +46,37 @@ Errores funcionales principales: `SUPPLIER_NOT_FOUND`,
 `SUPPLIER_TAX_ID_ALREADY_USED`, `SUPPLIER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN`,
 `SUPPLIER_VERSION_CONFLICT`, `SUPPLIER_ACCOUNTS_INCOMPLETE` e
 `IDEMPOTENCY_KEY_REUSED`.
+
+## 1.c Compras, vencimientos y pagos de proveedor
+
+- `GET /api/purchases`: lista compras por estado, pago, proveedor y busqueda.
+- `POST /api/purchases`: crea el encabezado de un borrador.
+- `GET /api/purchases/{purchaseId}`: devuelve detalle, lineas, vencimientos y
+  referencia al asiento.
+- `PATCH /api/purchases/{purchaseId}`: modifica el encabezado del borrador con
+  `expectedVersion`.
+- `PUT /api/purchases/{purchaseId}/lines`: sustituye las lineas y recalcula
+  bases, cuotas, resumen de IVA y total.
+- `PUT /api/purchases/{purchaseId}/due-dates`: sustituye vencimientos; su suma
+  debe coincidir con el total.
+- `POST /api/purchases/{purchaseId}/register`: registra definitivamente la
+  compra y genera, en una transaccion, asiento, IVA soportado y entradas de
+  stock.
+- `GET /api/treasury/supplier-due-dates`: lista vencimientos y saldos pagados y
+  pendientes.
+- `POST /api/treasury/supplier-payments`: registra un pago con una o varias
+  asignaciones a vencimientos y genera su asiento.
+
+Todas las mutaciones requieren origen permitido, CSRF, JSON e
+`Idempotency-Key`. El servidor bloquea la compra o los vencimientos afectados,
+revalida el saldo y persiste la respuesta idempotente en la misma transaccion.
+No se devuelven NIF, IBAN ni datos de contacto completos del proveedor.
+
+El primer corte mantiene inmutables las compras registradas. Rectificativas,
+anulacion/versionado, PDF adjunto, gastos sin factura, anticipos, devoluciones y
+remesas de pago quedan para cortes posteriores.
+El pago con tarjeta se difiere hasta definir y configurar su subcuenta de
+tesoreria; este corte admite transferencia, domiciliacion y caja.
 
 ## 1.a Ejercicios contables
 

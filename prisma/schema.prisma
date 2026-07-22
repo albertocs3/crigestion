@@ -92,6 +92,35 @@ enum SupplierPaymentTermsType {
   FIXED_DAY_OF_MONTH
 }
 
+enum PurchaseInvoiceStatus {
+  DRAFT
+  REGISTERED
+  VOIDED
+}
+
+enum PurchasePaymentStatus {
+  PENDING
+  PARTIALLY_PAID
+  PAID
+  NOT_APPLICABLE
+}
+
+enum PurchaseDueDateStatus {
+  PENDING
+  PAID
+  CANCELLED
+}
+
+enum SupplierPaymentStatus {
+  POSTED
+  VOIDED
+}
+
+enum PurchaseVatRecordStatus {
+  ACTIVE
+  REVERSED
+}
+
 enum CustomerFiscalTreatment {
   DOMESTIC
   EU
@@ -152,6 +181,7 @@ enum CatalogTaxRateStatus {
 
 enum CatalogStockMovementType {
   ADJUSTMENT
+  PURCHASE_RECEIPT
 }
 
 enum CustomerStoreStatus {
@@ -329,6 +359,8 @@ enum AccountingEntryOrigin {
   MANUAL
   INVOICE
   INVOICE_VOIDING
+  PURCHASE_INVOICE
+  SUPPLIER_PAYMENT
   CUSTOMER_PAYMENT
   CUSTOMER_PAYMENT_RETURN
   CUSTOMER_CREDIT_REFUND
@@ -385,6 +417,9 @@ model Company {
   bankAccounts             BankAccount[]
   bankStatements           BankStatement[]
   invoices                 Invoice[]
+  purchaseInvoices         PurchaseInvoice[]
+  purchaseVatRecords       PurchaseVatRecord[]
+  supplierPayments         SupplierPayment[]
   customerCredits          CustomerCredit[]
   customerCreditRefunds    CustomerCreditRefund[]
   verifactuInstallations   VerifactuSifInstallation[]
@@ -484,7 +519,7 @@ model Customer {
 }
 
 model Supplier {
-  id                   String                   @id @default(uuid()) @db.Uuid
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   companyId            String                   @db.Uuid
   sequenceNumber       Int
   code                 String                   @db.VarChar(20)
@@ -517,10 +552,13 @@ model Supplier {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  company   Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  createdBy User                @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy User?               @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  accounts  AccountingAccount[]
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy          User                @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy          User?               @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  accounts           AccountingAccount[]
+  purchaseInvoices   PurchaseInvoice[]
+  purchaseVatRecords PurchaseVatRecord[]
+  supplierPayments   SupplierPayment[]
 
   @@unique([companyId, sequenceNumber])
   @@unique([companyId, code])
@@ -530,6 +568,211 @@ model Supplier {
   @@index([companyId, createdAt, id])
   @@index([createdById, createdAt])
   @@map("suppliers")
+}
+
+model PurchaseInvoice {
+  id                              String                @id @default(uuid()) @db.Uuid
+  companyId                       String                @db.Uuid
+  supplierId                      String                @db.Uuid
+  supplierCodeSnapshot            String                @db.VarChar(20)
+  supplierAccountingCodeSnapshot  String                @db.VarChar(9)
+  supplierLegalNameSnapshot       String                @db.VarChar(200)
+  supplierTaxIdLast4Snapshot      String                @db.VarChar(4)
+  supplierTaxIdEncryptedSnapshot  Bytes                 @db.ByteA
+  supplierInvoiceNumber           String                @db.VarChar(80)
+  supplierInvoiceNumberNormalized String                @db.VarChar(80)
+  status                          PurchaseInvoiceStatus @default(DRAFT)
+  paymentStatus                   PurchasePaymentStatus @default(PENDING)
+  issueDate                       DateTime              @db.Date
+  receivedDate                    DateTime              @db.Date
+  operationDate                   DateTime              @db.Date
+  accountingDate                  DateTime              @db.Date
+  subtotal                        Decimal               @default(0) @db.Decimal(14, 2)
+  discountTotal                   Decimal               @default(0) @db.Decimal(14, 2)
+  taxableBase                     Decimal               @default(0) @db.Decimal(14, 2)
+  taxAmount                       Decimal               @default(0) @db.Decimal(14, 2)
+  total                           Decimal               @default(0) @db.Decimal(14, 2)
+  notes                           String?               @db.VarChar(1000)
+  version                         Int                   @default(1)
+  createdById                     String                @db.Uuid
+  updatedById                     String?               @db.Uuid
+  registeredById                  String?               @db.Uuid
+  registeredAt                    DateTime?             @db.Timestamptz(3)
+  createdAt                       DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt                       DateTime              @updatedAt @db.Timestamptz(3)
+
+  company         Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier        Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy       User                        @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy       User?                       @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  registeredBy    User?                       @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  lines           PurchaseInvoiceLine[]
+  taxSummaries    PurchaseInvoiceTaxSummary[]
+  vatRecords      PurchaseVatRecord[]
+  dueDates        PurchaseDueDate[]
+  allocations     SupplierPaymentAllocation[]
+  accountingEntry AccountingJournalEntry?     @relation("PurchaseInvoiceAccountingEntry")
+
+  @@unique([companyId, supplierId, supplierInvoiceNumberNormalized])
+  @@unique([id, companyId])
+  @@index([companyId, status, accountingDate, id])
+  @@index([companyId, paymentStatus, accountingDate, id])
+  @@index([supplierId, issueDate, id])
+  @@index([createdById, createdAt, id])
+  @@map("purchase_invoices")
+}
+
+model PurchaseInvoiceLine {
+  id                      String           @id @default(uuid()) @db.Uuid
+  purchaseInvoiceId       String           @db.Uuid
+  position                Int
+  catalogItemId           String?          @db.Uuid
+  catalogItemCodeSnapshot String?          @db.VarChar(20)
+  catalogItemKindSnapshot CatalogItemKind?
+  description             String           @db.VarChar(500)
+  quantity                Decimal          @db.Decimal(12, 3)
+  unitPrice               Decimal          @db.Decimal(12, 2)
+  discountPercent         Decimal          @default(0) @db.Decimal(5, 2)
+  discountAmount          Decimal          @default(0) @db.Decimal(12, 2)
+  purchaseAccountCode     String           @db.VarChar(9)
+  taxRateId               String           @db.Uuid
+  taxRateCodeSnapshot     String           @db.VarChar(40)
+  taxRateNameSnapshot     String           @db.VarChar(120)
+  taxRateSnapshot         Decimal          @db.Decimal(5, 2)
+  lineSubtotal            Decimal          @db.Decimal(14, 2)
+  lineDiscountTotal       Decimal          @db.Decimal(14, 2)
+  lineTaxableBase         Decimal          @db.Decimal(14, 2)
+  lineTaxAmount           Decimal          @db.Decimal(14, 2)
+  lineTotal               Decimal          @db.Decimal(14, 2)
+  createdAt               DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime         @updatedAt @db.Timestamptz(3)
+
+  purchaseInvoice PurchaseInvoice       @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  catalogItem     CatalogItem?          @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  taxRate         CatalogTaxRate        @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+  stockMovement   CatalogStockMovement?
+
+  @@unique([purchaseInvoiceId, position])
+  @@index([catalogItemId])
+  @@index([taxRateId])
+  @@index([purchaseAccountCode])
+  @@map("purchase_invoice_lines")
+}
+
+model PurchaseInvoiceTaxSummary {
+  id                String  @id @default(uuid()) @db.Uuid
+  purchaseInvoiceId String  @db.Uuid
+  taxRateCode       String  @db.VarChar(40)
+  taxRate           Decimal @db.Decimal(5, 2)
+  taxableBase       Decimal @db.Decimal(14, 2)
+  taxAmount         Decimal @db.Decimal(14, 2)
+  total             Decimal @db.Decimal(14, 2)
+
+  purchaseInvoice PurchaseInvoice    @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  vatRecord       PurchaseVatRecord?
+
+  @@unique([purchaseInvoiceId, taxRateCode, taxRate])
+  @@map("purchase_invoice_tax_summaries")
+}
+
+model PurchaseVatRecord {
+  id                             String                  @id @default(uuid()) @db.Uuid
+  companyId                      String                  @db.Uuid
+  supplierId                     String                  @db.Uuid
+  purchaseInvoiceId              String                  @db.Uuid
+  taxSummaryId                   String                  @unique @db.Uuid
+  accountingEntryId              String                  @db.Uuid
+  status                         PurchaseVatRecordStatus @default(ACTIVE)
+  supplierInvoiceNumberSnapshot  String                  @db.VarChar(80)
+  supplierCodeSnapshot           String                  @db.VarChar(20)
+  supplierLegalNameSnapshot      String                  @db.VarChar(200)
+  supplierTaxIdLast4Snapshot     String                  @db.VarChar(4)
+  supplierTaxIdEncryptedSnapshot Bytes                   @db.ByteA
+  issueDate                      DateTime                @db.Date
+  accountingDate                 DateTime                @db.Date
+  taxRateCode                    String                  @db.VarChar(40)
+  taxRate                        Decimal                 @db.Decimal(5, 2)
+  taxableBase                    Decimal                 @db.Decimal(14, 2)
+  taxAmount                      Decimal                 @db.Decimal(14, 2)
+  total                          Decimal                 @db.Decimal(14, 2)
+  createdAt                      DateTime                @default(now()) @db.Timestamptz(3)
+
+  company         Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier        Supplier                  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseInvoice PurchaseInvoice           @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  taxSummary      PurchaseInvoiceTaxSummary @relation(fields: [taxSummaryId], references: [id], onDelete: Restrict)
+  accountingEntry AccountingJournalEntry    @relation(fields: [accountingEntryId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, status, accountingDate, id])
+  @@index([supplierId, issueDate, id])
+  @@index([purchaseInvoiceId])
+  @@index([accountingEntryId])
+  @@map("purchase_vat_records")
+}
+
+model PurchaseDueDate {
+  id                String                @id @default(uuid()) @db.Uuid
+  purchaseInvoiceId String                @db.Uuid
+  position          Int
+  dueDate           DateTime              @db.Date
+  amount            Decimal               @db.Decimal(14, 2)
+  paymentMethod     SupplierPaymentMethod
+  status            PurchaseDueDateStatus @default(PENDING)
+  createdAt         DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime              @updatedAt @db.Timestamptz(3)
+
+  purchaseInvoice PurchaseInvoice             @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  allocations     SupplierPaymentAllocation[]
+
+  @@unique([purchaseInvoiceId, position])
+  @@unique([id, purchaseInvoiceId])
+  @@index([status, dueDate, id])
+  @@index([purchaseInvoiceId, dueDate, id])
+  @@map("purchase_due_dates")
+}
+
+model SupplierPayment {
+  id            String                @id @default(uuid()) @db.Uuid
+  companyId     String                @db.Uuid
+  supplierId    String                @db.Uuid
+  paymentDate   DateTime              @db.Date
+  totalAmount   Decimal               @db.Decimal(14, 2)
+  paymentMethod SupplierPaymentMethod
+  status        SupplierPaymentStatus @default(POSTED)
+  reference     String?               @db.VarChar(120)
+  notes         String?               @db.VarChar(500)
+  createdById   String                @db.Uuid
+  createdAt     DateTime              @default(now()) @db.Timestamptz(3)
+
+  company         Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier        Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy       User                        @relation("SupplierPaymentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  allocations     SupplierPaymentAllocation[]
+  accountingEntry AccountingJournalEntry?     @relation("SupplierPaymentAccountingEntry")
+
+  @@unique([id, companyId])
+  @@index([companyId, status, paymentDate, id])
+  @@index([supplierId, paymentDate, id])
+  @@index([createdById, createdAt, id])
+  @@map("supplier_payments")
+}
+
+model SupplierPaymentAllocation {
+  id                String   @id @default(uuid()) @db.Uuid
+  supplierPaymentId String   @db.Uuid
+  purchaseInvoiceId String   @db.Uuid
+  dueDateId         String   @db.Uuid
+  amount            Decimal  @db.Decimal(14, 2)
+  createdAt         DateTime @default(now()) @db.Timestamptz(3)
+
+  supplierPayment SupplierPayment @relation(fields: [supplierPaymentId], references: [id], onDelete: Restrict)
+  purchaseInvoice PurchaseInvoice @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  dueDate         PurchaseDueDate @relation(fields: [dueDateId, purchaseInvoiceId], references: [id, purchaseInvoiceId], onDelete: Restrict)
+
+  @@unique([supplierPaymentId, dueDateId])
+  @@index([purchaseInvoiceId, createdAt, id])
+  @@index([dueDateId, createdAt, id])
+  @@map("supplier_payment_allocations")
 }
 
 model CustomerSepaMandate {
@@ -650,6 +893,10 @@ model User {
   updatedCustomers              Customer[]                           @relation("CustomersUpdatedBy")
   createdSuppliers              Supplier[]                           @relation("SuppliersCreatedBy")
   updatedSuppliers              Supplier[]                           @relation("SuppliersUpdatedBy")
+  createdPurchaseInvoices       PurchaseInvoice[]                    @relation("PurchaseInvoicesCreatedBy")
+  updatedPurchaseInvoices       PurchaseInvoice[]                    @relation("PurchaseInvoicesUpdatedBy")
+  registeredPurchaseInvoices    PurchaseInvoice[]                    @relation("PurchaseInvoicesRegisteredBy")
+  createdSupplierPayments       SupplierPayment[]                    @relation("SupplierPaymentsCreatedBy")
   createdCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
   updatedCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
   createdCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
@@ -689,32 +936,34 @@ model User {
 }
 
 model CatalogItem {
-  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code         String            @unique @db.VarChar(20)
-  categoryId   String?           @db.Uuid
-  kind         CatalogItemKind
-  status       CatalogItemStatus @default(ACTIVE)
-  name         String            @unique @db.VarChar(200)
-  description  String?           @db.VarChar(1000)
-  unitName     String            @default("Unidades") @db.VarChar(40)
-  salePrice    Decimal           @db.Decimal(12, 2)
-  costPrice    Decimal           @default(0) @db.Decimal(12, 2)
-  taxRateId    String            @db.Uuid
-  taxRate      Decimal           @default(21) @db.Decimal(5, 2)
-  stockTracked Boolean           @default(false)
-  stockCurrent Decimal           @default(0) @db.Decimal(12, 3)
-  stockMinimum Decimal           @default(0) @db.Decimal(12, 3)
-  createdById  String            @db.Uuid
-  updatedById  String?           @db.Uuid
-  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
-  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                String            @unique @db.VarChar(20)
+  categoryId          String?           @db.Uuid
+  kind                CatalogItemKind
+  status              CatalogItemStatus @default(ACTIVE)
+  name                String            @unique @db.VarChar(200)
+  description         String?           @db.VarChar(1000)
+  unitName            String            @default("Unidades") @db.VarChar(40)
+  salePrice           Decimal           @db.Decimal(12, 2)
+  costPrice           Decimal           @default(0) @db.Decimal(12, 2)
+  taxRateId           String            @db.Uuid
+  taxRate             Decimal           @default(21) @db.Decimal(5, 2)
+  purchaseAccountCode String?           @db.VarChar(9)
+  stockTracked        Boolean           @default(false)
+  stockCurrent        Decimal           @default(0) @db.Decimal(12, 3)
+  stockMinimum        Decimal           @default(0) @db.Decimal(12, 3)
+  createdById         String            @db.Uuid
+  updatedById         String?           @db.Uuid
+  createdAt           DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime          @updatedAt @db.Timestamptz(3)
 
-  category          CatalogCategory?       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
-  taxRateDefinition CatalogTaxRate         @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
-  createdBy         User                   @relation("CatalogItemsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy         User?                  @relation("CatalogItemsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  stockMovements    CatalogStockMovement[]
-  invoiceLines      InvoiceLine[]
+  category             CatalogCategory?       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  taxRateDefinition    CatalogTaxRate         @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+  createdBy            User                   @relation("CatalogItemsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy            User?                  @relation("CatalogItemsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  stockMovements       CatalogStockMovement[]
+  invoiceLines         InvoiceLine[]
+  purchaseInvoiceLines PurchaseInvoiceLine[]
 
   @@index([status, name, id])
   @@index([kind, status, name, id])
@@ -725,18 +974,20 @@ model CatalogItem {
 }
 
 model CatalogStockMovement {
-  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  itemId        String                   @db.Uuid
-  type          CatalogStockMovementType @default(ADJUSTMENT)
-  quantity      Decimal                  @db.Decimal(12, 3)
-  previousStock Decimal                  @db.Decimal(12, 3)
-  newStock      Decimal                  @db.Decimal(12, 3)
-  reason        String                   @db.VarChar(500)
-  createdById   String                   @db.Uuid
-  createdAt     DateTime                 @default(now()) @db.Timestamptz(3)
+  id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  itemId                String                   @db.Uuid
+  purchaseInvoiceLineId String?                  @unique @db.Uuid
+  type                  CatalogStockMovementType @default(ADJUSTMENT)
+  quantity              Decimal                  @db.Decimal(12, 3)
+  previousStock         Decimal                  @db.Decimal(12, 3)
+  newStock              Decimal                  @db.Decimal(12, 3)
+  reason                String                   @db.VarChar(500)
+  createdById           String                   @db.Uuid
+  createdAt             DateTime                 @default(now()) @db.Timestamptz(3)
 
-  item      CatalogItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  createdBy User        @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  item                CatalogItem          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  purchaseInvoiceLine PurchaseInvoiceLine? @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
+  createdBy           User                 @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([itemId, createdAt, id])
   @@index([createdById, createdAt])
@@ -768,8 +1019,9 @@ model CatalogTaxRate {
   createdAt DateTime             @default(now()) @db.Timestamptz(3)
   updatedAt DateTime             @updatedAt @db.Timestamptz(3)
 
-  items        CatalogItem[]
-  invoiceLines InvoiceLine[]
+  items                CatalogItem[]
+  invoiceLines         InvoiceLine[]
+  purchaseInvoiceLines PurchaseInvoiceLine[]
 
   @@index([status, name, id])
   @@map("catalog_tax_rates")
@@ -1317,6 +1569,8 @@ model AccountingJournalEntry {
   customerPaymentId       String?               @unique @db.Uuid
   customerPaymentReturnId String?               @unique @db.Uuid
   customerCreditRefundId  String?               @unique @db.Uuid
+  purchaseInvoiceId       String?               @unique @db.Uuid
+  supplierPaymentId       String?               @unique @db.Uuid
   voidsInvoiceId          String?               @unique @db.Uuid
   reversesEntryId         String?               @unique @db.Uuid
   year                    Int
@@ -1338,12 +1592,15 @@ model AccountingJournalEntry {
   customerPayment       CustomerPayment?        @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
   customerPaymentReturn CustomerPaymentReturn?  @relation(fields: [customerPaymentReturnId], references: [id], onDelete: Restrict)
   customerCreditRefund  CustomerCreditRefund?   @relation(fields: [customerCreditRefundId], references: [id], onDelete: Restrict)
+  purchaseInvoice       PurchaseInvoice?        @relation("PurchaseInvoiceAccountingEntry", fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  supplierPayment       SupplierPayment?        @relation("SupplierPaymentAccountingEntry", fields: [supplierPaymentId], references: [id], onDelete: Restrict)
   voidsInvoice          Invoice?                @relation("InvoiceVoidingEntry", fields: [voidsInvoiceId], references: [id], onDelete: Restrict)
   reversesEntry         AccountingJournalEntry? @relation("AccountingEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedByEntry       AccountingJournalEntry? @relation("AccountingEntryReversal")
   createdBy             User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy             User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   lines                 AccountingJournalLine[]
+  purchaseVatRecords    PurchaseVatRecord[]
 
   @@unique([fiscalYearId, sequence])
   @@index([fiscalYearId, accountingDate, id])

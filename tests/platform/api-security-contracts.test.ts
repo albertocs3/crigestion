@@ -10,6 +10,7 @@ const publicMutationRoutes = new Set([
 const mutationHandlerPattern = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\s*\(/;
 const sharedCustomerCreditGuard = "authorizeCustomerCreditMutation(request";
 const sharedCustomerCreditRefundAction = "runCustomerCreditRefundAction(request";
+const sharedPurchaseGuard = "authorizePurchaseMutation(request";
 
 describe("API security route contracts", () => {
   it("requires origin and CSRF validation for mutating route handlers", () => {
@@ -24,7 +25,8 @@ describe("API security route contracts", () => {
 
       return !source.includes("isAllowedOrigin(request)")
         && !source.includes(sharedCustomerCreditGuard)
-        && !source.includes(sharedCustomerCreditRefundAction);
+        && !source.includes(sharedCustomerCreditRefundAction)
+        && !source.includes(sharedPurchaseGuard);
     });
     const authenticatedRoutesMissingCsrfValidation = mutatingRoutes.filter((filePath) => {
       const routePath = normalizePath(relative(process.cwd(), filePath));
@@ -33,7 +35,8 @@ describe("API security route contracts", () => {
       return !publicMutationRoutes.has(routePath)
         && !source.includes("validateCsrfToken(")
         && !source.includes(sharedCustomerCreditGuard)
-        && !source.includes(sharedCustomerCreditRefundAction);
+        && !source.includes(sharedCustomerCreditRefundAction)
+        && !source.includes(sharedPurchaseGuard);
     });
 
     expect(routesMissingOriginValidation.map(toProjectPath)).toEqual([]);
@@ -50,6 +53,12 @@ describe("API security route contracts", () => {
       "utf8"
     );
     expect(refundActionSource).toContain(sharedCustomerCreditGuard);
+    const purchaseGuardSource = readFileSync(
+      join(process.cwd(), "app", "api", "purchases", "_http.ts"),
+      "utf8"
+    );
+    expect(purchaseGuardSource).toContain("isAllowedOrigin(request)");
+    expect(purchaseGuardSource).toContain("validateCsrfToken(");
   });
 });
 

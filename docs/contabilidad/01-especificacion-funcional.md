@@ -387,6 +387,10 @@ Las compras de inmovilizado quedan fuera de la primera versión.
 
 Una factura registrada puede corregirse mientras el ejercicio esté abierto.
 
+> Estado del primer corte implementado: una compra registrada es inmutable. La
+> correccion, anulacion y conservacion de versiones descritas a continuacion se
+> incorporaran juntas para evitar sobrescrituras parciales del historico.
+
 La corrección:
 
 - Anula contablemente el asiento anterior.
@@ -452,6 +456,12 @@ Formas de pago:
 - Los pagos domiciliados se registran manualmente.
 - No habrá remesas de pagos.
 - No se contemplan anticipos ni devoluciones a proveedores.
+
+El primer corte implementa pagos manuales parciales o totales mediante
+asignaciones explicitas a vencimientos. El contrato admite varias asignaciones
+en un pago; la pantalla inicial permite registrar cada vencimiento de forma
+individual. Cada pago genera asiento contra banco o caja y actualiza los estados
+del vencimiento y de la compra en la misma transaccion.
 
 ## 18. Registros de IVA
 
