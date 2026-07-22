@@ -5,6 +5,8 @@ import { POST as loginPost } from "@/app/api/auth/login/route";
 import { GET as purchasesGet, POST as purchasesPost } from "@/app/api/purchases/route";
 import { POST as purchaseRectificationPost } from "@/app/api/purchases/[purchaseId]/rectifications/route";
 import { GET as supplierDueDatesGet } from "@/app/api/treasury/supplier-due-dates/route";
+import { GET as supplierCreditsGet } from "@/app/api/treasury/supplier-credits/route";
+import { POST as supplierCreditApplicationPost } from "@/app/api/treasury/supplier-credits/[creditId]/applications/route";
 import { prisma } from "@/lib/prisma";
 import { createInitialAccountingFiscalYear } from "@/modules/accounting/application/fiscalYears";
 import { login } from "@/modules/platform/application/auth";
@@ -24,11 +26,15 @@ describe("purchase HTTP contracts", () => {
   afterAll(async () => { await reset(); await prisma.$disconnect(); });
 
   it("requires authentication, origin, CSRF, JSON and idempotency", async () => {
-    expect((await purchasesGet(request("/api/purchases"))).status).toBe(401); await loginHttp(); const csrf = await csrfToken();
+    expect((await purchasesGet(request("/api/purchases"))).status).toBe(401); expect((await supplierCreditsGet(request("/api/treasury/supplier-credits"))).status).toBe(401); await loginHttp(); const csrf = await csrfToken();
     expect((await purchasesPost(jsonRequest("/api/purchases", {}, { csrf: null }))).status).toBe(403);
     expect((await purchasesPost(new Request("http://localhost/api/purchases", { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "application/json", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID() }, body: "{}" }))).status).toBe(403);
     expect((await purchasesPost(jsonRequest("/api/purchases", {}, { csrf, idempotency: null }))).status).toBe(400);
     expect((await purchasesPost(new Request("http://localhost/api/purchases", { method: "POST", headers: { Origin: "http://localhost:3000", "Content-Type": "text/plain", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID() }, body: "bad" }))).status).toBe(415);
+    expect((await supplierCreditsGet(request("/api/treasury/supplier-credits"))).status).toBe(200);
+    const creditId = randomUUID(); const routeContext = { params: Promise.resolve({ creditId }) };
+    expect((await supplierCreditApplicationPost(jsonRequest(`/api/treasury/supplier-credits/${creditId}/applications`, {}, { csrf: null }), routeContext)).status).toBe(403);
+    expect((await supplierCreditApplicationPost(jsonRequest(`/api/treasury/supplier-credits/${creditId}/applications`, { targetDueDateId: randomUUID(), applicationDate: "2026-07-22", amount: "1.00", notes: null, unexpected: true }, { csrf }), { params: Promise.resolve({ creditId }) })).status).toBe(422);
   });
 
   it("separates purchase reading from supplier-treasury reading and management", async () => {

@@ -6,6 +6,7 @@ import { login } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
 import { createPurchase, createPurchaseRectification, purchaseRequestHash, registerPurchase, registerSupplierPayment, replacePurchaseDueDates, replacePurchaseLines } from "@/modules/purchases/application/purchases";
 import { createSupplier, supplierRequestHash } from "@/modules/suppliers/application/suppliers";
+import { applySupplierCredit, approveSupplierCreditRefund, getSupplierCredit, hashSupplierCreditApplication, hashSupplierCreditRefundAction, hashSupplierCreditRefundPost, hashSupplierCreditRefundRequest, postSupplierCreditRefund, requestSupplierCreditRefund } from "@/modules/treasury/application/supplierCredits";
 import type { SessionUser } from "@/modules/platform/application/auth";
 
 const password = "Cambiar-esta-clave-2026";
@@ -88,7 +89,7 @@ describe("supplier purchases and payments", () => {
     expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_RECTIFICATION_CREATED", payload: { path: ["originalPurchaseInvoiceId"], equals: created.value.id } } })).toBe(1);
   });
 
-  it("blocks rectification after any supplier payment allocation", async () => {
+  it("blocks partial payment rectification and creates an applicable/refundable credit after full payment", async () => {
     const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
     const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-PAID-01", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, context("paid-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
     const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio", quantity: "1", unitPrice: "100", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
@@ -99,8 +100,54 @@ describe("supplier purchases and payments", () => {
     const payment = { supplierId: supplier.id, paymentDate: "2026-07-10", paymentMethod: "BANK_TRANSFER" as const, reference: null, notes: null, allocations: [{ dueDateId: registered.value.dueDates[0]!.id, amount: "1.00" }] };
     expect((await registerSupplierPayment(payment, actor, context("paid-payment", "pay", payment))).ok).toBe(true);
     const command = { mode: "FULL" as const, expectedVersion: registered.value.version, supplierInvoiceNumber: "R-F-PAID-01", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN" as const, notes: null };
-    expect(await createPurchaseRectification(created.value.id, command, actor, context("paid-rect", "rectify", command))).toMatchObject({ ok: false, error: { code: "PURCHASE_RECTIFICATION_HAS_PAYMENTS" } });
-    expect(await prisma.purchaseInvoice.count({ where: { documentType: "RECTIFICATION" } })).toBe(0);
+    expect(await createPurchaseRectification(created.value.id, command, actor, context("paid-rect-partial", "rectify", command))).toMatchObject({ ok: false, error: { code: "PURCHASE_RECTIFICATION_PARTIAL_PAYMENT_UNSUPPORTED" } });
+    const remainder = { ...payment, reference: "FINAL", allocations: [{ dueDateId: registered.value.dueDates[0]!.id, amount: "120.00" }] };
+    expect((await registerSupplierPayment(remainder, actor, context("paid-payment-final", "pay", remainder))).ok).toBe(true);
+    const rectified = await createPurchaseRectification(created.value.id, command, actor, context("paid-rect", "rectify", command));
+    expect(rectified).toMatchObject({ ok: true, value: { documentType: "RECTIFICATION", total: "-121.00" } });
+    const original = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true } });
+    expect(original).toMatchObject({ status: "RECTIFIED", paymentStatus: "PAID" }); expect(original.dueDates[0]!.status).toBe("PAID");
+    const credit = await prisma.supplierCredit.findFirstOrThrow({ where: { sourceRectificationPurchaseInvoiceId: rectified.ok ? rectified.value.id : randomUUID() } });
+    expect(credit.originalAmount.toFixed(2)).toBe("121.00");
+
+    const targetCreated = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-FUTURE-01", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", notes: null }, actor, context("target-create", "create", {})); if (!targetCreated.ok) throw new Error(targetCreated.error.code);
+    const targetLines = { expectedVersion: targetCreated.value.version, lines: [{ catalogItemId: null, description: "Compra futura", quantity: "1", unitPrice: "50", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const targetWithLines = await replacePurchaseLines(targetCreated.value.id, targetLines, actor, context("target-lines", "lines", targetLines)); if (!targetWithLines.ok) throw new Error(targetWithLines.error.code);
+    const targetDues = { expectedVersion: targetWithLines.value.version, dueDates: [{ dueDate: "2026-08-31", amount: targetWithLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const targetScheduled = await replacePurchaseDueDates(targetCreated.value.id, targetDues, actor, context("target-dues", "dues", targetDues)); if (!targetScheduled.ok) throw new Error(targetScheduled.error.code);
+    const targetRegistered = await registerPurchase(targetCreated.value.id, { expectedVersion: targetScheduled.value.version }, actor, context("target-register", "register", {})); if (!targetRegistered.ok) throw new Error(targetRegistered.error.code);
+    const application = { targetDueDateId: targetRegistered.value.dueDates[0]!.id, applicationDate: "2026-07-21", amount: "60.50", notes: null };
+    const applied = await applySupplierCredit(credit.id, application, actor, { idempotencyKey: `supplier-credit-apply-${randomUUID()}`, requestHash: hashSupplierCreditApplication(credit.id, application), correlationId: "supplier-credit-apply" });
+    expect(applied).toMatchObject({ ok: true, status: 201, value: { availableAmount: "60.50", appliedAmount: "60.50" } });
+    expect(await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: targetCreated.value.id } })).toMatchObject({ paymentStatus: "SETTLED" });
+    expect(await prisma.purchaseDueDate.findUniqueOrThrow({ where: { id: targetRegistered.value.dueDates[0]!.id } })).toMatchObject({ status: "SETTLED" });
+    expect(await prisma.accountingJournalEntry.count({ where: { purchaseInvoiceId: targetCreated.value.id } })).toBe(1);
+
+    const otherCompany = await prisma.company.create({ data: { legalName: "Otra empresa", taxId: "B87654321" } });
+    const foreignBank = await prisma.bankAccount.create({ data: { companyId: otherCompany.id, name: "Cuenta de otra empresa", iban: "ES9121000418450200051332", createdById: actor.id } });
+    const invalidBankRefund = { paymentMethod: "BANK_TRANSFER" as const, bankAccountId: foreignBank.id, requestedDate: "2026-07-21", amount: "1.00", reasonCode: "OTHER" as const, reference: null, notes: null };
+    expect(await requestSupplierCreditRefund(credit.id, invalidBankRefund, actor, { idempotencyKey: `supplier-credit-refund-usd-${randomUUID()}`, requestHash: hashSupplierCreditRefundRequest(credit.id, invalidBankRefund) })).toMatchObject({ ok: false, error: { code: "SUPPLIER_CREDIT_REFUND_BANK_ACCOUNT_NOT_AVAILABLE" } });
+    expect(await prisma.supplierCreditRefund.count()).toBe(0);
+
+    const refund = { paymentMethod: "CASH" as const, bankAccountId: null, requestedDate: "2026-07-21", amount: "60.50", reasonCode: "OPERATION_CANCELLED" as const, reference: null, notes: null };
+    const requested = await requestSupplierCreditRefund(credit.id, refund, actor, { idempotencyKey: `supplier-credit-refund-${randomUUID()}`, requestHash: hashSupplierCreditRefundRequest(credit.id, refund), correlationId: "supplier-credit-refund" });
+    expect(requested).toMatchObject({ ok: true, status: 201, value: { availableAmount: "0.00", reservedRefundAmount: "60.50" } });
+    if (!requested.ok) throw new Error("Refund request failed"); const refundId = requested.value.refunds[0]!.id;
+    expect(await approveSupplierCreditRefund(refundId, actor, { idempotencyKey: `supplier-credit-self-approve-${randomUUID()}`, requestHash: hashSupplierCreditRefundAction(refundId, "approve") })).toMatchObject({ ok: false, error: { code: "SUPPLIER_CREDIT_REFUND_SELF_APPROVAL_FORBIDDEN" } });
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUPPLIER_CREDIT_REFUND_APPROVAL_DENIED", payload: { path: ["refundId"], equals: refundId } } })).toBe(1);
+    const adminRole = await prisma.role.findUniqueOrThrow({ where: { code: "Administrador" } });
+    const checkerRow = await prisma.user.create({ data: { displayName: "Aprobador", userName: "checker", normalizedUserName: "checker", passwordHash: "test-only", roleId: adminRole.id } });
+    const checker: SessionUser = { id: checkerRow.id, displayName: checkerRow.displayName, userName: checkerRow.userName, role: { code: adminRole.code, name: adminRole.name }, permissions: actor.permissions };
+    const approved = await approveSupplierCreditRefund(refundId, checker, { idempotencyKey: `supplier-credit-approve-${randomUUID()}`, requestHash: hashSupplierCreditRefundAction(refundId, "approve"), correlationId: "supplier-credit-approve" });
+    expect(approved).toMatchObject({ ok: true, value: { refunds: [{ status: "APPROVED" }] } });
+    const posting = { postingDate: "2026-07-22" };
+    const posted = await postSupplierCreditRefund(refundId, posting, actor, { idempotencyKey: `supplier-credit-post-${randomUUID()}`, requestHash: hashSupplierCreditRefundPost(refundId, posting), correlationId: "supplier-credit-post" });
+    expect(posted).toMatchObject({ ok: true, value: { availableAmount: "0.00", reservedRefundAmount: "0.00", postedRefundAmount: "60.50", refunds: [{ status: "POSTED", postingDate: "2026-07-22" }] } });
+    const refundEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { supplierCreditRefundId: refundId }, include: { lines: { include: { account: true }, orderBy: { position: "asc" } } } });
+    expect(refundEntry.origin).toBe("SUPPLIER_CREDIT_REFUND"); expect(refundEntry.lines.map((line) => [line.account.code, line.debit.toFixed(2), line.credit.toFixed(2)])).toEqual([["570000000", "60.50", "0.00"], [supplier.accountingCode, "0.00", "60.50"]]);
+    const withoutAccounting = await getSupplierCredit(credit.id, { ...actor, permissions: actor.permissions.filter((permission) => permission !== "Accounting.View") });
+    expect(withoutAccounting?.refunds[0]?.accountingEntry).toBeNull();
+    await expect(prisma.supplierCredit.update({ where: { id: credit.id }, data: { originalAmount: "120.00" } })).rejects.toThrow("SUPPLIER_CREDIT_LEDGER_APPEND_ONLY");
   });
 });
 

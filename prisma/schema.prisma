@@ -108,12 +108,15 @@ enum PurchasePaymentStatus {
   PENDING
   PARTIALLY_PAID
   PAID
+  PARTIALLY_SETTLED
+  SETTLED
   NOT_APPLICABLE
 }
 
 enum PurchaseDueDateStatus {
   PENDING
   PAID
+  SETTLED
   CANCELLED
 }
 
@@ -372,12 +375,20 @@ enum AccountingEntryOrigin {
   CUSTOMER_PAYMENT
   CUSTOMER_PAYMENT_RETURN
   CUSTOMER_CREDIT_REFUND
+  SUPPLIER_CREDIT_REFUND
   REGULARIZATION
   CLOSING
   OPENING
 }
 
 enum CustomerCreditRefundStatus {
+  REQUESTED
+  APPROVED
+  POSTED
+  CANCELLED
+}
+
+enum SupplierCreditRefundStatus {
   REQUESTED
   APPROVED
   POSTED
@@ -428,6 +439,8 @@ model Company {
   purchaseInvoices         PurchaseInvoice[]
   purchaseVatRecords       PurchaseVatRecord[]
   supplierPayments         SupplierPayment[]
+  supplierCredits          SupplierCredit[]
+  supplierCreditRefunds    SupplierCreditRefund[]
   customerCredits          CustomerCredit[]
   customerCreditRefunds    CustomerCreditRefund[]
   verifactuInstallations   VerifactuSifInstallation[]
@@ -560,13 +573,15 @@ model Supplier {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  createdBy          User                @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy          User?               @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  company            Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy          User                   @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy          User?                  @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   accounts           AccountingAccount[]
   purchaseInvoices   PurchaseInvoice[]
   purchaseVatRecords PurchaseVatRecord[]
   supplierPayments   SupplierPayment[]
+  credits            SupplierCredit[]
+  creditRefunds      SupplierCreditRefund[]
 
   @@unique([companyId, sequenceNumber])
   @@unique([companyId, code])
@@ -579,55 +594,58 @@ model Supplier {
 }
 
 model PurchaseInvoice {
-  id                              String                @id @default(uuid()) @db.Uuid
-  companyId                       String                @db.Uuid
-  supplierId                      String                @db.Uuid
-  supplierCodeSnapshot            String                @db.VarChar(20)
-  supplierAccountingCodeSnapshot  String                @db.VarChar(9)
-  supplierLegalNameSnapshot       String                @db.VarChar(200)
-  supplierTaxIdLast4Snapshot      String                @db.VarChar(4)
-  supplierTaxIdEncryptedSnapshot  Bytes                 @db.ByteA
-  supplierInvoiceNumber           String                @db.VarChar(80)
-  supplierInvoiceNumberNormalized String                @db.VarChar(80)
+  id                              String                      @id @default(uuid()) @db.Uuid
+  companyId                       String                      @db.Uuid
+  supplierId                      String                      @db.Uuid
+  supplierCodeSnapshot            String                      @db.VarChar(20)
+  supplierAccountingCodeSnapshot  String                      @db.VarChar(9)
+  supplierLegalNameSnapshot       String                      @db.VarChar(200)
+  supplierTaxIdLast4Snapshot      String                      @db.VarChar(4)
+  supplierTaxIdEncryptedSnapshot  Bytes                       @db.ByteA
+  supplierInvoiceNumber           String                      @db.VarChar(80)
+  supplierInvoiceNumberNormalized String                      @db.VarChar(80)
   documentType                    PurchaseInvoiceDocumentType @default(STANDARD)
-  status                          PurchaseInvoiceStatus @default(DRAFT)
-  paymentStatus                   PurchasePaymentStatus @default(PENDING)
-  issueDate                       DateTime              @db.Date
-  receivedDate                    DateTime              @db.Date
-  operationDate                   DateTime              @db.Date
-  accountingDate                  DateTime              @db.Date
-  subtotal                        Decimal               @default(0) @db.Decimal(14, 2)
-  discountTotal                   Decimal               @default(0) @db.Decimal(14, 2)
-  taxableBase                     Decimal               @default(0) @db.Decimal(14, 2)
-  taxAmount                       Decimal               @default(0) @db.Decimal(14, 2)
-  total                           Decimal               @default(0) @db.Decimal(14, 2)
-  notes                           String?               @db.VarChar(1000)
-  rectificationReason             String?               @db.VarChar(120)
-  rectifiesPurchaseInvoiceId      String?               @db.Uuid
-  version                         Int                   @default(1)
-  createdById                     String                @db.Uuid
-  updatedById                     String?               @db.Uuid
-  registeredById                  String?               @db.Uuid
-  registeredAt                    DateTime?             @db.Timestamptz(3)
-  createdAt                       DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt                       DateTime              @updatedAt @db.Timestamptz(3)
+  status                          PurchaseInvoiceStatus       @default(DRAFT)
+  paymentStatus                   PurchasePaymentStatus       @default(PENDING)
+  issueDate                       DateTime                    @db.Date
+  receivedDate                    DateTime                    @db.Date
+  operationDate                   DateTime                    @db.Date
+  accountingDate                  DateTime                    @db.Date
+  subtotal                        Decimal                     @default(0) @db.Decimal(14, 2)
+  discountTotal                   Decimal                     @default(0) @db.Decimal(14, 2)
+  taxableBase                     Decimal                     @default(0) @db.Decimal(14, 2)
+  taxAmount                       Decimal                     @default(0) @db.Decimal(14, 2)
+  total                           Decimal                     @default(0) @db.Decimal(14, 2)
+  notes                           String?                     @db.VarChar(1000)
+  rectificationReason             String?                     @db.VarChar(120)
+  rectifiesPurchaseInvoiceId      String?                     @db.Uuid
+  version                         Int                         @default(1)
+  createdById                     String                      @db.Uuid
+  updatedById                     String?                     @db.Uuid
+  registeredById                  String?                     @db.Uuid
+  registeredAt                    DateTime?                   @db.Timestamptz(3)
+  createdAt                       DateTime                    @default(now()) @db.Timestamptz(3)
+  updatedAt                       DateTime                    @updatedAt @db.Timestamptz(3)
 
-  company         Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  supplier        Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  createdBy       User                        @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy       User?                       @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  registeredBy    User?                       @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
-  lines           PurchaseInvoiceLine[]
-  taxSummaries    PurchaseInvoiceTaxSummary[]
-  vatRecords      PurchaseVatRecord[]
-  dueDates        PurchaseDueDate[]
-  allocations     SupplierPaymentAllocation[]
-  accountingEntry AccountingJournalEntry?     @relation("PurchaseInvoiceAccountingEntry")
-  rectifiesPurchaseInvoice PurchaseInvoice?   @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
-  rectificationInvoices   PurchaseInvoice[]    @relation("PurchaseInvoiceRectifications")
+  company                  Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier                 Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy                User                        @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                User?                       @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  registeredBy             User?                       @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  lines                    PurchaseInvoiceLine[]
+  taxSummaries             PurchaseInvoiceTaxSummary[]
+  vatRecords               PurchaseVatRecord[]
+  dueDates                 PurchaseDueDate[]
+  allocations              SupplierPaymentAllocation[]
+  sourceSupplierCredit     SupplierCredit?             @relation("SupplierCreditSource")
+  creditApplications       SupplierCreditApplication[] @relation("SupplierCreditApplicationTargetPurchase")
+  accountingEntry          AccountingJournalEntry?     @relation("PurchaseInvoiceAccountingEntry")
+  rectifiesPurchaseInvoice PurchaseInvoice?            @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices    PurchaseInvoice[]           @relation("PurchaseInvoiceRectifications")
 
   @@unique([companyId, supplierId, supplierInvoiceNumberNormalized])
   @@unique([id, companyId])
+  @@unique([id, companyId, supplierId], map: "purchase_invoices_id_company_supplier_key")
   @@index([companyId, status, accountingDate, id])
   @@index([companyId, paymentStatus, accountingDate, id])
   @@index([supplierId, issueDate, id])
@@ -735,8 +753,9 @@ model PurchaseDueDate {
   createdAt         DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime              @updatedAt @db.Timestamptz(3)
 
-  purchaseInvoice PurchaseInvoice             @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
-  allocations     SupplierPaymentAllocation[]
+  purchaseInvoice    PurchaseInvoice             @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  allocations        SupplierPaymentAllocation[]
+  creditApplications SupplierCreditApplication[]
 
   @@unique([purchaseInvoiceId, position])
   @@unique([id, purchaseInvoiceId])
@@ -896,55 +915,61 @@ model User {
   createdAt          DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
 
-  role                          Role                                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  uploadedAttachments           Attachment[]                         @relation("AttachmentsUploadedBy")
-  sessions                      Session[]
-  requestedBackups              BackupOperation[]
-  requestedRestores             RestoreOperation[]
-  enabledMaintenances           PlatformMaintenanceState[]           @relation("MaintenanceEnabledBy")
-  disabledMaintenances          PlatformMaintenanceState[]           @relation("MaintenanceDisabledBy")
-  createdCustomers              Customer[]                           @relation("CustomersCreatedBy")
-  updatedCustomers              Customer[]                           @relation("CustomersUpdatedBy")
-  createdSuppliers              Supplier[]                           @relation("SuppliersCreatedBy")
-  updatedSuppliers              Supplier[]                           @relation("SuppliersUpdatedBy")
-  createdPurchaseInvoices       PurchaseInvoice[]                    @relation("PurchaseInvoicesCreatedBy")
-  updatedPurchaseInvoices       PurchaseInvoice[]                    @relation("PurchaseInvoicesUpdatedBy")
-  registeredPurchaseInvoices    PurchaseInvoice[]                    @relation("PurchaseInvoicesRegisteredBy")
-  createdSupplierPayments       SupplierPayment[]                    @relation("SupplierPaymentsCreatedBy")
-  createdCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
-  updatedCustomerAddresses      CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
-  createdCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
-  revokedCustomerSepaMandates   CustomerSepaMandate[]                @relation("CustomerSepaMandatesRevokedBy")
-  createdCustomerStores         CustomerStore[]                      @relation("CustomerStoresCreatedBy")
-  updatedCustomerStores         CustomerStore[]                      @relation("CustomerStoresUpdatedBy")
-  createdCatalogItems           CatalogItem[]                        @relation("CatalogItemsCreatedBy")
-  updatedCatalogItems           CatalogItem[]                        @relation("CatalogItemsUpdatedBy")
-  createdCatalogStockMovements  CatalogStockMovement[]               @relation("CatalogStockMovementsCreatedBy")
-  createdInvoices               Invoice[]                            @relation("InvoicesCreatedBy")
-  updatedInvoices               Invoice[]                            @relation("InvoicesUpdatedBy")
-  issuedInvoices                Invoice[]                            @relation("InvoicesIssuedBy")
-  createdCustomerPayments       CustomerPayment[]                    @relation("CustomerPaymentsCreatedBy")
-  createdCustomerPaymentReturns CustomerPaymentReturn[]              @relation("CustomerPaymentReturnsCreatedBy")
-  createdCustomerCredits        CustomerCredit[]                     @relation("CustomerCreditsCreatedBy")
-  createdCreditApplications     CustomerCreditApplication[]          @relation("CustomerCreditApplicationsCreatedBy")
-  requestedCreditRefunds        CustomerCreditRefund[]               @relation("CustomerCreditRefundsRequestedBy")
-  approvedCreditRefunds         CustomerCreditRefund[]               @relation("CustomerCreditRefundsApprovedBy")
-  postedCreditRefunds           CustomerCreditRefund[]               @relation("CustomerCreditRefundsPostedBy")
-  cancelledCreditRefunds        CustomerCreditRefund[]               @relation("CustomerCreditRefundsCancelledBy")
-  createdCustomerRemittances    CustomerRemittance[]                 @relation("CustomerRemittancesCreatedBy")
-  updatedCustomerRemittances    CustomerRemittance[]                 @relation("CustomerRemittancesUpdatedBy")
-  createdAccountingAccounts     AccountingAccount[]                  @relation("AccountingAccountsCreatedBy")
-  createdAccountingFiscalYears  AccountingFiscalYear[]               @relation("AccountingFiscalYearsCreatedBy")
-  closedAccountingFiscalYears   AccountingFiscalYear[]               @relation("AccountingFiscalYearsClosedBy")
-  createdAccountingEntries      AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
-  updatedAccountingEntries      AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
-  createdBankAccounts           BankAccount[]                        @relation("BankAccountsCreatedBy")
-  createdBankMovements          BankMovement[]                       @relation("BankMovementsCreatedBy")
-  createdBankReconciliations    BankReconciliation[]                 @relation("BankReconciliationsCreatedBy")
-  undoneBankReconciliations     BankReconciliation[]                 @relation("BankReconciliationsUndoneBy")
-  importedBankStatements        BankStatement[]                      @relation("BankStatementsImportedBy")
-  verifactuCredentialTests      VerifactuMtlsCredentialTestAttempt[]
-  initialInstallation           Installation?
+  role                              Role                                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  uploadedAttachments               Attachment[]                         @relation("AttachmentsUploadedBy")
+  sessions                          Session[]
+  requestedBackups                  BackupOperation[]
+  requestedRestores                 RestoreOperation[]
+  enabledMaintenances               PlatformMaintenanceState[]           @relation("MaintenanceEnabledBy")
+  disabledMaintenances              PlatformMaintenanceState[]           @relation("MaintenanceDisabledBy")
+  createdCustomers                  Customer[]                           @relation("CustomersCreatedBy")
+  updatedCustomers                  Customer[]                           @relation("CustomersUpdatedBy")
+  createdSuppliers                  Supplier[]                           @relation("SuppliersCreatedBy")
+  updatedSuppliers                  Supplier[]                           @relation("SuppliersUpdatedBy")
+  createdPurchaseInvoices           PurchaseInvoice[]                    @relation("PurchaseInvoicesCreatedBy")
+  updatedPurchaseInvoices           PurchaseInvoice[]                    @relation("PurchaseInvoicesUpdatedBy")
+  registeredPurchaseInvoices        PurchaseInvoice[]                    @relation("PurchaseInvoicesRegisteredBy")
+  createdSupplierPayments           SupplierPayment[]                    @relation("SupplierPaymentsCreatedBy")
+  createdCustomerAddresses          CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
+  updatedCustomerAddresses          CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
+  createdCustomerSepaMandates       CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
+  revokedCustomerSepaMandates       CustomerSepaMandate[]                @relation("CustomerSepaMandatesRevokedBy")
+  createdCustomerStores             CustomerStore[]                      @relation("CustomerStoresCreatedBy")
+  updatedCustomerStores             CustomerStore[]                      @relation("CustomerStoresUpdatedBy")
+  createdCatalogItems               CatalogItem[]                        @relation("CatalogItemsCreatedBy")
+  updatedCatalogItems               CatalogItem[]                        @relation("CatalogItemsUpdatedBy")
+  createdCatalogStockMovements      CatalogStockMovement[]               @relation("CatalogStockMovementsCreatedBy")
+  createdInvoices                   Invoice[]                            @relation("InvoicesCreatedBy")
+  updatedInvoices                   Invoice[]                            @relation("InvoicesUpdatedBy")
+  issuedInvoices                    Invoice[]                            @relation("InvoicesIssuedBy")
+  createdCustomerPayments           CustomerPayment[]                    @relation("CustomerPaymentsCreatedBy")
+  createdCustomerPaymentReturns     CustomerPaymentReturn[]              @relation("CustomerPaymentReturnsCreatedBy")
+  createdCustomerCredits            CustomerCredit[]                     @relation("CustomerCreditsCreatedBy")
+  createdCreditApplications         CustomerCreditApplication[]          @relation("CustomerCreditApplicationsCreatedBy")
+  requestedCreditRefunds            CustomerCreditRefund[]               @relation("CustomerCreditRefundsRequestedBy")
+  approvedCreditRefunds             CustomerCreditRefund[]               @relation("CustomerCreditRefundsApprovedBy")
+  postedCreditRefunds               CustomerCreditRefund[]               @relation("CustomerCreditRefundsPostedBy")
+  cancelledCreditRefunds            CustomerCreditRefund[]               @relation("CustomerCreditRefundsCancelledBy")
+  createdSupplierCredits            SupplierCredit[]                     @relation("SupplierCreditsCreatedBy")
+  createdSupplierCreditApplications SupplierCreditApplication[]          @relation("SupplierCreditApplicationsCreatedBy")
+  requestedSupplierCreditRefunds    SupplierCreditRefund[]               @relation("SupplierCreditRefundsRequestedBy")
+  approvedSupplierCreditRefunds     SupplierCreditRefund[]               @relation("SupplierCreditRefundsApprovedBy")
+  postedSupplierCreditRefunds       SupplierCreditRefund[]               @relation("SupplierCreditRefundsPostedBy")
+  cancelledSupplierCreditRefunds    SupplierCreditRefund[]               @relation("SupplierCreditRefundsCancelledBy")
+  createdCustomerRemittances        CustomerRemittance[]                 @relation("CustomerRemittancesCreatedBy")
+  updatedCustomerRemittances        CustomerRemittance[]                 @relation("CustomerRemittancesUpdatedBy")
+  createdAccountingAccounts         AccountingAccount[]                  @relation("AccountingAccountsCreatedBy")
+  createdAccountingFiscalYears      AccountingFiscalYear[]               @relation("AccountingFiscalYearsCreatedBy")
+  closedAccountingFiscalYears       AccountingFiscalYear[]               @relation("AccountingFiscalYearsClosedBy")
+  createdAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
+  updatedAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
+  createdBankAccounts               BankAccount[]                        @relation("BankAccountsCreatedBy")
+  createdBankMovements              BankMovement[]                       @relation("BankMovementsCreatedBy")
+  createdBankReconciliations        BankReconciliation[]                 @relation("BankReconciliationsCreatedBy")
+  undoneBankReconciliations         BankReconciliation[]                 @relation("BankReconciliationsUndoneBy")
+  importedBankStatements            BankStatement[]                      @relation("BankStatementsImportedBy")
+  verifactuCredentialTests          VerifactuMtlsCredentialTestAttempt[]
+  initialInstallation               Installation?
 
   @@map("users")
 }
@@ -1000,11 +1025,11 @@ model CatalogStockMovement {
   createdById           String                   @db.Uuid
   createdAt             DateTime                 @default(now()) @db.Timestamptz(3)
 
-  item                CatalogItem          @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  purchaseInvoiceLine PurchaseInvoiceLine? @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
-  reversesMovement    CatalogStockMovement?  @relation("CatalogStockMovementReversals", fields: [reversesMovementId], references: [id], onDelete: Restrict)
-  reversedByMovement  CatalogStockMovement?  @relation("CatalogStockMovementReversals")
-  createdBy           User                 @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  item                CatalogItem           @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  purchaseInvoiceLine PurchaseInvoiceLine?  @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
+  reversesMovement    CatalogStockMovement? @relation("CatalogStockMovementReversals", fields: [reversesMovementId], references: [id], onDelete: Restrict)
+  reversedByMovement  CatalogStockMovement? @relation("CatalogStockMovementReversals")
+  createdBy           User                  @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([itemId, createdAt, id])
   @@index([createdById, createdAt])
@@ -1342,6 +1367,96 @@ model CustomerCredit {
   @@map("customer_credits")
 }
 
+model SupplierCredit {
+  id                                   String   @id @default(uuid()) @db.Uuid
+  companyId                            String   @db.Uuid
+  supplierId                           String   @db.Uuid
+  sourceRectificationPurchaseInvoiceId String   @unique @db.Uuid
+  currency                             String   @default("EUR") @db.Char(3)
+  originalAmount                       Decimal  @db.Decimal(14, 2)
+  createdById                          String   @db.Uuid
+  createdAt                            DateTime @default(now()) @db.Timestamptz(3)
+
+  company                            Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier                           Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  sourceRectificationPurchaseInvoice PurchaseInvoice             @relation("SupplierCreditSource", fields: [sourceRectificationPurchaseInvoiceId], references: [id], onDelete: Restrict)
+  createdBy                          User                        @relation("SupplierCreditsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  applications                       SupplierCreditApplication[]
+  refunds                            SupplierCreditRefund[]
+
+  @@unique([id, companyId, supplierId], map: "supplier_credits_id_company_supplier_key")
+  @@index([companyId, supplierId, createdAt, id])
+  @@index([supplierId, createdAt, id])
+  @@map("supplier_credits")
+}
+
+model SupplierCreditApplication {
+  id                      String   @id @default(uuid()) @db.Uuid
+  creditId                String   @db.Uuid
+  companyId               String   @db.Uuid
+  supplierId              String   @db.Uuid
+  targetPurchaseInvoiceId String   @db.Uuid
+  targetDueDateId         String   @db.Uuid
+  applicationDate         DateTime @db.Date
+  amount                  Decimal  @db.Decimal(14, 2)
+  notes                   String?  @db.VarChar(500)
+  createdById             String   @db.Uuid
+  createdAt               DateTime @default(now()) @db.Timestamptz(3)
+
+  credit                SupplierCredit  @relation(fields: [creditId, companyId, supplierId], references: [id, companyId, supplierId], onDelete: Restrict, map: "supplier_credit_applications_credit_company_supplier_fkey")
+  targetPurchaseInvoice PurchaseInvoice @relation("SupplierCreditApplicationTargetPurchase", fields: [targetPurchaseInvoiceId, companyId, supplierId], references: [id, companyId, supplierId], onDelete: Restrict, map: "supplier_credit_applications_purchase_company_supplier_fkey")
+  targetDueDate         PurchaseDueDate @relation(fields: [targetDueDateId, targetPurchaseInvoiceId], references: [id, purchaseInvoiceId], onDelete: Restrict)
+  createdBy             User            @relation("SupplierCreditApplicationsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([creditId, applicationDate, id])
+  @@index([targetPurchaseInvoiceId, applicationDate, id], map: "supplier_credit_applications_targetPurchase_applicationDate_id")
+  @@index([targetDueDateId, createdAt, id])
+  @@index([createdById, createdAt])
+  @@map("supplier_credit_applications")
+}
+
+model SupplierCreditRefund {
+  id            String                     @id @default(uuid()) @db.Uuid
+  creditId      String                     @db.Uuid
+  companyId     String                     @db.Uuid
+  supplierId    String                     @db.Uuid
+  bankAccountId String?                    @db.Uuid
+  paymentMethod SupplierPaymentMethod
+  status        SupplierCreditRefundStatus @default(REQUESTED)
+  requestedDate DateTime                   @db.Date
+  postingDate   DateTime?                  @db.Date
+  amount        Decimal                    @db.Decimal(14, 2)
+  reasonCode    String                     @db.VarChar(80)
+  reference     String?                    @db.VarChar(120)
+  notes         String?                    @db.VarChar(500)
+  requestedById String                     @db.Uuid
+  approvedById  String?                    @db.Uuid
+  approvedAt    DateTime?                  @db.Timestamptz(3)
+  postedById    String?                    @db.Uuid
+  postedAt      DateTime?                  @db.Timestamptz(3)
+  cancelledById String?                    @db.Uuid
+  cancelledAt   DateTime?                  @db.Timestamptz(3)
+  createdAt     DateTime                   @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime                   @updatedAt @db.Timestamptz(3)
+
+  credit          SupplierCredit          @relation(fields: [creditId, companyId, supplierId], references: [id, companyId, supplierId], onDelete: Restrict, map: "supplier_credit_refunds_credit_company_supplier_fkey")
+  company         Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier        Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  bankAccount     BankAccount?            @relation(fields: [bankAccountId, companyId], references: [id, companyId], onDelete: Restrict)
+  requestedBy     User                    @relation("SupplierCreditRefundsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy      User?                   @relation("SupplierCreditRefundsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  postedBy        User?                   @relation("SupplierCreditRefundsPostedBy", fields: [postedById], references: [id], onDelete: Restrict)
+  cancelledBy     User?                   @relation("SupplierCreditRefundsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  accountingEntry AccountingJournalEntry?
+
+  @@index([creditId, requestedDate, id])
+  @@index([companyId, status, requestedDate, id])
+  @@index([supplierId, requestedDate, id])
+  @@index([bankAccountId, requestedDate, id])
+  @@index([requestedById, createdAt])
+  @@map("supplier_credit_refunds")
+}
+
 model CustomerCreditApplication {
   id              String   @id @default(uuid()) @db.Uuid
   creditId        String   @db.Uuid
@@ -1416,11 +1531,12 @@ model BankAccount {
   createdAt   DateTime          @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime          @updatedAt @db.Timestamptz(3)
 
-  company       Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  createdBy     User                   @relation("BankAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  movements     BankMovement[]
-  statements    BankStatement[]
-  creditRefunds CustomerCreditRefund[]
+  company               Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy             User                   @relation("BankAccountsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  movements             BankMovement[]
+  statements            BankStatement[]
+  creditRefunds         CustomerCreditRefund[]
+  supplierCreditRefunds SupplierCreditRefund[]
 
   @@unique([companyId, iban])
   @@unique([id, companyId])
@@ -1586,6 +1702,7 @@ model AccountingJournalEntry {
   customerPaymentId       String?               @unique @db.Uuid
   customerPaymentReturnId String?               @unique @db.Uuid
   customerCreditRefundId  String?               @unique @db.Uuid
+  supplierCreditRefundId  String?               @unique @db.Uuid
   purchaseInvoiceId       String?               @unique @db.Uuid
   supplierPaymentId       String?               @unique @db.Uuid
   voidsInvoiceId          String?               @unique @db.Uuid
@@ -1609,6 +1726,7 @@ model AccountingJournalEntry {
   customerPayment       CustomerPayment?        @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
   customerPaymentReturn CustomerPaymentReturn?  @relation(fields: [customerPaymentReturnId], references: [id], onDelete: Restrict)
   customerCreditRefund  CustomerCreditRefund?   @relation(fields: [customerCreditRefundId], references: [id], onDelete: Restrict)
+  supplierCreditRefund  SupplierCreditRefund?   @relation(fields: [supplierCreditRefundId], references: [id], onDelete: Restrict)
   purchaseInvoice       PurchaseInvoice?        @relation("PurchaseInvoiceAccountingEntry", fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
   supplierPayment       SupplierPayment?        @relation("SupplierPaymentAccountingEntry", fields: [supplierPaymentId], references: [id], onDelete: Restrict)
   voidsInvoice          Invoice?                @relation("InvoiceVoidingEntry", fields: [voidsInvoiceId], references: [id], onDelete: Restrict)

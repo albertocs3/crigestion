@@ -10,6 +10,7 @@ const publicMutationRoutes = new Set([
 const mutationHandlerPattern = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\s*\(/;
 const sharedCustomerCreditGuard = "authorizeCustomerCreditMutation(request";
 const sharedCustomerCreditRefundAction = "runCustomerCreditRefundAction(request";
+const sharedSupplierCreditRefundAction = "runSupplierCreditRefundAction(request";
 const sharedPurchaseGuard = "authorizePurchaseMutation(request";
 
 describe("API security route contracts", () => {
@@ -26,6 +27,7 @@ describe("API security route contracts", () => {
       return !source.includes("isAllowedOrigin(request)")
         && !source.includes(sharedCustomerCreditGuard)
         && !source.includes(sharedCustomerCreditRefundAction)
+        && !source.includes(sharedSupplierCreditRefundAction)
         && !source.includes(sharedPurchaseGuard);
     });
     const authenticatedRoutesMissingCsrfValidation = mutatingRoutes.filter((filePath) => {
@@ -36,6 +38,7 @@ describe("API security route contracts", () => {
         && !source.includes("validateCsrfToken(")
         && !source.includes(sharedCustomerCreditGuard)
         && !source.includes(sharedCustomerCreditRefundAction)
+        && !source.includes(sharedSupplierCreditRefundAction)
         && !source.includes(sharedPurchaseGuard);
     });
 
@@ -53,6 +56,11 @@ describe("API security route contracts", () => {
       "utf8"
     );
     expect(refundActionSource).toContain(sharedCustomerCreditGuard);
+    const supplierRefundActionSource = readFileSync(
+      join(process.cwd(), "app", "api", "treasury", "_supplier-credit-refund-action.ts"),
+      "utf8"
+    );
+    expect(supplierRefundActionSource).toContain(sharedCustomerCreditGuard);
     const purchaseGuardSource = readFileSync(
       join(process.cwd(), "app", "api", "purchases", "_http.ts"),
       "utf8"

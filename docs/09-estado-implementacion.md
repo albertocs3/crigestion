@@ -16,7 +16,7 @@ Fecha de corte: 2026-07-22.
 | Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Proveedores | Operativa inicial | Maestro fiscal desplegado y aceptado en staging: alta, edicion, baja logica, subcuenta 400, idempotencia, concurrencia optimista, RBAC, auditoria y datos sensibles cifrados. |
-| Compras | Operativa local pendiente de UAT | Borradores, lineas, vencimientos, registro contable, IVA soportado, entradas de stock, pagos de proveedor y rectificacion total sin pagos con contraasiento, IVA y stock append-only. |
+| Compras | Operativa local pendiente de candidata y UAT | Borradores, lineas, vencimientos, registro contable, IVA soportado, stock, pagos y rectificacion total impagada o totalmente pagada. El caso pagado crea credito append-only, compensable o reembolsable por banco/caja con maker-checker. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
 | Contabilidad | Operativa inicial | PGC PYMES, cuentas, asientos manuales, ejercicios, regularizacion, cierre y apertura. |
@@ -104,7 +104,10 @@ Prioridades pendientes despues de este corte:
    inmutable y repetir el drill desde esa copia. El drill local no sustituye
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
-4. Completar el ciclo avanzado de proveedor: credito/reembolso para rectificativas pagadas, rectificacion parcial, anulacion y correccion interna versionada. La rectificacion total impagada ya esta implementada localmente, pendiente de candidata y UAT de staging.
+4. Completar el ciclo avanzado de proveedor pendiente: rectificacion parcial,
+   anulacion y correccion interna versionada. El credito/reembolso de una
+   rectificativa totalmente pagada ya esta implementado localmente y debe pasar
+   `verify:release`, candidata y UAT aislada antes de desplegarse en staging.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Refinar el backlog por rebanadas posteriores; [el backlog inicial](07-backlog-tecnico-primera-rebanada.md) se conserva como trazabilidad historica de plataforma.

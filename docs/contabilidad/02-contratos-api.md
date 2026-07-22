@@ -27,6 +27,11 @@ Permisos:
 | `Purchases.Rectify` | Registrar una rectificacion total de proveedor. |
 | `Treasury.ManageSupplierPayments` | Registrar pagos parciales o totales de proveedor. |
 | `Treasury.ViewSupplierPayments` | Consultar vencimientos y pagos de proveedor. |
+| `Treasury.ViewSupplierCredits` | Consultar saldos a favor con proveedores. |
+| `Treasury.ApplySupplierCredits` | Compensar saldos con compras pendientes. |
+| `Treasury.RequestSupplierRefunds` | Solicitar o cancelar reembolsos propios pendientes. |
+| `Treasury.ApproveSupplierRefunds` | Aprobar reembolsos solicitados por otra persona. |
+| `Treasury.PostSupplierRefunds` | Contabilizar reembolsos aprobados. |
 
 ## 1.b Maestro de proveedores
 
@@ -79,8 +84,9 @@ No se devuelven NIF, IBAN ni datos de contacto completos del proveedor.
 Las compras registradas permanecen inmutables. La rectificativa es un documento
 nuevo, tambien inmutable, y nunca reescribe lineas, IVA, asiento o stock del
 original. Anulacion/versionado interno, PDF adjunto, gastos sin factura,
-anticipos, devoluciones monetarias y remesas de pago quedan para cortes
-posteriores.
+anticipos, devoluciones de pagos y remesas de pago quedan para cortes
+posteriores. El reembolso de un saldo nacido de una rectificativa pagada sí
+forma parte del sublibro de créditos de proveedor descrito en 1.e.
 El pago con tarjeta se difiere hasta definir y configurar su subcuenta de
 tesoreria; este corte admite transferencia, domiciliacion y caja.
 
@@ -117,8 +123,11 @@ transaccion:
 - registros nuevos y negativos en el libro de IVA soportado;
 - movimientos `PURCHASE_RETURN` para productos con stock, sin alterar el coste
   historico ni bloquear stock negativo;
-- cancelacion de todos los vencimientos pendientes del original;
-- estado `RECTIFIED` y pago `NOT_APPLICABLE` en el original;
+- si no existe actividad de pago, cancelacion de los vencimientos pendientes y
+  estado `RECTIFIED/NOT_APPLICABLE` en el original;
+- si la compra estaba completamente pagada de forma coherente, conservación de
+  sus pagos y vencimientos `PAID`, estado `RECTIFIED/PAID` y creación de un
+  `SupplierCredit` por el total;
 - evento `PURCHASE_RECTIFICATION_CREATED` sin notas ni datos fiscales
   sensibles.
 
@@ -128,10 +137,11 @@ producto. La salida de stock queda enlazada uno a uno con el movimiento de
 entrada original y se ejecuta aunque la configuracion actual del articulo haya
 cambiado.
 
-Solo se admite una rectificacion total por compra ordinaria registrada y sin
-ninguna asignacion de pago. Las rectificaciones parciales, incrementales, de
-varias compras o de compras parcial/totalmente pagadas quedan bloqueadas hasta
-incorporar el libro de creditos y reembolsos de proveedor. La correccion interna
+Solo se admite una rectificacion total por compra ordinaria registrada en uno
+de dos estados limpios: completamente impagada y sin actividad, o completamente
+pagada con todos los vencimientos `PAID` y asignaciones `POSTED` por el total.
+Las compras parcialmente pagadas o incoherentes, las rectificaciones parciales,
+incrementales o de varias compras quedan bloqueadas. La correccion interna
 de datos mediante versiones es un flujo distinto y no forma parte de este
 endpoint. La fecha no puede preceder al original y ambos asientos deben quedar
 en el mismo ejercicio abierto.
@@ -143,10 +153,44 @@ Errores funcionales principales:
 | `404` | `PURCHASE_NOT_FOUND` | No existe en la empresa actual. |
 | `409` | `PURCHASE_NOT_RECTIFIABLE` | No es una compra ordinaria registrada. |
 | `409` | `PURCHASE_ALREADY_RECTIFIED` | Ya existe una rectificativa. |
-| `409` | `PURCHASE_RECTIFICATION_HAS_PAYMENTS` | Existe actividad de pago. |
+| `409` | `PURCHASE_RECTIFICATION_PARTIAL_PAYMENT_UNSUPPORTED` | Existe un pago parcial. |
+| `409` | `PURCHASE_RECTIFICATION_PAYMENT_STATE_INVALID` | Pagos y vencimientos no forman un estado limpio. |
 | `409` | `PURCHASE_VERSION_CONFLICT` | La version visible quedo obsoleta. |
 | `409` | `PURCHASE_FISCAL_YEAR_NOT_OPEN` | La fecha contable no pertenece a un ejercicio abierto. |
 | `409` | `PURCHASE_RECTIFICATION_FISCAL_YEAR_MISMATCH` | El original y la rectificativa no pertenecen al mismo ejercicio abierto. |
+
+## 1.e Creditos y reembolsos de proveedor
+
+El libro de creditos es append-only y se crea exclusivamente como efecto de una
+rectificacion total de compra pagada. El disponible es el importe original
+menos aplicaciones y reembolsos no cancelados.
+
+| Ruta | Permiso |
+|---|---|
+| `GET /api/treasury/supplier-credits` | `Treasury.ViewSupplierCredits` |
+| `POST /api/treasury/supplier-credits/{creditId}/applications` | `Treasury.ApplySupplierCredits` |
+| `POST /api/treasury/supplier-credits/{creditId}/refund-requests` | `Treasury.RequestSupplierRefunds` |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/approve` | `Treasury.ApproveSupplierRefunds` |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/post` | `Treasury.PostSupplierRefunds` |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/cancel` | `Treasury.RequestSupplierRefunds` |
+
+Una aplicacion solo admite un vencimiento `PENDING` de una compra ordinaria
+registrada de la misma empresa y proveedor. No crea pago ni asiento adicional;
+actualiza los estados derivados `PARTIALLY_SETTLED` o `SETTLED`. Pagos y
+aplicaciones se suman al calcular el pendiente y se revalidan bajo bloqueo.
+
+Un reembolso admite `BANK_TRANSFER` con cuenta bancaria activa de la empresa o
+`CASH` sin cuenta bancaria. Sigue `REQUESTED -> APPROVED -> POSTED`; solo quien
+lo solicito puede cancelar mientras esta `REQUESTED`, y no puede aprobar su
+propia solicitud. La contabilizacion usa una fecha explicita en ejercicio
+abierto y crea Debe 572/Haber 400 para banco o Debe 570/Haber 400 para caja.
+Solicitar reserva saldo y cancelar lo libera.
+
+Todas las mutaciones requieren origen permitido, CSRF, JSON, cuerpo maximo de
+16 KiB e `Idempotency-Key`. Se ejecutan en transaccion serializable y auditan
+solo identificadores internos, importes, fechas, estados y correlacion; nunca
+notas, referencias completas, NIF, IBAN ni datos de contacto. La pantalla
+operativa es `/app/treasury/supplier-credits`.
 | `409` | `PURCHASE_ACCOUNT_NOT_AVAILABLE` | Falta una subcuenta activa en el ejercicio destino. |
 | `409` | `IDEMPOTENCY_KEY_REUSED` | La clave se reutilizo con otro cuerpo. |
 

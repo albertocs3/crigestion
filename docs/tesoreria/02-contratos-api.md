@@ -921,3 +921,32 @@ Errores funcionales estables incluyen `CUSTOMER_CREDIT_HELD`,
 `CUSTOMER_CREDIT_AMOUNT_EXCEEDS_PENDING`,
 `CUSTOMER_CREDIT_REFUND_SELF_APPROVAL_FORBIDDEN` e
 `IDEMPOTENCY_KEY_REUSED`.
+
+## 24. Creditos de proveedores
+
+Todos los contratos son autenticados. Las mutaciones requieren Origin valido,
+CSRF, JSON, cuerpo maximo de 16 KiB, `Idempotency-Key` y mantenimiento inactivo.
+
+| Metodo y ruta | Permiso | Uso |
+|---|---|---|
+| `GET /api/treasury/supplier-credits` | `Treasury.ViewSupplierCredits` | Lista con `status`, `supplierId`, `search`, `cursor` y `limit`. |
+| `POST /api/treasury/supplier-credits/{creditId}/applications` | `Treasury.ApplySupplierCredits` | Compensa un vencimiento con `targetDueDateId`, `applicationDate`, `amount` y `notes`. |
+| `POST /api/treasury/supplier-credits/{creditId}/refund-requests` | `Treasury.RequestSupplierRefunds` | Reserva saldo; admite banco o caja. |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/approve` | `Treasury.ApproveSupplierRefunds` | Aprueba con segregacion solicitante/aprobador. |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/post` | `Treasury.PostSupplierRefunds` | Contabiliza con `postingDate` explicita. |
+| `POST /api/treasury/supplier-credit-refunds/{refundId}/cancel` | `Treasury.RequestSupplierRefunds` | Solo el solicitante cancela mientras esta pendiente. |
+
+Las aplicaciones y el credito son append-only. La solicitud reserva saldo; el
+saldo disponible se revalida bajo bloqueo y nunca puede ser negativo. El
+reembolso bancario exige `bankAccountId` activo de la empresa; caja exige
+`bankAccountId: null`. La contabilizacion genera Debe 572 o 570 / Haber 400.
+
+Errores estables incluyen `SUPPLIER_CREDIT_NOT_FOUND`,
+`SUPPLIER_CREDIT_AMOUNT_EXCEEDS_AVAILABLE`,
+`SUPPLIER_CREDIT_TARGET_NOT_ELIGIBLE`,
+`SUPPLIER_CREDIT_AMOUNT_EXCEEDS_PENDING`,
+`SUPPLIER_CREDIT_APPLICATION_DATE_INVALID`,
+`SUPPLIER_CREDIT_REFUND_SELF_APPROVAL_FORBIDDEN`,
+`SUPPLIER_CREDIT_REFUND_NOT_APPROVED`,
+`SUPPLIER_CREDIT_REFUND_FISCAL_YEAR_NOT_OPEN` e
+`IDEMPOTENCY_KEY_REUSED`.

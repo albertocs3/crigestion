@@ -743,3 +743,24 @@ Todas las mutaciones exigen idempotencia, bloqueo transaccional y auditoria.
 
 La pantalla operativa es `/app/treasury/credits` y diferencia expresamente
 este saldo del limite de credito comercial del cliente.
+
+## 27. Saldos a favor con proveedores
+
+Una rectificativa total de una compra completamente pagada origina un crédito
+del mismo proveedor. La compra, sus vencimientos `PAID`, pagos y asientos se
+conservan; la rectificativa crea el contraasiento y el saldo queda disponible de
+inmediato, sin estado `HELD` porque las compras recibidas no pasan por VeriFactu.
+
+El sublibro es append-only. Su disponible es importe original menos
+compensaciones y reembolsos no cancelados. Una compensación solo puede aplicarse
+a un vencimiento `PENDING` de la misma empresa y proveedor, reduce el pendiente
+sin registrar pago ni asiento y produce estados `PARTIALLY_SETTLED` o `SETTLED`.
+
+El reembolso sigue `REQUESTED -> APPROVED -> POSTED`, con separación entre
+solicitud y aprobación. Una transferencia exige cuenta bancaria activa y crea
+Debe 572 / Haber 400; un ingreso en caja crea Debe 570 / Haber 400. La solicitud
+reserva saldo y solo quien la creó puede cancelarla mientras esté pendiente.
+
+Las compras parcialmente pagadas, la anulación de aplicaciones y la
+conciliación bancaria directa de estos reembolsos quedan fuera de este corte.
+La pantalla operativa es `/app/treasury/supplier-credits`.

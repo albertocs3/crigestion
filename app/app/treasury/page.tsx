@@ -80,6 +80,11 @@ export default async function TreasuryPage({ searchParams }: TreasuryPageProps) 
               Saldos a favor
             </Link>
           ) : null}
+          {authorization.user.permissions.includes("Treasury.ViewSupplierCredits") ? (
+            <Link className="button button-secondary" href="/app/treasury/supplier-credits">
+              Saldos de proveedores
+            </Link>
+          ) : null}
           <Link className="button button-secondary" href="/app/treasury/banking">
             Conciliacion bancaria
           </Link>

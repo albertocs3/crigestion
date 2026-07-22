@@ -39,6 +39,11 @@ async function main() {
     ["Treasury.RequestCustomerRefunds", "Solicitar reembolsos de creditos"],
     ["Treasury.ApproveCustomerRefunds", "Aprobar reembolsos de creditos"],
     ["Treasury.PostCustomerRefunds", "Contabilizar reembolsos de creditos"],
+    ["Treasury.ViewSupplierCredits", "Consultar creditos de proveedores"],
+    ["Treasury.ApplySupplierCredits", "Compensar creditos de proveedores"],
+    ["Treasury.RequestSupplierRefunds", "Solicitar reembolsos de proveedores"],
+    ["Treasury.ApproveSupplierRefunds", "Aprobar reembolsos de proveedores"],
+    ["Treasury.PostSupplierRefunds", "Contabilizar reembolsos de proveedores"],
     ["Treasury.ViewBanking", "Consultar movimientos y conciliaciones bancarias"],
     ["Treasury.ReconcileBanking", "Gestionar conciliaciones bancarias"],
     ["Treasury.ImportBankStatements", "Importar extractos bancarios"]
