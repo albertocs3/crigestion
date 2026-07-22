@@ -265,3 +265,46 @@ subida. El paquete cifrado
 aislado termino con `RECOVERY_DRILL_OK attachments=1`. Las bases snapshot y de
 drill se eliminaron, el health local y publico permanecio en `ok`, VeriFactu
 continuo en `TEST` y produccion quedo fuera de alcance.
+
+## 12. Maestro de proveedores y parche de imagenes
+
+El 2026-07-22 se desplego el maestro de proveedores mediante la release
+inmutable `staging-2026.07.22-rc2`, commit
+`d51a0ca8561a259cf226eeaaff687f8baf429591`, build ID
+`3aBnufJCqalWTzYv_HXda`. La migracion
+`20260721193000_add_supplier_master` ya aplicada quedo verificada y el
+migrador de rc2 termino sin migraciones pendientes.
+
+La candidata supero `npm run verify:release`: TypeScript, 69 archivos con 611
+pruebas Vitest, ESLint, build optimizado de Next.js y
+`npm audit --audit-level=high` sin vulnerabilidades. La primera rc1 revelo en
+el host un aviso nuevo de severidad alta para `sharp 0.34.5`; antes de cerrar
+la UAT se preparo rc2 con `sharp 0.35.3`, revisada de forma independiente. En
+Ubuntu se comprobo carga nativa con `libvips 8.18.3`, build correcto y
+auditoria runtime sin vulnerabilidades.
+
+La UAT tecnica genero exclusivamente datos sinteticos y dejo el proveedor
+`PROV00001` inactivo para conservar trazabilidad. Se verifico:
+
+- alta y replay idempotente sin duplicar filas;
+- rechazo de un segundo proveedor con el mismo identificador fiscal;
+- listado, detalle, edicion y baja logica;
+- subcuenta `400000001` vinculada al ejercicio 2026 abierto;
+- identificador fiscal e IBAN enmascarados y campos sensibles cifrados en base;
+- eventos `SUPPLIER_CREATED`, `SUPPLIERS_VIEWED`, `SUPPLIER_VIEWED`,
+  `SUPPLIER_UPDATED` y `SUPPLIER_DEACTIVATED` sin datos sensibles en claro;
+- denegacion al rol runtime de lectura de `_prisma_migrations`, ruptura de la
+  secuencia protegida y borrado de auditoria.
+
+Tras la UAT se creo y verifico el dump
+`crigestion_staging-auto-20260722T080422Z.dump`. El bundle cifrado
+`crigestion-staging-20260722T080441Z.cgrb`, de 229.653.125 bytes, supero su
+checksum y el simulacro aislado termino con
+`RECOVERY_DRILL_OK database=crigestion_recovery_drill_20260722t080610z
+attachments=1`. La base temporal fue descartada y no quedaron bases snapshot,
+de drill ni de restore.
+
+Al cierre, la release rc2, la aplicacion y el worker estaban activos, y los
+health local y publico devolvian `database`, `verifactu` y `worker` en `ok`.
+VeriFactu mantuvo entorno `TEST` y ambos permisos de produccion en `false`.
+Produccion no se consulto ni se modifico.

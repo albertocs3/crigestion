@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-07-21.
+Fecha de corte: 2026-07-22.
 
 ## 2. Rebanadas disponibles
 
@@ -15,7 +15,7 @@ Fecha de corte: 2026-07-21.
 | Plataforma | Operativa | Inicializacion, login/logout, sesiones, permisos, auditoria, copias, restauracion y mantenimiento controlado. |
 | Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
-| Proveedores | Operativa local | Maestro fiscal con alta, edicion, estado, subcuenta 400, idempotencia, concurrencia optimista y datos sensibles cifrados. Regresion completa superada; pendiente de despliegue y UAT. |
+| Proveedores | Operativa inicial | Maestro fiscal desplegado y aceptado en staging: alta, edicion, baja logica, subcuenta 400, idempotencia, concurrencia optimista, RBAC, auditoria y datos sensibles cifrados. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
 | Contabilidad | Operativa inicial | PGC PYMES, cuentas, asientos manuales, ejercicios, regularizacion, cierre y apertura. |
@@ -46,7 +46,7 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 ## 4. Evidencia de validacion
 
-Evidencia actualizada el 21 de julio de 2026 sobre PostgreSQL desechable:
+Evidencia actualizada el 22 de julio de 2026 sobre PostgreSQL desechable:
 
 - El repositorio contiene 83 migraciones; la base desechable las aplica desde cero antes de validar.
 - Vitest: 69 archivos y 611 pruebas superadas.
@@ -70,6 +70,23 @@ crear un dump PostgreSQL actualizado, el paquete integral cifrado supero su
 checksum y el drill aislado termino con `RECOVERY_DRILL_OK attachments=1`, sin
 bases temporales residuales. VeriFactu permanecio en `TEST` y produccion no se
 toco.
+
+La release inmutable `staging-2026.07.22-rc2`, commit
+`d51a0ca8561a259cf226eeaaff687f8baf429591`, desplego y acepto el maestro de
+proveedores. La UAT tecnica cubrio alta idempotente, rechazo de identificador
+fiscal duplicado, listado, detalle, edicion y baja logica. Confirmo la
+subcuenta `400000001` en el ejercicio 2026 abierto, cifrado de identificador
+fiscal, correo, telefono e IBAN, enmascarado en contratos y auditoria sin esos
+valores en claro. Los controles de base impidieron consultar migraciones,
+alterar la secuencia fuera de sus invariantes y borrar auditoria.
+
+Durante la comprobacion de runtime se detecto un aviso nuevo de severidad alta
+en `sharp` anterior a 0.35. Se fijo `sharp 0.35.3`, la regresion completa volvio
+a superar 69 archivos y 611 pruebas y la candidata se valido en Ubuntu con
+`libvips 8.18.3` y auditoria sin vulnerabilidades. Tras la UAT se creo un dump
+actualizado y un bundle cifrado; el drill aislado termino con
+`RECOVERY_DRILL_OK attachments=1`, sin bases temporales residuales. VeriFactu
+permanecio en `TEST` y produccion no se toco.
 
 La cobertura bancaria incluye importacion, propuesta, conciliacion y deshacer
 desde navegador, contratos HTTP, concurrencia e invariantes PostgreSQL.
