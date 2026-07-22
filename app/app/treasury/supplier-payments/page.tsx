@@ -9,10 +9,11 @@ export const dynamic = "force-dynamic";
 export default async function SupplierPaymentsPage({ searchParams }: { searchParams: Promise<{ supplierId?: string; status?: string; dueBefore?: string }> }) {
   const authorization = await authorizePagePermission("Treasury.ViewSupplierPayments");
   const params = await searchParams;
+  const status = params.status === undefined ? "PENDING" : params.status || undefined;
   if (!authorization.ok) {
     return <main className="shell"><section className="content"><div className="panel"><p className="message error">{authorization.message}</p></div></section></main>;
   }
-  const payload = listSupplierDueDatesSchema.safeParse({ limit: 100, supplierId: params.supplierId || undefined, status: params.status || undefined, dueBefore: params.dueBefore || undefined });
+  const payload = listSupplierDueDatesSchema.safeParse({ limit: 100, supplierId: params.supplierId || undefined, status, dueBefore: params.dueBefore || undefined });
   const [result, suppliers] = await Promise.all([
     payload.success ? listSupplierDueDates(payload.data, authorization.user) : { dueDates: [] },
     listSuppliers({ limit: 100, status: "ACTIVE" }, authorization.user)
