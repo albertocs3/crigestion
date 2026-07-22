@@ -44,10 +44,13 @@ export function PurchaseDueDatesForm({ purchaseId, version, total, issueDate, ex
 
 export function PurchaseRegisterButton({ purchaseId, version, disabled }: { purchaseId: string; version: number; disabled: boolean }) { const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" }); async function register() { if (!window.confirm("¿Registrar definitivamente la factura de compra? Después será inmutable.")) return; setState({ kind: "pending" }); const result = await mutate(`/api/purchases/${purchaseId}/register`, "POST", { expectedVersion: version }, key.get()); if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; } key.clear(); setState({ kind: "success", message: "Compra registrada." }); router.refresh(); } return <div className="stack"><button className="button" type="button" disabled={disabled || state.kind === "pending"} onClick={register}>{state.kind === "pending" ? "Registrando…" : "Registrar compra"}</button>{state.message ? <p className={`message ${state.kind === "error" ? "error" : "success"}`}>{state.message}</p> : null}</div>; }
 
-export function PurchaseRectificationForm({ purchaseId, version, originalNumber, originalTotal }: { purchaseId: string; version: number; originalNumber: string; originalTotal: string }) {
+export function PurchaseRectificationForm({ purchaseId, version, originalNumber, originalTotal, createsSupplierCredit }: { purchaseId: string; version: number; originalNumber: string; originalTotal: string; createsSupplierCredit: boolean }) {
   const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" });
   async function submit(formData: FormData) {
-    if (!window.confirm(`¿Registrar la rectificación total de ${originalNumber}? Se cancelarán sus vencimientos y se invertirán contabilidad, IVA y stock.`)) return;
+    const effect = createsSupplierCredit
+      ? "Se conservarán sus pagos y vencimientos, y se generará un crédito de proveedor."
+      : "Se cancelarán sus vencimientos pendientes.";
+    if (!window.confirm(`¿Registrar la rectificación total de ${originalNumber}? ${effect} Se invertirán contabilidad, IVA y stock.`)) return;
     setState({ kind: "pending" });
     const result = await mutate(`/api/purchases/${purchaseId}/rectifications`, "POST", {
       mode: "FULL", expectedVersion: version, supplierInvoiceNumber: String(formData.get("supplierInvoiceNumber")),
@@ -60,7 +63,7 @@ export function PurchaseRectificationForm({ purchaseId, version, originalNumber,
   }
   return <form className="stack" action={submit}>
     <h2>Rectificación total del proveedor</h2>
-    <p className="muted">Creará un documento nuevo por -{originalTotal} EUR. No reescribe importes, líneas, IVA, asiento ni movimientos originales; sí marcará el original como rectificado y cancelará sus vencimientos pendientes.</p>
+    <p className="muted">Creará un documento nuevo por -{originalTotal} EUR. No reescribe importes, líneas, IVA, asiento ni movimientos originales. {createsSupplierCredit ? "Conservará los pagos y vencimientos, y generará un crédito disponible del proveedor." : "Marcará el original como rectificado y cancelará sus vencimientos pendientes."}</p>
     <div className="form-grid">
       <label>Número de la rectificativa<input name="supplierInvoiceNumber" required maxLength={80}/></label>
       <label>Motivo<select name="reason" defaultValue="RETURN"><option value="RETURN">Devolución completa</option><option value="OPERATION_CANCELLED">Operación cancelada</option></select></label>

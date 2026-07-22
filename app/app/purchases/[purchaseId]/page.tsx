@@ -2,6 +2,7 @@ import Link from "next/link";
 import { z } from "zod";
 import { getPurchase } from "@/modules/purchases/application/purchases";
 import { PurchaseDueDatesForm, PurchaseLinesForm, PurchaseRectificationForm, PurchaseRegisterButton } from "@/modules/purchases/presentation/PurchaseForms";
+import { getPurchaseRectificationAvailability } from "@/modules/purchases/presentation/rectificationAvailability";
 import { listCatalogItems } from "@/modules/catalog/application/items";
 import { listCatalogTaxRates } from "@/modules/catalog/application/taxRates";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -19,8 +20,7 @@ export default async function PurchasePage({ params }: { params: Promise<{ purch
   const editable = purchase.status === "DRAFT" && authorization.user.permissions.includes("Purchases.ManageDrafts");
   const canRegister = authorization.user.permissions.includes("Purchases.Register");
   const canRectify = authorization.user.permissions.includes("Purchases.Rectify");
-  const hasPaymentActivity = purchase.dueDates.some((due) => Number(due.allocatedAmount) > 0 || due.status === "PAID");
-  const rectifiable = purchase.documentType === "STANDARD" && purchase.status === "REGISTERED" && purchase.paymentStatus === "PENDING" && !hasPaymentActivity && purchase.rectificationInvoices.length === 0;
+  const rectification = getPurchaseRectificationAvailability(purchase);
   const [items, taxRates] = editable
     ? await Promise.all([listCatalogItems({ limit: 100, status: "ACTIVE" }, authorization.user), listCatalogTaxRates({ includeInactive: false })])
     : [{ items: [] }, []];
@@ -33,8 +33,8 @@ export default async function PurchasePage({ params }: { params: Promise<{ purch
         <div className="panel stack"><PurchaseDueDatesForm purchaseId={purchase.id} version={purchase.version} total={purchase.total} issueDate={purchase.issueDate} existing={purchase.dueDates.map((due) => ({ dueDate: due.dueDate, amount: due.amount, paymentMethod: due.paymentMethod }))}/></div>
         {canRegister ? <div className="panel stack"><h2>Registro definitivo</h2><p className="muted">Generará asiento, libro de IVA soportado y entradas de stock. Después no se podrá editar.</p><PurchaseRegisterButton purchaseId={purchase.id} version={purchase.version} disabled={!purchase.lines.length || !purchase.dueDates.length}/></div> : null}
       </> : purchase.dueDates.length ? <div className="panel stack"><h2>Vencimientos</h2><div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Método</th><th className="numeric">Importe</th><th className="numeric">Pagado</th><th className="numeric">Pendiente</th><th>Estado</th></tr></thead><tbody>{purchase.dueDates.map((due) => <tr key={due.id}><td>{due.dueDate}</td><td>{due.paymentMethod}</td><td className="numeric">{due.amount}</td><td className="numeric">{due.allocatedAmount}</td><td className="numeric">{due.pendingAmount}</td><td>{due.status}</td></tr>)}</tbody></table></div>{purchase.status === "REGISTERED" ? <Link className="button" href={`/app/treasury/supplier-payments?supplierId=${purchase.supplierId}`}>Registrar pago</Link> : null}</div> : null}
-      {canRectify && rectifiable ? <div className="panel stack"><PurchaseRectificationForm purchaseId={purchase.id} version={purchase.version} originalNumber={purchase.supplierInvoiceNumber} originalTotal={purchase.total}/></div> : null}
-      {canRectify && purchase.documentType === "STANDARD" && purchase.status === "REGISTERED" && hasPaymentActivity ? <div className="panel stack"><h2>Rectificación no disponible</h2><p className="muted">Esta compra tiene pagos aplicados. El flujo quedará bloqueado hasta incorporar créditos y reembolsos de proveedor.</p></div> : null}
+      {canRectify && rectification.available ? <div className="panel stack"><PurchaseRectificationForm purchaseId={purchase.id} version={purchase.version} originalNumber={purchase.supplierInvoiceNumber} originalTotal={purchase.total} createsSupplierCredit={rectification.createsSupplierCredit}/></div> : null}
+      {canRectify && purchase.documentType === "STANDARD" && purchase.status === "REGISTERED" && !rectification.available && (rectification.hasSettlementActivity || purchase.paymentStatus !== "PENDING") ? <div className="panel stack"><h2>Rectificación no disponible</h2><p className="muted">La compra debe estar pendiente sin actividad o completamente pagada. Las liquidaciones parciales y las compensaciones con créditos no se rectifican en este corte.</p></div> : null}
     </section>
   </main>;
 }
