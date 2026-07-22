@@ -308,3 +308,45 @@ Al cierre, la release rc2, la aplicacion y el worker estaban activos, y los
 health local y publico devolvian `database`, `verifactu` y `worker` en `ok`.
 VeriFactu mantuvo entorno `TEST` y ambos permisos de produccion en `false`.
 Produccion no se consulto ni se modifico.
+
+## 13. Compras, vencimientos y pagos de proveedor
+
+El 2026-07-22 se desplego la primera rebanada de compras mediante
+`staging-2026.07.22-rc3`, commit
+`c700751b96a533280129f2d0233cc0b8fd5090f1`. Antes de migrar se creo y
+verifico el dump `crigestion_staging-auto-20260722T095606Z.dump`. Las
+migraciones `20260722122900_add_supplier_purchase_enum_values` y
+`20260722123000_add_supplier_purchases` terminaron correctamente mediante el
+rol migrador controlado. La aplicacion y el worker permanecieron detenidos
+durante el cambio de esquema.
+
+La UAT uso la factura sintetica `UAT-RC3-20260722-01`, con 30,00 EUR de base,
+6,30 EUR de IVA y 36,30 EUR de total. Se verifico:
+
+- registro definitivo y estado final `REGISTERED`;
+- asiento de compra `2026/000013`, cuadrado por 36,30 EUR;
+- un registro de IVA soportado;
+- entrada de 3 unidades, stock final 3 y ultimo coste 10,00 EUR;
+- dos vencimientos de 18,15 EUR;
+- transicion de pago `PENDING` a `PARTIALLY_PAID` y despues a `PAID`;
+- dos pagos y asientos `2026/000014` y `2026/000015`, cuadrados por 18,15 EUR;
+- los cinco permisos nuevos asignados al rol `Administrador` y rechazo HTTP
+  401 para una consulta de compras sin autenticar;
+- eventos de borrador, lineas, vencimientos, registro y dos pagos, sin claves
+  de contrasena, token, cookie, IBAN, identificador fiscal ni certificado.
+
+La UAT detecto que la pantalla mostraba `Pendientes` como filtro seleccionado
+sin aplicarlo cuando faltaba el parametro de URL. Se corrigio en
+`staging-2026.07.22-rc4`, commit
+`b05c2d7a7fc30cdc37543195fcf4d1ef95b3bf11`, build ID
+`CRYB3BmtMKA4MxrLrlpry`. La candidata supero `npm run verify:release`: 71
+archivos con 616 pruebas, TypeScript, ESLint, build optimizado y auditoria npm
+sin vulnerabilidades. La comprobacion final mostro cero vencimientos bajo el
+filtro pendiente y los dos vencimientos bajo el filtro pagado.
+
+El proveedor y el articulo sinteticos quedaron inactivos. La compra, sus
+asientos, IVA, stock, vencimientos, pagos y auditoria se conservaron como
+evidencia inmutable de staging. Al cierre, `rc4`, aplicacion y worker estaban
+activos, y los health local y publico devolvian `database`, `verifactu` y
+`worker` en `ok`. VeriFactu continuo en `TEST`; produccion quedo fuera de
+alcance.
