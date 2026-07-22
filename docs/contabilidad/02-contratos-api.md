@@ -8,7 +8,8 @@ No incluye todavia adjuntos, anulaciones, modificacion de asientos ni
 reaperturas. La emision de facturas ordinarias y rectificativas crea ya su
 asiento automatico. Los cobros manuales crean tambien su asiento; las
 devoluciones y cobros de remesas se incorporan en cortes posteriores. El corte
-de compras incorpora ya facturas de proveedor, vencimientos y pagos manuales.
+de compras incorpora ya facturas de proveedor, vencimientos, pagos manuales y
+rectificaciones totales recibidas del proveedor.
 
 Permisos:
 
@@ -23,6 +24,7 @@ Permisos:
 | `Purchases.View` | Consultar facturas de compra y vencimientos de proveedor. |
 | `Purchases.ManageDrafts` | Crear y editar borradores, lineas y vencimientos. |
 | `Purchases.Register` | Registrar definitivamente una compra. |
+| `Purchases.Rectify` | Registrar una rectificacion total de proveedor. |
 | `Treasury.ManageSupplierPayments` | Registrar pagos parciales o totales de proveedor. |
 | `Treasury.ViewSupplierPayments` | Consultar vencimientos y pagos de proveedor. |
 
@@ -62,6 +64,8 @@ Errores funcionales principales: `SUPPLIER_NOT_FOUND`,
 - `POST /api/purchases/{purchaseId}/register`: registra definitivamente la
   compra y genera, en una transaccion, asiento, IVA soportado y entradas de
   stock.
+- `POST /api/purchases/{purchaseId}/rectifications`: registra una factura
+  rectificativa total del proveedor, enlazada a la compra original.
 - `GET /api/treasury/supplier-due-dates`: lista vencimientos y saldos pagados y
   pendientes.
 - `POST /api/treasury/supplier-payments`: registra un pago con una o varias
@@ -72,11 +76,79 @@ Todas las mutaciones requieren origen permitido, CSRF, JSON e
 revalida el saldo y persiste la respuesta idempotente en la misma transaccion.
 No se devuelven NIF, IBAN ni datos de contacto completos del proveedor.
 
-El primer corte mantiene inmutables las compras registradas. Rectificativas,
-anulacion/versionado, PDF adjunto, gastos sin factura, anticipos, devoluciones y
-remesas de pago quedan para cortes posteriores.
+Las compras registradas permanecen inmutables. La rectificativa es un documento
+nuevo, tambien inmutable, y nunca reescribe lineas, IVA, asiento o stock del
+original. Anulacion/versionado interno, PDF adjunto, gastos sin factura,
+anticipos, devoluciones monetarias y remesas de pago quedan para cortes
+posteriores.
 El pago con tarjeta se difiere hasta definir y configurar su subcuenta de
 tesoreria; este corte admite transferencia, domiciliacion y caja.
+
+## 1.d Rectificacion total de una compra
+
+Permiso requerido: `Purchases.Rectify`.
+
+```http
+POST /api/purchases/{purchaseId}/rectifications
+```
+
+Requiere origen permitido, cookie de sesion, CSRF, JSON e `Idempotency-Key`.
+
+```json
+{
+  "mode": "FULL",
+  "expectedVersion": 4,
+  "supplierInvoiceNumber": "R-2026-0042",
+  "issueDate": "2026-07-22",
+  "receivedDate": "2026-07-22",
+  "operationDate": "2026-07-22",
+  "accountingDate": "2026-07-22",
+  "reason": "RETURN",
+  "notes": null
+}
+```
+
+El cliente no envia cantidades, bases, impuestos, cuentas ni articulos. El
+servidor invierte exactamente la compra original y ejecuta en una unica
+transaccion:
+
+- documento `RECTIFICATION` con cantidades e importes negativos;
+- contraasiento `PURCHASE_RECTIFICATION`, enlazado al asiento original;
+- registros nuevos y negativos en el libro de IVA soportado;
+- movimientos `PURCHASE_RETURN` para productos con stock, sin alterar el coste
+  historico ni bloquear stock negativo;
+- cancelacion de todos los vencimientos pendientes del original;
+- estado `RECTIFIED` y pago `NOT_APPLICABLE` en el original;
+- evento `PURCHASE_RECTIFICATION_CREATED` sin notas ni datos fiscales
+  sensibles.
+
+Los unicos motivos admitidos en este corte son `RETURN` y
+`OPERATION_CANCELLED`, porque ambos revierten tambien la entrada fisica de
+producto. La salida de stock queda enlazada uno a uno con el movimiento de
+entrada original y se ejecuta aunque la configuracion actual del articulo haya
+cambiado.
+
+Solo se admite una rectificacion total por compra ordinaria registrada y sin
+ninguna asignacion de pago. Las rectificaciones parciales, incrementales, de
+varias compras o de compras parcial/totalmente pagadas quedan bloqueadas hasta
+incorporar el libro de creditos y reembolsos de proveedor. La correccion interna
+de datos mediante versiones es un flujo distinto y no forma parte de este
+endpoint. La fecha no puede preceder al original y ambos asientos deben quedar
+en el mismo ejercicio abierto.
+
+Errores funcionales principales:
+
+| Estado | Codigo | Uso |
+|---|---|---|
+| `404` | `PURCHASE_NOT_FOUND` | No existe en la empresa actual. |
+| `409` | `PURCHASE_NOT_RECTIFIABLE` | No es una compra ordinaria registrada. |
+| `409` | `PURCHASE_ALREADY_RECTIFIED` | Ya existe una rectificativa. |
+| `409` | `PURCHASE_RECTIFICATION_HAS_PAYMENTS` | Existe actividad de pago. |
+| `409` | `PURCHASE_VERSION_CONFLICT` | La version visible quedo obsoleta. |
+| `409` | `PURCHASE_FISCAL_YEAR_NOT_OPEN` | La fecha contable no pertenece a un ejercicio abierto. |
+| `409` | `PURCHASE_RECTIFICATION_FISCAL_YEAR_MISMATCH` | El original y la rectificativa no pertenecen al mismo ejercicio abierto. |
+| `409` | `PURCHASE_ACCOUNT_NOT_AVAILABLE` | Falta una subcuenta activa en el ejercicio destino. |
+| `409` | `IDEMPOTENCY_KEY_REUSED` | La clave se reutilizo con otro cuerpo. |
 
 ## 1.a Ejercicios contables
 

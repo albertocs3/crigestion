@@ -44,4 +44,35 @@ export function PurchaseDueDatesForm({ purchaseId, version, total, issueDate, ex
 
 export function PurchaseRegisterButton({ purchaseId, version, disabled }: { purchaseId: string; version: number; disabled: boolean }) { const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" }); async function register() { if (!window.confirm("¿Registrar definitivamente la factura de compra? Después será inmutable.")) return; setState({ kind: "pending" }); const result = await mutate(`/api/purchases/${purchaseId}/register`, "POST", { expectedVersion: version }, key.get()); if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; } key.clear(); setState({ kind: "success", message: "Compra registrada." }); router.refresh(); } return <div className="stack"><button className="button" type="button" disabled={disabled || state.kind === "pending"} onClick={register}>{state.kind === "pending" ? "Registrando…" : "Registrar compra"}</button>{state.message ? <p className={`message ${state.kind === "error" ? "error" : "success"}`}>{state.message}</p> : null}</div>; }
 
+export function PurchaseRectificationForm({ purchaseId, version, originalNumber, originalTotal }: { purchaseId: string; version: number; originalNumber: string; originalTotal: string }) {
+  const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" });
+  async function submit(formData: FormData) {
+    if (!window.confirm(`¿Registrar la rectificación total de ${originalNumber}? Se cancelarán sus vencimientos y se invertirán contabilidad, IVA y stock.`)) return;
+    setState({ kind: "pending" });
+    const result = await mutate(`/api/purchases/${purchaseId}/rectifications`, "POST", {
+      mode: "FULL", expectedVersion: version, supplierInvoiceNumber: String(formData.get("supplierInvoiceNumber")),
+      issueDate: String(formData.get("issueDate")), receivedDate: String(formData.get("receivedDate")),
+      operationDate: String(formData.get("operationDate")), accountingDate: String(formData.get("accountingDate")),
+      reason: String(formData.get("reason")), notes: String(formData.get("notes") || "").trim() || null
+    }, key.get());
+    if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; }
+    key.clear(); const created = result.value as { id: string }; router.push(`/app/purchases/${created.id}`); router.refresh();
+  }
+  return <form className="stack" action={submit}>
+    <h2>Rectificación total del proveedor</h2>
+    <p className="muted">Creará un documento nuevo por -{originalTotal} EUR. No reescribe importes, líneas, IVA, asiento ni movimientos originales; sí marcará el original como rectificado y cancelará sus vencimientos pendientes.</p>
+    <div className="form-grid">
+      <label>Número de la rectificativa<input name="supplierInvoiceNumber" required maxLength={80}/></label>
+      <label>Motivo<select name="reason" defaultValue="RETURN"><option value="RETURN">Devolución completa</option><option value="OPERATION_CANCELLED">Operación cancelada</option></select></label>
+      <label>Fecha emisión<input name="issueDate" type="date" required/></label>
+      <label>Fecha recepción<input name="receivedDate" type="date" required/></label>
+      <label>Fecha operación<input name="operationDate" type="date" required/></label>
+      <label>Fecha contable<input name="accountingDate" type="date" required/></label>
+    </div>
+    <label>Notas<textarea name="notes" maxLength={1000}/></label>
+    <button className="button button-danger" disabled={state.kind === "pending"}>{state.kind === "pending" ? "Rectificando…" : "Registrar rectificación total"}</button>
+    {state.message ? <p className={`message ${state.kind === "error" ? "error" : "success"}`}>{state.message}</p> : null}
+  </form>;
+}
+
 export function SupplierPaymentForm({ dueDate }: { dueDate: { id: string; supplierId: string; pendingAmount: string; paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT" } }) { const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" }); async function submit(formData: FormData) { setState({ kind: "pending" }); const result = await mutate("/api/treasury/supplier-payments", "POST", { supplierId: dueDate.supplierId, paymentDate: String(formData.get("paymentDate")), paymentMethod: String(formData.get("paymentMethod")), reference: String(formData.get("reference") || "").trim() || null, notes: null, allocations: [{ dueDateId: dueDate.id, amount: String(formData.get("amount")) }] }, key.get()); if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; } key.clear(); setState({ kind: "success", message: "Pago registrado." }); router.refresh(); } return <form className="compact-stack" action={submit}><label>Fecha<input name="paymentDate" type="date" required/></label><label>Importe<input name="amount" defaultValue={dueDate.pendingAmount} inputMode="decimal" required/></label><label>Método<select name="paymentMethod" defaultValue={dueDate.paymentMethod}><option value="BANK_TRANSFER">Transferencia</option><option value="CASH">Efectivo</option><option value="DIRECT_DEBIT">Domiciliación</option></select></label><label>Referencia<input name="reference" maxLength={120} placeholder="Opcional"/></label><button className="button button-small" disabled={state.kind === "pending"}>{state.kind === "pending" ? "Registrando…" : "Pagar"}</button>{state.message ? <small className={state.kind === "error" ? "message error" : "message success"}>{state.message}</small> : null}</form>; }

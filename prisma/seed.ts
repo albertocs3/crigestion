@@ -18,6 +18,7 @@ async function main() {
     ["Purchases.View", "Consultar compras"],
     ["Purchases.ManageDrafts", "Gestionar borradores de compra"],
     ["Purchases.Register", "Registrar facturas de compra"],
+    ["Purchases.Rectify", "Registrar facturas rectificativas de compra"],
     ["Catalog.View", "Consultar catalogo"],
     ["Catalog.Manage", "Gestionar catalogo"],
     ["Billing.View", "Consultar facturas"],

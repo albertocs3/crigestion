@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { createInitialAccountingFiscalYear } from "@/modules/accounting/application/fiscalYears";
 import { login } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
-import { createPurchase, purchaseRequestHash, registerPurchase, registerSupplierPayment, replacePurchaseDueDates, replacePurchaseLines } from "@/modules/purchases/application/purchases";
+import { createPurchase, createPurchaseRectification, purchaseRequestHash, registerPurchase, registerSupplierPayment, replacePurchaseDueDates, replacePurchaseLines } from "@/modules/purchases/application/purchases";
 import { createSupplier, supplierRequestHash } from "@/modules/suppliers/application/suppliers";
 import type { SessionUser } from "@/modules/platform/application/auth";
 
@@ -57,6 +57,50 @@ describe("supplier purchases and payments", () => {
     const first = await createPurchase(command, actor, context("same", "create", command)); const replay = await createPurchase(command, actor, context("same", "create", command)); expect(replay).toEqual(first);
     const changed = { ...command, supplierInvoiceNumber: "OTHER" }; const conflict = await createPurchase(changed, actor, context("same", "create", changed)); expect(conflict).toMatchObject({ ok: false, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
     const duplicate = await createPurchase({ ...command, supplierInvoiceNumber: "dup-01" }, actor, context("duplicate", "create", command)); expect(duplicate).toMatchObject({ ok: false, error: { code: "PURCHASE_NUMBER_ALREADY_USED" } });
+  });
+
+  it("creates an append-only full supplier rectification and reverses accounting, VAT, stock and due dates", async () => {
+    const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const item = await prisma.catalogItem.create({ data: { code: "RECT-1", kind: "PRODUCT", name: "Producto rectificable", unitName: "Unidades", salePrice: "20", costPrice: "8", taxRateId: tax.id, taxRate: tax.rate, purchaseAccountCode: "600000000", stockTracked: true, stockCurrent: "2", stockMinimum: "0", createdById: actor.id } });
+    const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-RECT-01", issueDate: "2026-07-01", receivedDate: "2026-07-02", operationDate: "2026-07-01", accountingDate: "2026-07-02", notes: null }, actor, context("rect-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: item.id, description: "Producto rectificable", quantity: "3", unitPrice: "8", discountPercent: "0", discountAmount: "0", purchaseAccountCode: null, taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, context("rect-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, context("rect-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("rect-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    const originalEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { purchaseInvoiceId: created.value.id }, include: { lines: { include: { account: true }, orderBy: { position: "asc" } } } });
+    const command = { mode: "FULL" as const, expectedVersion: registered.value.version, supplierInvoiceNumber: "R-F-RECT-01", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN" as const, notes: "Devolución completa" };
+    const mutation = context("rectify", `rectify:${created.value.id}`, command); const competingMutation = context("rectify-race", `rectify:${created.value.id}`, command);
+    const attempts = await Promise.all([createPurchaseRectification(created.value.id, command, actor, mutation), createPurchaseRectification(created.value.id, command, actor, competingMutation)]);
+    const result = attempts.find((attempt) => attempt.ok); const rejected = attempts.find((attempt) => !attempt.ok);
+    expect(result).toMatchObject({ ok: true, status: 201, value: { documentType: "RECTIFICATION", status: "REGISTERED", paymentStatus: "NOT_APPLICABLE", total: "-29.04", rectifiesPurchaseInvoice: { id: created.value.id } } });
+    expect(rejected).toMatchObject({ ok: false, error: { code: "PURCHASE_ALREADY_RECTIFIED" } });
+    if (!result) throw new Error("Rectification race did not produce a winner");
+    const winningMutation = attempts[0]?.ok ? mutation : competingMutation; expect(await createPurchaseRectification(created.value.id, command, actor, winningMutation)).toEqual(result);
+    const original = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true, rectificationInvoices: true } });
+    expect(original.status).toBe("RECTIFIED"); expect(original.paymentStatus).toBe("NOT_APPLICABLE"); expect(original.dueDates).toHaveLength(1); expect(original.dueDates[0]!.status).toBe("CANCELLED"); expect(original.rectificationInvoices).toHaveLength(1);
+    const rectificationEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { purchaseInvoiceId: result.value.id }, include: { lines: { include: { account: true }, orderBy: { position: "asc" } } } });
+    expect(rectificationEntry.origin).toBe("PURCHASE_RECTIFICATION"); expect(rectificationEntry.reversesEntryId).toBe(originalEntry.id);
+    expect(rectificationEntry.lines.map((line) => [line.account.code, line.debit.toFixed(2), line.credit.toFixed(2)])).toEqual(originalEntry.lines.map((line) => [line.account.code, line.credit.toFixed(2), line.debit.toFixed(2)]));
+    const vat = await prisma.purchaseVatRecord.findFirstOrThrow({ where: { purchaseInvoiceId: result.value.id } }); expect(vat.taxableBase.toFixed(2)).toBe("-24.00"); expect(vat.taxAmount.toFixed(2)).toBe("-5.04");
+    const stock = await prisma.catalogItem.findUniqueOrThrow({ where: { id: item.id } }); expect(stock.stockCurrent.toFixed(3)).toBe("2.000");
+    const movement = await prisma.catalogStockMovement.findFirstOrThrow({ where: { purchaseInvoiceLine: { purchaseInvoiceId: result.value.id } } }); expect(movement.type).toBe("PURCHASE_RETURN"); expect(movement.quantity.toFixed(3)).toBe("-3.000");
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_RECTIFICATION_CREATED", payload: { path: ["originalPurchaseInvoiceId"], equals: created.value.id } } })).toBe(1);
+  });
+
+  it("blocks rectification after any supplier payment allocation", async () => {
+    const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-PAID-01", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, context("paid-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio", quantity: "1", unitPrice: "100", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, context("paid-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, context("paid-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("paid-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    const payment = { supplierId: supplier.id, paymentDate: "2026-07-10", paymentMethod: "BANK_TRANSFER" as const, reference: null, notes: null, allocations: [{ dueDateId: registered.value.dueDates[0]!.id, amount: "1.00" }] };
+    expect((await registerSupplierPayment(payment, actor, context("paid-payment", "pay", payment))).ok).toBe(true);
+    const command = { mode: "FULL" as const, expectedVersion: registered.value.version, supplierInvoiceNumber: "R-F-PAID-01", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN" as const, notes: null };
+    expect(await createPurchaseRectification(created.value.id, command, actor, context("paid-rect", "rectify", command))).toMatchObject({ ok: false, error: { code: "PURCHASE_RECTIFICATION_HAS_PAYMENTS" } });
+    expect(await prisma.purchaseInvoice.count({ where: { documentType: "RECTIFICATION" } })).toBe(0);
   });
 });
 

@@ -16,6 +16,7 @@ Fecha de corte: 2026-07-22.
 | Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Proveedores | Operativa inicial | Maestro fiscal desplegado y aceptado en staging: alta, edicion, baja logica, subcuenta 400, idempotencia, concurrencia optimista, RBAC, auditoria y datos sensibles cifrados. |
+| Compras | Operativa local pendiente de UAT | Borradores, lineas, vencimientos, registro contable, IVA soportado, entradas de stock, pagos de proveedor y rectificacion total sin pagos con contraasiento, IVA y stock append-only. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
 | Contabilidad | Operativa inicial | PGC PYMES, cuentas, asientos manuales, ejercicios, regularizacion, cierre y apertura. |
@@ -48,8 +49,8 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 Evidencia actualizada el 22 de julio de 2026 sobre PostgreSQL desechable:
 
-- El repositorio contiene 83 migraciones; la base desechable las aplica desde cero antes de validar.
-- Vitest: 69 archivos y 611 pruebas superadas.
+- El repositorio contiene 87 migraciones; la base desechable las aplica desde cero antes de validar.
+- Vitest: 71 archivos y 619 pruebas superadas.
 - TypeScript, ESLint y build optimizado de Next.js completados correctamente.
 - `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
 
@@ -103,7 +104,7 @@ Prioridades pendientes despues de este corte:
    inmutable y repetir el drill desde esa copia. El drill local no sustituye
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
-4. Completar compras, vencimientos y pagos de proveedor antes de abordar su conciliacion bancaria; el maestro de proveedores es el corte previo.
+4. Completar el ciclo avanzado de proveedor: credito/reembolso para rectificativas pagadas, rectificacion parcial, anulacion y correccion interna versionada. La rectificacion total impagada ya esta implementada localmente, pendiente de candidata y UAT de staging.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Refinar el backlog por rebanadas posteriores; [el backlog inicial](07-backlog-tecnico-primera-rebanada.md) se conserva como trazabilidad historica de plataforma.

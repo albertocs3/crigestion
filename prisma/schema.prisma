@@ -95,7 +95,13 @@ enum SupplierPaymentTermsType {
 enum PurchaseInvoiceStatus {
   DRAFT
   REGISTERED
+  RECTIFIED
   VOIDED
+}
+
+enum PurchaseInvoiceDocumentType {
+  STANDARD
+  RECTIFICATION
 }
 
 enum PurchasePaymentStatus {
@@ -182,6 +188,7 @@ enum CatalogTaxRateStatus {
 enum CatalogStockMovementType {
   ADJUSTMENT
   PURCHASE_RECEIPT
+  PURCHASE_RETURN
 }
 
 enum CustomerStoreStatus {
@@ -360,6 +367,7 @@ enum AccountingEntryOrigin {
   INVOICE
   INVOICE_VOIDING
   PURCHASE_INVOICE
+  PURCHASE_RECTIFICATION
   SUPPLIER_PAYMENT
   CUSTOMER_PAYMENT
   CUSTOMER_PAYMENT_RETURN
@@ -581,6 +589,7 @@ model PurchaseInvoice {
   supplierTaxIdEncryptedSnapshot  Bytes                 @db.ByteA
   supplierInvoiceNumber           String                @db.VarChar(80)
   supplierInvoiceNumberNormalized String                @db.VarChar(80)
+  documentType                    PurchaseInvoiceDocumentType @default(STANDARD)
   status                          PurchaseInvoiceStatus @default(DRAFT)
   paymentStatus                   PurchasePaymentStatus @default(PENDING)
   issueDate                       DateTime              @db.Date
@@ -593,6 +602,8 @@ model PurchaseInvoice {
   taxAmount                       Decimal               @default(0) @db.Decimal(14, 2)
   total                           Decimal               @default(0) @db.Decimal(14, 2)
   notes                           String?               @db.VarChar(1000)
+  rectificationReason             String?               @db.VarChar(120)
+  rectifiesPurchaseInvoiceId      String?               @db.Uuid
   version                         Int                   @default(1)
   createdById                     String                @db.Uuid
   updatedById                     String?               @db.Uuid
@@ -612,12 +623,15 @@ model PurchaseInvoice {
   dueDates        PurchaseDueDate[]
   allocations     SupplierPaymentAllocation[]
   accountingEntry AccountingJournalEntry?     @relation("PurchaseInvoiceAccountingEntry")
+  rectifiesPurchaseInvoice PurchaseInvoice?   @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices   PurchaseInvoice[]    @relation("PurchaseInvoiceRectifications")
 
   @@unique([companyId, supplierId, supplierInvoiceNumberNormalized])
   @@unique([id, companyId])
   @@index([companyId, status, accountingDate, id])
   @@index([companyId, paymentStatus, accountingDate, id])
   @@index([supplierId, issueDate, id])
+  @@index([rectifiesPurchaseInvoiceId])
   @@index([createdById, createdAt, id])
   @@map("purchase_invoices")
 }
@@ -977,6 +991,7 @@ model CatalogStockMovement {
   id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   itemId                String                   @db.Uuid
   purchaseInvoiceLineId String?                  @unique @db.Uuid
+  reversesMovementId    String?                  @unique @db.Uuid
   type                  CatalogStockMovementType @default(ADJUSTMENT)
   quantity              Decimal                  @db.Decimal(12, 3)
   previousStock         Decimal                  @db.Decimal(12, 3)
@@ -987,6 +1002,8 @@ model CatalogStockMovement {
 
   item                CatalogItem          @relation(fields: [itemId], references: [id], onDelete: Restrict)
   purchaseInvoiceLine PurchaseInvoiceLine? @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
+  reversesMovement    CatalogStockMovement?  @relation("CatalogStockMovementReversals", fields: [reversesMovementId], references: [id], onDelete: Restrict)
+  reversedByMovement  CatalogStockMovement?  @relation("CatalogStockMovementReversals")
   createdBy           User                 @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([itemId, createdAt, id])

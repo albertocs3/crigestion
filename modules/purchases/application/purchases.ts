@@ -15,7 +15,7 @@ const nullableText = (max: number) => z.string().trim().min(1).max(max).nullable
 
 export const listPurchasesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
-  status: z.enum(["DRAFT", "REGISTERED", "VOIDED"]).optional(),
+  status: z.enum(["DRAFT", "REGISTERED", "RECTIFIED", "VOIDED"]).optional(),
   paymentStatus: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "NOT_APPLICABLE"]).optional(),
   supplierId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(120).optional()
@@ -49,6 +49,17 @@ const purchaseLineSchema = z.object({
 export const replacePurchaseLinesSchema = z.object({ expectedVersion: z.number().int().positive(), lines: z.array(purchaseLineSchema).min(1).max(200) }).strict();
 export const replacePurchaseDueDatesSchema = z.object({ expectedVersion: z.number().int().positive(), dueDates: z.array(z.object({ dueDate: dateOnly, amount: money, paymentMethod }).strict()).min(1).max(60) }).strict();
 export const registerPurchaseSchema = z.object({ expectedVersion: z.number().int().positive() }).strict();
+export const createPurchaseRectificationSchema = z.object({
+  mode: z.literal("FULL"),
+  expectedVersion: z.number().int().positive(),
+  supplierInvoiceNumber: z.string().trim().min(1).max(80),
+  issueDate: dateOnly,
+  receivedDate: dateOnly,
+  operationDate: dateOnly,
+  accountingDate: dateOnly,
+  reason: z.enum(["RETURN", "OPERATION_CANCELLED"]),
+  notes: nullableText(1000).default(null)
+}).strict();
 export const listSupplierDueDatesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   supplierId: z.string().uuid().optional(),
@@ -66,7 +77,7 @@ export const registerSupplierPaymentSchema = z.object({
 }).strict();
 
 export type MutationContext = { correlationId?: string; idempotencyKey: string; requestHash: string; scope: string };
-type PurchaseStatus = "DRAFT" | "REGISTERED" | "VOIDED";
+type PurchaseStatus = "DRAFT" | "REGISTERED" | "RECTIFIED" | "VOIDED";
 type PurchasePaymentStatus = "PENDING" | "PARTIALLY_PAID" | "PAID" | "NOT_APPLICABLE";
 type PaymentMethod = "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
 type Failure = { ok: false; status: 404 | 409; error: { code: string; message: string } };
@@ -75,6 +86,7 @@ export type PurchaseResult<T = PurchaseDetail> = Success<T> | Failure;
 
 export type PurchaseListItem = {
   id: string; supplierInvoiceNumber: string; supplierCode: string; supplierName: string;
+  documentType: "STANDARD" | "RECTIFICATION";
   status: PurchaseStatus; paymentStatus: PurchasePaymentStatus; issueDate: string; accountingDate: string;
   total: string; version: number;
 };
@@ -82,6 +94,9 @@ export type PurchaseDetail = PurchaseListItem & {
   supplierId: string; receivedDate: string; operationDate: string; notes: string | null;
   subtotal: string; discountTotal: string; taxableBase: string; taxAmount: string;
   registeredAt: string | null; accountingEntry: { id: string; number: string } | null;
+  rectificationReason: string | null;
+  rectifiesPurchaseInvoice: { id: string; supplierInvoiceNumber: string } | null;
+  rectificationInvoices: Array<{ id: string; supplierInvoiceNumber: string }>;
   lines: Array<{ id: string; position: number; catalogItemId: string | null; catalogItemCode: string | null; description: string; quantity: string; unitPrice: string; discountPercent: string; discountAmount: string; purchaseAccountCode: string; taxRateId: string; taxRateCode: string; taxRate: string; taxableBase: string; taxAmount: string; total: string }>;
   dueDates: Array<{ id: string; position: number; dueDate: string; amount: string; allocatedAmount: string; pendingAmount: string; paymentMethod: PaymentMethod; status: "PENDING" | "PAID" | "CANCELLED" }>;
 };
@@ -91,7 +106,9 @@ export type SupplierPaymentDto = { id: string; supplierId: string; paymentDate: 
 const detailInclude = {
   lines: { orderBy: { position: "asc" as const } },
   dueDates: { orderBy: { position: "asc" as const }, include: { allocations: { where: { supplierPayment: { status: "POSTED" as const } }, select: { amount: true } } } },
-  accountingEntry: { select: { id: true, number: true } }
+  accountingEntry: { select: { id: true, number: true } },
+  rectifiesPurchaseInvoice: { select: { id: true, supplierInvoiceNumber: true } },
+  rectificationInvoices: { select: { id: true, supplierInvoiceNumber: true }, orderBy: { createdAt: "asc" as const } }
 } satisfies Prisma.PurchaseInvoiceInclude;
 type PurchaseRecord = Prisma.PurchaseInvoiceGetPayload<{ include: typeof detailInclude }>;
 
@@ -230,6 +247,108 @@ export async function registerPurchase(id: string, command: z.infer<typeof regis
   });
 }
 
+export async function createPurchaseRectification(id: string, command: z.infer<typeof createPurchaseRectificationSchema>, actor: SessionUser, context: MutationContext): Promise<PurchaseResult> {
+  return mutate(actor, context, async (tx) => {
+    const replay = await replayMutation<PurchaseDetail>(tx, actor, context); if (replay) return replay;
+    const locked = await lockPurchase(tx, id); const companyId = await currentCompanyId(tx);
+    if (!locked || locked.companyId !== companyId) return failure(404, "PURCHASE_NOT_FOUND", "La factura de compra no existe.");
+    if (locked.status !== "REGISTERED") return failure(409, locked.status === "RECTIFIED" ? "PURCHASE_ALREADY_RECTIFIED" : "PURCHASE_NOT_RECTIFIABLE", "La compra no está disponible para rectificación.");
+    if (locked.version !== command.expectedVersion) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de rectificarla.");
+    const dates = parsePurchaseDates(command); if (!dates.ok) return dates.failure;
+
+    const original = await tx.purchaseInvoice.findUniqueOrThrow({
+      where: { id },
+      include: {
+        lines: { orderBy: { position: "asc" }, include: { stockMovement: { select: { id: true, itemId: true, quantity: true } } } },
+        taxSummaries: { orderBy: [{ taxRateCode: "asc" }, { taxRate: "asc" }] },
+        dueDates: { orderBy: { position: "asc" }, include: { allocations: { select: { id: true } } } },
+        allocations: { select: { id: true }, take: 1 },
+        rectificationInvoices: { select: { id: true }, take: 1 },
+        accountingEntry: { include: { lines: { orderBy: { position: "asc" }, include: { account: { select: { code: true } } } }, reversedByEntry: { select: { id: true } } } }
+      }
+    });
+    if (original.documentType !== "STANDARD" || original.rectificationInvoices.length > 0) return failure(409, "PURCHASE_ALREADY_RECTIFIED", "La compra ya tiene una rectificación.");
+    if (original.allocations.length > 0 || original.dueDates.some((due) => due.allocations.length > 0 || due.status !== "PENDING")) return failure(409, "PURCHASE_RECTIFICATION_HAS_PAYMENTS", "No se puede rectificar una compra con actividad de pago.");
+    if (!original.accountingEntry || original.accountingEntry.status !== "POSTED" || original.accountingEntry.reversedByEntry) return failure(409, "PURCHASE_ORIGINAL_ENTRY_NOT_REVERSIBLE", "El asiento original no está disponible para reversión.");
+    if (!original.lines.length) return failure(409, "PURCHASE_NOT_RECTIFIABLE", "La compra no contiene líneas rectificables.");
+    if (dates.value.issueDate < original.issueDate || dates.value.accountingDate < original.accountingDate) return failure(409, "PURCHASE_RECTIFICATION_DATES_INVALID", "La rectificación no puede ser anterior a la compra original.");
+
+    const duplicateNumber = await tx.purchaseInvoice.findFirst({ where: { companyId: companyId!, supplierId: original.supplierId, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber) }, select: { id: true } });
+    if (duplicateNumber) return failure(409, "PURCHASE_NUMBER_ALREADY_USED", "Ese número de factura ya existe para el proveedor.");
+    const fiscalYear = await lockFiscalYear(tx, companyId!, dates.value.accountingDate); if (!fiscalYear) return failure(409, "PURCHASE_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio abierto para la fecha contable.");
+    if (fiscalYear.id !== original.accountingEntry.fiscalYearId) return failure(409, "PURCHASE_RECTIFICATION_FISCAL_YEAR_MISMATCH", "La compra original y su rectificación deben contabilizarse en el mismo ejercicio abierto.");
+    const originalCodes = [...new Set(original.accountingEntry.lines.map((line) => line.account.code))];
+    const accounts = await tx.accountingAccount.findMany({ where: { fiscalYearId: fiscalYear.id, code: { in: originalCodes }, status: "ACTIVE", isPostable: true }, select: { id: true, code: true } });
+    if (accounts.length !== originalCodes.length) return failure(409, "PURCHASE_ACCOUNT_NOT_AVAILABLE", "Falta alguna subcuenta activa e imputable para contabilizar la rectificación.");
+    const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+
+    const rectification = await tx.purchaseInvoice.create({ data: {
+      companyId: companyId!, supplierId: original.supplierId,
+      supplierCodeSnapshot: original.supplierCodeSnapshot, supplierAccountingCodeSnapshot: original.supplierAccountingCodeSnapshot,
+      supplierLegalNameSnapshot: original.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: original.supplierTaxIdLast4Snapshot,
+      supplierTaxIdEncryptedSnapshot: original.supplierTaxIdEncryptedSnapshot,
+      supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber),
+      documentType: "RECTIFICATION", paymentStatus: "NOT_APPLICABLE", ...dates.value,
+      subtotal: original.subtotal.neg(), discountTotal: original.discountTotal.neg(), taxableBase: original.taxableBase.neg(), taxAmount: original.taxAmount.neg(), total: original.total.neg(),
+      notes: command.notes, rectificationReason: command.reason, rectifiesPurchaseInvoiceId: original.id, createdById: actor.id, updatedById: actor.id
+    }, select: { id: true } });
+    await tx.purchaseInvoiceLine.createMany({ data: original.lines.map((line) => ({
+      purchaseInvoiceId: rectification.id, position: line.position, catalogItemId: line.catalogItemId,
+      catalogItemCodeSnapshot: line.catalogItemCodeSnapshot, catalogItemKindSnapshot: line.catalogItemKindSnapshot,
+      description: line.description, quantity: line.quantity.neg(), unitPrice: line.unitPrice,
+      discountPercent: line.discountPercent, discountAmount: line.discountAmount, purchaseAccountCode: line.purchaseAccountCode,
+      taxRateId: line.taxRateId, taxRateCodeSnapshot: line.taxRateCodeSnapshot, taxRateNameSnapshot: line.taxRateNameSnapshot,
+      taxRateSnapshot: line.taxRateSnapshot, lineSubtotal: line.lineSubtotal.neg(), lineDiscountTotal: line.lineDiscountTotal.neg(),
+      lineTaxableBase: line.lineTaxableBase.neg(), lineTaxAmount: line.lineTaxAmount.neg(), lineTotal: line.lineTotal.neg()
+    })) });
+    await tx.purchaseInvoiceTaxSummary.createMany({ data: original.taxSummaries.map((summary) => ({
+      purchaseInvoiceId: rectification.id, taxRateCode: summary.taxRateCode, taxRate: summary.taxRate,
+      taxableBase: summary.taxableBase.neg(), taxAmount: summary.taxAmount.neg(), total: summary.total.neg()
+    })) });
+
+    const sequence = await nextJournalSequence(tx, fiscalYear.id); const year = dates.value.accountingDate.getUTCFullYear();
+    const concept = `Rectificativa compra ${command.supplierInvoiceNumber} de ${original.supplierInvoiceNumber}`.slice(0, 240);
+    const entry = await tx.accountingJournalEntry.create({ data: {
+      fiscalYearId: fiscalYear.id, purchaseInvoiceId: rectification.id, reversesEntryId: original.accountingEntry.id,
+      year, sequence, number: `${year}/${String(sequence).padStart(6, "0")}`, accountingDate: dates.value.accountingDate,
+      concept, origin: "PURCHASE_RECTIFICATION", totalDebit: original.accountingEntry.totalCredit, totalCredit: original.accountingEntry.totalDebit,
+      createdById: actor.id, lines: { create: original.accountingEntry.lines.map((line) => ({
+        accountId: accountByCode.get(line.account.code)!, position: line.position, concept,
+        debit: line.credit, credit: line.debit
+      })) }
+    }, select: { id: true, number: true } });
+
+    const summaries = await tx.purchaseInvoiceTaxSummary.findMany({ where: { purchaseInvoiceId: rectification.id } });
+    await tx.purchaseVatRecord.createMany({ data: summaries.map((summary) => ({
+      companyId: companyId!, supplierId: original.supplierId, purchaseInvoiceId: rectification.id, taxSummaryId: summary.id, accountingEntryId: entry.id,
+      supplierInvoiceNumberSnapshot: command.supplierInvoiceNumber, supplierCodeSnapshot: original.supplierCodeSnapshot,
+      supplierLegalNameSnapshot: original.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: original.supplierTaxIdLast4Snapshot,
+      supplierTaxIdEncryptedSnapshot: original.supplierTaxIdEncryptedSnapshot, issueDate: dates.value.issueDate, accountingDate: dates.value.accountingDate,
+      taxRateCode: summary.taxRateCode, taxRate: summary.taxRate, taxableBase: summary.taxableBase, taxAmount: summary.taxAmount, total: summary.total
+    })) });
+
+    const rectificationLines = await tx.purchaseInvoiceLine.findMany({ where: { purchaseInvoiceId: rectification.id }, orderBy: { position: "asc" } });
+    const rectificationLineByPosition = new Map(rectificationLines.map((line) => [line.position, line]));
+    const originalStockLines = original.lines.filter((line) => line.stockMovement).sort((a, b) => a.stockMovement!.itemId.localeCompare(b.stockMovement!.itemId));
+    let stockMovementCount = 0; let negativeStockCount = 0;
+    for (const originalLine of originalStockLines) {
+      const sourceMovement = originalLine.stockMovement!; const line = rectificationLineByPosition.get(originalLine.position)!;
+      const items = await tx.$queryRaw<Array<{ id: string; stockCurrent: Prisma.Decimal }>>(Prisma.sql`SELECT "id", "stockCurrent" FROM "catalog_items" WHERE "id" = ${sourceMovement.itemId}::uuid FOR UPDATE`);
+      const item = items[0]; if (!item) throw new Error("PURCHASE_STOCK_ITEM_MISSING");
+      const movementQuantity = sourceMovement.quantity.neg(); const next = item.stockCurrent.plus(movementQuantity); if (next.isNegative()) negativeStockCount += 1;
+      await tx.catalogStockMovement.create({ data: { itemId: item.id, purchaseInvoiceLineId: line.id, reversesMovementId: sourceMovement.id, type: "PURCHASE_RETURN", quantity: movementQuantity, previousStock: item.stockCurrent, newStock: next, reason: `Salida por rectificativa ${command.supplierInvoiceNumber}`.slice(0, 500), createdById: actor.id } });
+      await tx.catalogItem.update({ where: { id: item.id }, data: { stockCurrent: next, updatedById: actor.id } }); stockMovementCount += 1;
+    }
+
+    await tx.purchaseInvoice.update({ where: { id: rectification.id }, data: { status: "REGISTERED", registeredAt: new Date(), registeredById: actor.id, updatedById: actor.id, version: { increment: 1 } } });
+    await tx.purchaseDueDate.updateMany({ where: { purchaseInvoiceId: original.id, status: "PENDING" }, data: { status: "CANCELLED" } });
+    await tx.purchaseInvoice.update({ where: { id: original.id }, data: { status: "RECTIFIED", paymentStatus: "NOT_APPLICABLE", updatedById: actor.id } });
+    const value = mapDetail(await findDetail(tx, rectification.id));
+    await audit(tx, "PURCHASE_RECTIFICATION_CREATED", actor, context, { companyId, originalPurchaseInvoiceId: original.id, rectificationPurchaseInvoiceId: rectification.id, supplierId: original.supplierId, reason: command.reason, accountingJournalEntryId: entry.id, accountingJournalEntryNumber: entry.number, stockMovementCount, negativeStockCount, totalAmount: value.total });
+    await persist(tx, actor, context, 201, value); return { ok: true, status: 201, value };
+  }, () => failure(409, "PURCHASE_RECTIFICATION_CONFLICT", "La compra ya se ha rectificado o el número del proveedor ya existe."));
+}
+
 export async function listSupplierDueDates(command: z.infer<typeof listSupplierDueDatesSchema>, actor: SessionUser): Promise<{ dueDates: SupplierDueDateItem[] }> {
   const companyId = await currentCompanyId(prisma);
   const rows = companyId ? await prisma.purchaseDueDate.findMany({ where: { purchaseInvoice: { companyId, status: "REGISTERED", ...(command.supplierId ? { supplierId: command.supplierId } : {}) }, ...(command.status ? { status: command.status } : {}), ...(command.dueBefore ? { dueDate: { lte: parseDate(command.dueBefore)! } } : {}) }, include: { purchaseInvoice: true, allocations: { where: { supplierPayment: { status: "POSTED" } }, select: { amount: true } } }, orderBy: [{ dueDate: "asc" }, { id: "asc" }], take: command.limit }) : [];
@@ -242,6 +361,10 @@ export async function registerSupplierPayment(command: z.infer<typeof registerSu
     const replay = await replayMutation<SupplierPaymentDto>(tx, actor, context); if (replay) return replay;
     const companyId = await currentCompanyId(tx); if (!companyId) return failure(409, "COMPANY_NOT_INITIALIZED", "La empresa no esta inicializada.");
     const dueIds = [...command.allocations.map((row) => row.dueDateId)].sort();
+    const dueReferences = await tx.purchaseDueDate.findMany({ where: { id: { in: dueIds } }, select: { id: true, purchaseInvoiceId: true } });
+    if (dueReferences.length !== dueIds.length) return failure(404, "SUPPLIER_DUE_DATE_NOT_FOUND", "Algún vencimiento no existe.");
+    const purchaseIds = [...new Set(dueReferences.map((row) => row.purchaseInvoiceId))].sort();
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "purchase_invoices" WHERE "id" IN (${Prisma.join(purchaseIds.map((purchaseId) => Prisma.sql`${purchaseId}::uuid`))}) ORDER BY "id" FOR UPDATE`);
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "purchase_due_dates" WHERE "id" IN (${Prisma.join(dueIds.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY "id" FOR UPDATE`);
     const dueDates = await tx.purchaseDueDate.findMany({ where: { id: { in: dueIds } }, include: { purchaseInvoice: true, allocations: { where: { supplierPayment: { status: "POSTED" } }, select: { amount: true } } } });
     if (dueDates.length !== dueIds.length) return failure(404, "SUPPLIER_DUE_DATE_NOT_FOUND", "Algún vencimiento no existe.");
@@ -273,8 +396,8 @@ function parsePurchaseDates(command: { issueDate: string; receivedDate: string; 
 function parseDate(value: string): Date | null { const date = new Date(`${value}T00:00:00.000Z`); return Number.isNaN(date.getTime()) || formatDate(date) !== value ? null : date; }
 function formatDate(value: Date): string { return value.toISOString().slice(0, 10); }
 function normalizeInvoiceNumber(value: string): string { return value.trim().toLocaleUpperCase("es-ES").replace(/\s+/g, " "); }
-function mapListItem(row: { id: string; supplierInvoiceNumber: string; supplierCodeSnapshot: string; supplierLegalNameSnapshot: string; status: PurchaseStatus; paymentStatus: PurchasePaymentStatus; issueDate: Date; accountingDate: Date; total: Prisma.Decimal; version: number }): PurchaseListItem { return { id: row.id, supplierInvoiceNumber: row.supplierInvoiceNumber, supplierCode: row.supplierCodeSnapshot, supplierName: row.supplierLegalNameSnapshot, status: row.status, paymentStatus: row.paymentStatus, issueDate: formatDate(row.issueDate), accountingDate: formatDate(row.accountingDate), total: row.total.toFixed(2), version: row.version }; }
-function mapDetail(row: PurchaseRecord): PurchaseDetail { return { ...mapListItem(row), supplierId: row.supplierId, receivedDate: formatDate(row.receivedDate), operationDate: formatDate(row.operationDate), notes: row.notes, subtotal: row.subtotal.toFixed(2), discountTotal: row.discountTotal.toFixed(2), taxableBase: row.taxableBase.toFixed(2), taxAmount: row.taxAmount.toFixed(2), registeredAt: row.registeredAt?.toISOString() ?? null, accountingEntry: row.accountingEntry, lines: row.lines.map((line) => ({ id: line.id, position: line.position, catalogItemId: line.catalogItemId, catalogItemCode: line.catalogItemCodeSnapshot, description: line.description, quantity: line.quantity.toFixed(3), unitPrice: line.unitPrice.toFixed(2), discountPercent: line.discountPercent.toFixed(2), discountAmount: line.discountAmount.toFixed(2), purchaseAccountCode: line.purchaseAccountCode, taxRateId: line.taxRateId, taxRateCode: line.taxRateCodeSnapshot, taxRate: line.taxRateSnapshot.toFixed(2), taxableBase: line.lineTaxableBase.toFixed(2), taxAmount: line.lineTaxAmount.toFixed(2), total: line.lineTotal.toFixed(2) })), dueDates: row.dueDates.map((due) => { const allocated = due.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: due.id, position: due.position, dueDate: formatDate(due.dueDate), amount: due.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), pendingAmount: Prisma.Decimal.max(due.amount.minus(allocated), 0).toFixed(2), paymentMethod: due.paymentMethod, status: due.status }; }) }; }
+function mapListItem(row: { id: string; supplierInvoiceNumber: string; supplierCodeSnapshot: string; supplierLegalNameSnapshot: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; paymentStatus: PurchasePaymentStatus; issueDate: Date; accountingDate: Date; total: Prisma.Decimal; version: number }): PurchaseListItem { return { id: row.id, supplierInvoiceNumber: row.supplierInvoiceNumber, supplierCode: row.supplierCodeSnapshot, supplierName: row.supplierLegalNameSnapshot, documentType: row.documentType, status: row.status, paymentStatus: row.paymentStatus, issueDate: formatDate(row.issueDate), accountingDate: formatDate(row.accountingDate), total: row.total.toFixed(2), version: row.version }; }
+function mapDetail(row: PurchaseRecord): PurchaseDetail { return { ...mapListItem(row), supplierId: row.supplierId, receivedDate: formatDate(row.receivedDate), operationDate: formatDate(row.operationDate), notes: row.notes, subtotal: row.subtotal.toFixed(2), discountTotal: row.discountTotal.toFixed(2), taxableBase: row.taxableBase.toFixed(2), taxAmount: row.taxAmount.toFixed(2), registeredAt: row.registeredAt?.toISOString() ?? null, accountingEntry: row.accountingEntry, rectificationReason: row.rectificationReason, rectifiesPurchaseInvoice: row.rectifiesPurchaseInvoice, rectificationInvoices: row.rectificationInvoices, lines: row.lines.map((line) => ({ id: line.id, position: line.position, catalogItemId: line.catalogItemId, catalogItemCode: line.catalogItemCodeSnapshot, description: line.description, quantity: line.quantity.toFixed(3), unitPrice: line.unitPrice.toFixed(2), discountPercent: line.discountPercent.toFixed(2), discountAmount: line.discountAmount.toFixed(2), purchaseAccountCode: line.purchaseAccountCode, taxRateId: line.taxRateId, taxRateCode: line.taxRateCodeSnapshot, taxRate: line.taxRateSnapshot.toFixed(2), taxableBase: line.lineTaxableBase.toFixed(2), taxAmount: line.lineTaxAmount.toFixed(2), total: line.lineTotal.toFixed(2) })), dueDates: row.dueDates.map((due) => { const allocated = due.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: due.id, position: due.position, dueDate: formatDate(due.dueDate), amount: due.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), pendingAmount: Prisma.Decimal.max(due.amount.minus(allocated), 0).toFixed(2), paymentMethod: due.paymentMethod, status: due.status }; }) }; }
 function mapDueDate(row: Prisma.PurchaseDueDateGetPayload<{ include: { purchaseInvoice: true; allocations: { select: { amount: true } } } }>): SupplierDueDateItem { const allocated = row.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: row.id, purchaseInvoiceId: row.purchaseInvoiceId, supplierId: row.purchaseInvoice.supplierId, supplierCode: row.purchaseInvoice.supplierCodeSnapshot, supplierName: row.purchaseInvoice.supplierLegalNameSnapshot, supplierInvoiceNumber: row.purchaseInvoice.supplierInvoiceNumber, dueDate: formatDate(row.dueDate), amount: row.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), pendingAmount: Prisma.Decimal.max(row.amount.minus(allocated), 0).toFixed(2), paymentMethod: row.paymentMethod, status: row.status }; }
 function failure(status: 404 | 409, code: string, message: string): Failure { return { ok: false, status, error: { code, message } }; }
 function scopedKey(actor: SessionUser, context: MutationContext, companyId: string | null): string { return `v2:purchases:${createHash("sha256").update(`${companyId ?? "uninitialized"}:${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
