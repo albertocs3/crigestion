@@ -22,8 +22,8 @@ import { requireMaintenanceModeInactive } from "@/modules/platform/application/m
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-type RouteContext = { params: Promise<{ closeRequestId: string }> };
-const paramsSchema = z.object({ closeRequestId: z.string().uuid() }).strict();
+type RouteContext = { params: Promise<{ requestId: string }> };
+const paramsSchema = z.object({ requestId: z.string().uuid() }).strict();
 const maxBodyBytes = 16 * 1024;
 
 export async function POST(request: Request, context: RouteContext) {
@@ -54,10 +54,10 @@ export async function POST(request: Request, context: RouteContext) {
   }
   const command = requestFiscalYearReopeningSchema.safeParse(body);
   if (!command.success) return jsonResponse(request, validationError(command.error.flatten()), { status: 422 });
-  const result = await requestFiscalYearReopening(params.data.closeRequestId, command.data, authorization.user, {
+  const result = await requestFiscalYearReopening(params.data.requestId, command.data, authorization.user, {
     correlationId,
-    idempotencyKey: idempotencyStorageKey(authorization.user.id, "accounting-fiscal-year-reopen-request", params.data.closeRequestId, idempotency.key),
-    requestHash: hashFiscalYearReopenRequest(params.data.closeRequestId, command.data)
+    idempotencyKey: idempotencyStorageKey(authorization.user.id, "accounting-fiscal-year-reopen-request", params.data.requestId, idempotency.key),
+    requestHash: hashFiscalYearReopenRequest(params.data.requestId, command.data)
   });
   return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status });
 }

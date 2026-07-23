@@ -14,7 +14,7 @@ import { GET as journalEntriesExportGet } from "@/app/api/accounting/journal-ent
 import { POST as fiscalYearClosePost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close/route";
 import { POST as fiscalYearCloseRequestPost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close-requests/route";
 import { POST as fiscalYearCloseApprovePost } from "@/app/api/accounting/fiscal-year-close-requests/[requestId]/approve/route";
-import { POST as fiscalYearReopenRequestPost } from "@/app/api/accounting/fiscal-year-close-requests/[closeRequestId]/reopen-requests/route";
+import { POST as fiscalYearReopenRequestPost } from "@/app/api/accounting/fiscal-year-close-requests/[requestId]/reopen-requests/route";
 import { POST as fiscalYearReopenApprovePost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/approve/route";
 import { POST as fiscalYearReopenCancelPost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/cancel/route";
 import { prisma } from "@/lib/prisma";
@@ -393,7 +393,7 @@ describe("accounting journal HTTP contracts", () => {
         reasonCode: "PREMATURE_CLOSE",
         reason: "Cierre prematuro detectado durante la validacion UAT."
       }, { csrfToken: reopenCsrf }),
-      { params: Promise.resolve({ closeRequestId: closeRequest.id }) }
+      { params: Promise.resolve({ requestId: closeRequest.id }) }
     );
     const firstReopenRequest = await reopenResponse.json() as { id: string };
     const cancelReopenResponse = await fiscalYearReopenCancelPost(
@@ -405,7 +405,7 @@ describe("accounting journal HTTP contracts", () => {
         reasonCode: "PREMATURE_CLOSE",
         reason: "Cierre prematuro detectado durante la segunda validacion UAT."
       }, { csrfToken: reopenCsrf }),
-      { params: Promise.resolve({ closeRequestId: closeRequest.id }) }
+      { params: Promise.resolve({ requestId: closeRequest.id }) }
     );
     const reopenRequest = await replacementReopenResponse.json() as { id: string };
     const reopenSelfApproval = await fiscalYearReopenApprovePost(
