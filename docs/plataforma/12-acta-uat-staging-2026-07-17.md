@@ -639,4 +639,22 @@ La base y el dump temporales se descartaron automaticamente. El enlace
 `/opt/crigestion-staging/current` permanecio en `staging-2026.07.23-rc5`, la
 base principal mantuvo 94 migraciones y la aplicacion y el worker siguieron
 activos con health completo. No se consulto ni modifico produccion.
+
+Tras autorizar la promocion se creo y verifico el backup fresco
+`crigestion_staging-auto-20260723T161844Z.dump`. Se detuvieron primero el worker
+y la web, y la unidad controlada
+`crigestion-staging-migrate@staging-2026.07.23-rc6.service` termino con
+`Result=success` y `ExecMainStatus=0`. La base principal quedo con 96 de 96
+migraciones, cero migraciones incompletas y todas las restricciones nuevas
+validadas; el ejercicio 2026 permanecio `OPEN` y continuaron a cero las
+solicitudes de cierre y reapertura.
+
+Despues del prune de dependencias de desarrollo y la normalizacion de permisos,
+`current` se cambio a `staging-2026.07.23-rc6`. La web arranco primero con el
+estado degradado esperado por worker detenido; tras arrancar el worker, los
+health local y publico devolvieron `database`, `verifactu` y `worker` en `ok`.
+El rol migrador conserva todos los atributos elevados en `false`; el runtime no
+puede leer `_prisma_migrations`, modificar `audit_events` ni obtener `UPDATE`
+sobre secuencias. No quedaron bases, dumps ni listeners temporales y el journal
+no registro errores durante la ventana. Produccion permanecio fuera de alcance.
 Produccion no se consulto ni se modifico.
