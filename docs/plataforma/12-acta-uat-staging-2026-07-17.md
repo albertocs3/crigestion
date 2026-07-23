@@ -565,3 +565,45 @@ cierre/reapertura, no hay backfill pendiente, asientos legacy huerfanos ni
 bases temporales. El ejercicio 2026 de staging principal permanece `OPEN` y
 no se crearon solicitudes de cierre o reapertura. Produccion no se consulto ni
 se modifico.
+
+## 18. UAT aislada de cierre y reapertura contable
+
+El 2026-07-23 se genero y verifico el backup
+`crigestion_staging-auto-20260723T145041Z.dump`, con 94 migraciones terminadas.
+Se restauro en una base efimera `crigestion_reopen_uat_*`, sin listener HTTP ni
+worker adicional. La prueba uso la logica real de autenticacion, permisos,
+casos de uso, Prisma, transacciones y triggers de la release rc5 con el rol
+runtime endurecido.
+
+Se crearon tres identidades exclusivas dentro de la copia:
+
+- maker, con permisos para solicitar cierre y reapertura;
+- checker, con permisos para aprobar cierre y reapertura;
+- restricted, solo con acceso de lectura contable.
+
+El preflight inicial detecto una factura sintetica con VeriFactu sin resolver.
+Se comprobo que el resto de contadores de bloqueo estaba a cero y se ajusto un
+unico estado a `ACCEPTED` exclusivamente en la copia, dejando el evento
+`UAT_FIXTURE_ADJUSTED`. Despues se verifico:
+
+- tres denegaciones `403` de permisos y tres eventos `ACCESS_DENIED`;
+- rechazo de autoaprobacion en el cierre y en la reapertura;
+- cierre maker-checker con solicitud
+  `1d134e7a-67b5-4fb1-a934-8cc43751c5ec` y replay idempotente identico;
+- reapertura maker-checker con solicitud
+  `22c8dfee-3657-437e-9863-502955d1dd53` y replay idempotente identico;
+- estado final 2026 `OPEN` y 2027 `REVERSED`, enlazado al ejercicio origen;
+- tres asientos originales y tres contraasientos `POSTED` con origen
+  `FISCAL_YEAR_CLOSE_REVERSAL`, importes Debe/Haber intercambiados y lineas
+  exactamente invertidas por cuenta;
+- eventos de solicitud, denegacion de autoaprobacion, cierre, solicitud de
+  reapertura, denegacion y reapertura, sin contrasenas, tokens, secretos ni
+  IBAN;
+- denegacion PostgreSQL al intentar modificar auditoria y rechazo de una
+  transicion directa no autorizada del ejercicio sucesor.
+
+La base efimera se descarto automaticamente. No quedaron bases UAT, listeners
+3102/3103 ni unidades transitorias. La base principal mantuvo 94 migraciones,
+2026 `OPEN` y cero solicitudes de cierre o reapertura. La aplicacion rc5 y el
+worker siguieron activos, y los health local y publico permanecieron en `ok`.
+Produccion no se consulto ni se modifico.
