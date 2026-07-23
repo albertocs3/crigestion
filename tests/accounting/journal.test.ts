@@ -19,6 +19,12 @@ import {
   requestFiscalYearClose
 } from "@/modules/accounting/application/fiscalYearCloseRequests";
 import {
+  approveFiscalYearReopening,
+  hashFiscalYearReopenApproval,
+  hashFiscalYearReopenRequest,
+  requestFiscalYearReopening
+} from "@/modules/accounting/application/fiscalYearReopenRequests";
+import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
@@ -295,6 +301,152 @@ describe("accounting journal application service", () => {
       requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
     });
     expect(replacement).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED" } });
+  });
+
+  it("reopens a completed close with maker-checker contraentries and safely reuses the successor", async () => {
+    const requester = await loginAsAdmin();
+    const closeApprover = await createActorLike(requester, "close-approver");
+    const reopenApprover = await createActorLike(requester, "reopen-approver");
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026 } });
+    const bankResult = await createAccountingAccount(
+      { code: "572000000", name: "Banco", type: "ACTIVO", level: 9, isPostable: true }, requester
+    );
+    const revenueResult = await createAccountingAccount(
+      { code: "705000000", name: "Servicios", type: "INGRESO", level: 9, isPostable: true }, requester
+    );
+    const resultAccount = await createAccountingAccount(
+      { code: "129000000", name: "Resultado del ejercicio", type: "PATRIMONIO", level: 9, isPostable: true }, requester
+    );
+    if (!bankResult.ok || !revenueResult.ok || !resultAccount.ok) throw new Error("Could not create close accounts.");
+    const bank = bankResult.value;
+    const revenue = revenueResult.value;
+    const sale = await createManualJournalEntry({
+      accountingDate: "2026-07-10",
+      concept: "Operacion previa a reapertura",
+      lines: [
+        { accountId: bank.id, concept: "Banco", debit: "121.00", credit: "0.00" },
+        { accountId: revenue.id, concept: "Servicios", debit: "0.00", credit: "121.00" }
+      ]
+    }, requester);
+    expect(sale.ok).toBe(true);
+
+    const closeRequested = await requestFiscalYearClose(fiscalYear.id, requester, {
+      idempotencyKey: `test-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
+    });
+    if (!closeRequested.ok) throw new Error(closeRequested.error.code);
+    const firstClose = await approveAccountingFiscalYearCloseRequest(closeRequested.value.id, closeApprover, {
+      idempotencyKey: `test-close-approve:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearCloseApproval(closeRequested.value.id)
+    });
+    if (!firstClose.ok) throw new Error(firstClose.error.code);
+    await expect(prisma.accountingFiscalYear.update({
+      where: { id: firstClose.value.next.id }, data: { status: "REVERSED" }
+    })).rejects.toThrow("ACCOUNTING_FISCAL_YEAR_REOPEN_TRANSITION_EVIDENCE_MISSING");
+
+    const reopenCommand = { reasonCode: "OMITTED_TRANSACTION" as const, reason: "Falta registrar una operacion UAT del ejercicio." };
+    const bankAccount = await prisma.bankAccount.create({
+      data: { companyId: fiscalYear.companyId, name: "Banco sucesor", iban: "ES9121000418450200051332", createdById: requester.id }
+    });
+    const bankMovement = await prisma.bankMovement.create({
+      data: { bankAccountId: bankAccount.id, bookingDate: new Date("2027-01-02T00:00:00.000Z"), amount: "10.00", createdById: requester.id }
+    });
+    const blockedByBanking = await requestFiscalYearReopening(closeRequested.value.id, reopenCommand, requester, {
+      idempotencyKey: `test-reopen-bank-block:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRequest(closeRequested.value.id, reopenCommand)
+    });
+    expect(blockedByBanking).toMatchObject({
+      ok: false,
+      error: { code: "FISCAL_YEAR_REOPEN_PRECONDITIONS_FAILED", preflight: { successorBusinessActivityCount: 1 } }
+    });
+    await prisma.bankMovement.delete({ where: { id: bankMovement.id } });
+    await prisma.bankAccount.delete({ where: { id: bankAccount.id } });
+    const reopenRequested = await requestFiscalYearReopening(closeRequested.value.id, reopenCommand, requester, {
+      idempotencyKey: `test-reopen-request:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRequest(closeRequested.value.id, reopenCommand)
+    });
+    expect(reopenRequested).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED" } });
+    if (!reopenRequested.ok) throw new Error(reopenRequested.error.code);
+    const selfApproval = await approveFiscalYearReopening(reopenRequested.value.id, requester, {
+      idempotencyKey: `test-reopen-self:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenApproval(reopenRequested.value.id)
+    });
+    expect(selfApproval).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN" } });
+
+    const approvalContext = {
+      idempotencyKey: `test-reopen-approve:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenApproval(reopenRequested.value.id)
+    };
+    const reopened = await approveFiscalYearReopening(reopenRequested.value.id, reopenApprover, approvalContext);
+    expect(reopened).toMatchObject({
+      ok: true,
+      value: {
+        status: "COMPLETED",
+        fiscalYearId: fiscalYear.id,
+        successorFiscalYearId: firstClose.value.next.id
+      }
+    });
+    expect(await approveFiscalYearReopening(reopenRequested.value.id, reopenApprover, approvalContext)).toEqual(reopened);
+    expect(await prisma.accountingFiscalYear.findMany({
+      where: { id: { in: [fiscalYear.id, firstClose.value.next.id] } },
+      orderBy: { year: "asc" },
+      select: { id: true, status: true, closedAt: true, closedById: true }
+    })).toEqual([
+      { id: fiscalYear.id, status: "OPEN", closedAt: null, closedById: null },
+      { id: firstClose.value.next.id, status: "REVERSED", closedAt: null, closedById: null }
+    ]);
+    expect(await prisma.accountingFiscalYearCloseRequest.findUniqueOrThrow({
+      where: { id: closeRequested.value.id }, select: { status: true }
+    })).toEqual({ status: "COMPLETED" });
+    const reversals = await prisma.accountingJournalEntry.findMany({
+      where: { origin: "FISCAL_YEAR_CLOSE_REVERSAL" },
+      select: { reversesEntryId: true, totalDebit: true, totalCredit: true, reversesEntry: { select: { totalDebit: true, totalCredit: true } } }
+    });
+    expect(reversals).toHaveLength(3);
+    for (const reversal of reversals) {
+      expect(reversal.reversesEntryId).not.toBeNull();
+      expect(reversal.totalDebit.equals(reversal.reversesEntry!.totalCredit)).toBe(true);
+      expect(reversal.totalCredit.equals(reversal.reversesEntry!.totalDebit)).toBe(true);
+    }
+    const protectedReversal = await prisma.accountingJournalEntry.findFirstOrThrow({
+      where: { origin: "FISCAL_YEAR_CLOSE_REVERSAL" },
+      select: { id: true, lines: { take: 1, select: { id: true } } }
+    });
+    await expect(prisma.accountingJournalEntry.update({
+      where: { id: protectedReversal.id }, data: { concept: "Alteracion no permitida" }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_EVIDENCE_ENTRY_IMMUTABLE");
+    await expect(prisma.accountingJournalLine.update({
+      where: { id: protectedReversal.lines[0]!.id }, data: { concept: "Alteracion no permitida" }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_EVIDENCE_LINES_IMMUTABLE");
+
+    const secondCloseRequested = await requestFiscalYearClose(fiscalYear.id, requester, {
+      idempotencyKey: `test-second-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
+    });
+    if (!secondCloseRequested.ok) throw new Error(secondCloseRequested.error.code);
+    const secondClose = await approveAccountingFiscalYearCloseRequest(secondCloseRequested.value.id, closeApprover, {
+      idempotencyKey: `test-second-close-approve:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearCloseApproval(secondCloseRequested.value.id)
+    });
+    expect(secondClose).toMatchObject({ ok: true, value: { next: { id: firstClose.value.next.id, status: "OPEN" } } });
+    expect(await prisma.accountingJournalEntry.count({
+      where: { fiscalYearId: firstClose.value.next.id, origin: "OPENING" }
+    })).toBe(2);
+    if (!secondClose.ok) throw new Error(secondClose.error.code);
+    const secondReopenCommand = { reasonCode: "ACCOUNTING_CORRECTION" as const, reason: "Segunda reapertura para validar la repeticion segura del ciclo." };
+    const secondReopenRequested = await requestFiscalYearReopening(secondCloseRequested.value.id, secondReopenCommand, requester, {
+      idempotencyKey: `test-second-reopen-request:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRequest(secondCloseRequested.value.id, secondReopenCommand)
+    });
+    if (!secondReopenRequested.ok) throw new Error(secondReopenRequested.error.code);
+    const secondReopened = await approveFiscalYearReopening(secondReopenRequested.value.id, reopenApprover, {
+      idempotencyKey: `test-second-reopen-approve:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenApproval(secondReopenRequested.value.id)
+    });
+    expect(secondReopened).toMatchObject({ ok: true, value: { status: "COMPLETED" } });
+    expect(await prisma.accountingFiscalYear.findMany({
+      where: { id: { in: [fiscalYear.id, firstClose.value.next.id] } }, orderBy: { year: "asc" }, select: { status: true }
+    })).toEqual([{ status: "OPEN" }, { status: "REVERSED" }]);
   });
 
   it("blocks closing when the preflight finds unsupported balances", async () => {
@@ -791,6 +943,7 @@ async function createOpenFiscalYear(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.accountingFiscalYearReopenRequest.deleteMany(),
     prisma.accountingFiscalYearCloseRequest.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoice.deleteMany(),

@@ -8,7 +8,8 @@ import {
 import { AccountingAccountCreateForm } from "@/modules/accounting/presentation/AccountingAccountCreateForm";
 import { listAccountingFiscalYears } from "@/modules/accounting/application/fiscalYears";
 import { listFiscalYearCloseRequests } from "@/modules/accounting/application/fiscalYearCloseRequests";
-import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
+import { listFiscalYearReopenRequests } from "@/modules/accounting/application/fiscalYearReopenRequests";
+import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm, AccountingFiscalYearReopenActions } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -62,24 +63,37 @@ export default async function AccountingPage({
     year: params.year,
     entryId: params.entryId
   });
-  const [accounts, entries, fiscalYears, closeRequests] = await Promise.all([
+  const [accounts, entries, fiscalYears] = await Promise.all([
     accountsPayload.success
       ? listAccountingAccounts(accountsPayload.data, authorization.user)
       : { accounts: [], nextCursor: null },
     entriesPayload.success
       ? listJournalEntries(entriesPayload.data, authorization.user)
       : { entries: [], nextCursor: null },
-    listAccountingFiscalYears(),
-    listFiscalYearCloseRequests()
+    listAccountingFiscalYears()
   ]);
+  const closeRequests = await listFiscalYearCloseRequests(fiscalYears.map((fiscalYear) => fiscalYear.id));
+  const reopenRequests = await listFiscalYearReopenRequests(closeRequests.map((request) => request.id));
   const canManageEntries = authorization.user.permissions.includes(
     "Accounting.ManageEntries"
   );
   const canManageExercises = authorization.user.permissions.includes("Accounting.ManageExercises");
   const canRequestClosures = authorization.user.permissions.includes("Accounting.RequestExerciseClosures");
   const canApproveClosures = authorization.user.permissions.includes("Accounting.ApproveExerciseClosures");
+  const canRequestReopenings = authorization.user.permissions.includes("Accounting.RequestExerciseReopenings");
+  const canApproveReopenings = authorization.user.permissions.includes("Accounting.ApproveExerciseReopenings");
+  const selectedFiscalYear = params.year
+    ? fiscalYears.find((fiscalYear) => fiscalYear.year === Number(params.year))
+    : fiscalYears.find((fiscalYear) => fiscalYear.status === "OPEN");
+  const canEditSelectedFiscalYear = canManageEntries && selectedFiscalYear?.status === "OPEN";
   const pendingCloseByFiscalYear = new Map(
     closeRequests.filter((request) => request.status === "REQUESTED").map((request) => [request.fiscalYearId, request])
+  );
+  const completedCloseByFiscalYear = new Map(
+    closeRequests.filter((request) => request.status === "COMPLETED").reverse().map((request) => [request.fiscalYearId, request])
+  );
+  const pendingReopenByCloseRequest = new Map(
+    reopenRequests.filter((request) => request.status === "REQUESTED").map((request) => [request.closeRequestId, request])
   );
 
   return (
@@ -163,15 +177,25 @@ export default async function AccountingPage({
         {fiscalYears.length > 0 ? (
           <div className="panel stack">
             <div><h2>Ejercicios contables</h2><p className="muted">Cada ejercicio conserva su propio plan de cuentas.</p></div>
-            <div className="table-wrap"><table><thead><tr><th>Ejercicio</th><th>Estado</th><th>Plan</th><th>Cuentas</th><th>Acciones</th></tr></thead><tbody>{fiscalYears.map((fiscalYear) => <tr key={fiscalYear.id}><td><strong>{fiscalYear.year}</strong></td><td>{fiscalYear.status === "OPEN" ? "Abierto" : "Cerrado"}</td><td>{fiscalYear.planCode} {fiscalYear.planVersion}</td><td>{fiscalYear.accountCount}</td><td>{fiscalYear.status === "OPEN" && (canRequestClosures || canApproveClosures) ? <AccountingFiscalYearCloseActions fiscalYearId={fiscalYear.id} year={fiscalYear.year} request={pendingCloseByFiscalYear.get(fiscalYear.id) ?? null} actorUserId={authorization.user.id} canRequest={canRequestClosures} canApprove={canApproveClosures} /> : "-"}</td></tr>)}</tbody></table></div>
+            <div className="table-wrap"><table><thead><tr><th>Ejercicio</th><th>Estado</th><th>Plan</th><th>Cuentas</th><th>Acciones</th></tr></thead><tbody>{fiscalYears.map((fiscalYear) => {
+              const completedClose = completedCloseByFiscalYear.get(fiscalYear.id);
+              return <tr key={fiscalYear.id}><td><strong>{fiscalYear.year}</strong></td><td>{fiscalYearStatusLabel(fiscalYear.status)}</td><td>{fiscalYear.planCode} {fiscalYear.planVersion}</td><td>{fiscalYear.accountCount}</td><td>
+                {fiscalYear.status === "OPEN" && (canRequestClosures || canApproveClosures) ? <AccountingFiscalYearCloseActions fiscalYearId={fiscalYear.id} year={fiscalYear.year} request={pendingCloseByFiscalYear.get(fiscalYear.id) ?? null} actorUserId={authorization.user.id} canRequest={canRequestClosures} canApprove={canApproveClosures} /> : null}
+                {fiscalYear.status === "CLOSED" && completedClose && (canRequestReopenings || canApproveReopenings) ? <AccountingFiscalYearReopenActions closeRequestId={completedClose.id} year={fiscalYear.year} request={pendingReopenByCloseRequest.get(completedClose.id) ?? null} actorUserId={authorization.user.id} canRequest={canRequestReopenings} canApprove={canApproveReopenings} /> : null}
+                {fiscalYear.status === "REVERSED" || (fiscalYear.status === "CLOSED" && !completedClose) ? "-" : null}
+              </td></tr>;
+            })}</tbody></table></div>
           </div>
         ) : null}
 
-        {canManageEntries ? (
+        {canEditSelectedFiscalYear ? (
           <div className="panel stack">
             <AccountingAccountCreateForm />
             <ManualJournalEntryCreateForm accounts={accounts.accounts} />
           </div>
+        ) : null}
+        {canManageEntries && selectedFiscalYear && selectedFiscalYear.status !== "OPEN" ? (
+          <div className="panel"><p className="message">El ejercicio {selectedFiscalYear.year} esta {fiscalYearStatusLabel(selectedFiscalYear.status).toLowerCase()} y no admite nuevas cuentas ni asientos.</p></div>
         ) : null}
 
         <div className="panel stack">
@@ -339,4 +363,10 @@ function formatMoney(value: string): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("es-ES").format(new Date(`${value}T00:00:00.000Z`));
+}
+
+function fiscalYearStatusLabel(status: "OPEN" | "CLOSED" | "REVERSED"): string {
+  if (status === "OPEN") return "Abierto";
+  if (status === "CLOSED") return "Cerrado";
+  return "Anulado / no operativo";
 }

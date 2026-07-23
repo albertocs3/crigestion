@@ -363,12 +363,27 @@ enum AccountingAccountStatus {
 enum AccountingFiscalYearStatus {
   OPEN
   CLOSED
+  REVERSED
 }
 
 enum AccountingFiscalYearCloseRequestStatus {
   REQUESTED
   COMPLETED
   CANCELLED
+}
+
+enum AccountingFiscalYearReopenRequestStatus {
+  REQUESTED
+  COMPLETED
+  CANCELLED
+}
+
+enum AccountingFiscalYearReopenReasonCode {
+  CLOSE_ERROR
+  OMITTED_TRANSACTION
+  PREMATURE_CLOSE
+  ACCOUNTING_CORRECTION
+  OTHER
 }
 
 enum AccountingEntryOrigin {
@@ -385,6 +400,7 @@ enum AccountingEntryOrigin {
   REGULARIZATION
   CLOSING
   OPENING
+  FISCAL_YEAR_CLOSE_REVERSAL
 }
 
 enum CustomerCreditRefundStatus {
@@ -440,6 +456,7 @@ model Company {
   installation             Installation?
   accountingFiscalYears    AccountingFiscalYear[]
   fiscalYearCloseRequests  AccountingFiscalYearCloseRequest[]
+  fiscalYearReopenRequests AccountingFiscalYearReopenRequest[]
   bankAccounts             BankAccount[]
   bankStatements           BankStatement[]
   invoices                 Invoice[]
@@ -454,9 +471,9 @@ model Company {
   verifactuFiscalRecords   VerifactuFiscalRecord[]
   verifactuMtlsCredentials VerifactuMtlsCredential[]
   verifactuWorkerRuns      VerifactuWorkerRun[]
-  attachments              Attachment[]               @relation("CompanyAttachments")
+  attachments              Attachment[]                        @relation("CompanyAttachments")
   suppliers                Supplier[]
-  logoAttachment           Attachment?                @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
+  logoAttachment           Attachment?                         @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
 }
@@ -971,6 +988,9 @@ model User {
   requestedFiscalYearClosures       AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsRequestedBy")
   approvedFiscalYearClosures        AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsApprovedBy")
   cancelledFiscalYearClosures       AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsCancelledBy")
+  requestedFiscalYearReopenings     AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsRequestedBy")
+  approvedFiscalYearReopenings      AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsApprovedBy")
+  cancelledFiscalYearReopenings     AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsCancelledBy")
   createdAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
   updatedAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
   createdBankAccounts               BankAccount[]                        @relation("BankAccountsCreatedBy")
@@ -1691,14 +1711,17 @@ model AccountingFiscalYear {
   createdAt          DateTime                   @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime                   @default(now()) @updatedAt @db.Timestamptz(3)
 
-  company           Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  sourceFiscalYear  AccountingFiscalYear?    @relation("AccountingFiscalYearCopies", fields: [sourceFiscalYearId], references: [id], onDelete: Restrict)
-  copiedFiscalYears AccountingFiscalYear[]   @relation("AccountingFiscalYearCopies")
-  createdBy         User                     @relation("AccountingFiscalYearsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  closedBy          User?                    @relation("AccountingFiscalYearsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
-  accounts          AccountingAccount[]
-  journalEntries    AccountingJournalEntry[]
-  closeRequests     AccountingFiscalYearCloseRequest[]
+  company                    Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  sourceFiscalYear           AccountingFiscalYear?               @relation("AccountingFiscalYearCopies", fields: [sourceFiscalYearId], references: [id], onDelete: Restrict)
+  copiedFiscalYears          AccountingFiscalYear[]              @relation("AccountingFiscalYearCopies")
+  createdBy                  User                                @relation("AccountingFiscalYearsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  closedBy                   User?                               @relation("AccountingFiscalYearsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  accounts                   AccountingAccount[]
+  journalEntries             AccountingJournalEntry[]
+  closeRequests              AccountingFiscalYearCloseRequest[]  @relation("AccountingFiscalYearCloseSource")
+  successorForCloseRequests  AccountingFiscalYearCloseRequest[]  @relation("AccountingFiscalYearCloseSuccessor")
+  reopenRequests             AccountingFiscalYearReopenRequest[] @relation("AccountingFiscalYearReopenSource")
+  successorForReopenRequests AccountingFiscalYearReopenRequest[] @relation("AccountingFiscalYearReopenSuccessor")
 
   @@unique([companyId, year])
   @@unique([id, companyId])
@@ -1708,30 +1731,79 @@ model AccountingFiscalYear {
 }
 
 model AccountingFiscalYearCloseRequest {
-  id                String                                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  companyId         String                                 @db.Uuid
-  fiscalYearId      String                                 @db.Uuid
-  status            AccountingFiscalYearCloseRequestStatus @default(REQUESTED)
-  preflightSnapshot Json
-  requestedById     String                                 @db.Uuid
-  requestedAt       DateTime                               @default(now()) @db.Timestamptz(3)
-  approvedById      String?                                @db.Uuid
-  approvedAt        DateTime?                              @db.Timestamptz(3)
-  cancelledById     String?                                @db.Uuid
-  cancelledAt       DateTime?                              @db.Timestamptz(3)
-  createdAt         DateTime                               @default(now()) @db.Timestamptz(3)
-  updatedAt         DateTime                               @updatedAt @db.Timestamptz(3)
+  id                    String                                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId             String                                 @db.Uuid
+  fiscalYearId          String                                 @db.Uuid
+  status                AccountingFiscalYearCloseRequestStatus @default(REQUESTED)
+  preflightSnapshot     Json
+  requestedById         String                                 @db.Uuid
+  requestedAt           DateTime                               @default(now()) @db.Timestamptz(3)
+  approvedById          String?                                @db.Uuid
+  approvedAt            DateTime?                              @db.Timestamptz(3)
+  cancelledById         String?                                @db.Uuid
+  cancelledAt           DateTime?                              @db.Timestamptz(3)
+  successorFiscalYearId String?                                @db.Uuid
+  regularizationEntryId String?                                @unique @db.Uuid
+  closingEntryId        String?                                @unique @db.Uuid
+  openingEntryId        String?                                @unique @db.Uuid
+  createdAt             DateTime                               @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime                               @updatedAt @db.Timestamptz(3)
 
-  company     Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  fiscalYear  AccountingFiscalYear @relation(fields: [fiscalYearId, companyId], references: [id, companyId], onDelete: Restrict)
-  requestedBy User                 @relation("AccountingFiscalYearCloseRequestsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  approvedBy  User?                @relation("AccountingFiscalYearCloseRequestsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
-  cancelledBy User?                @relation("AccountingFiscalYearCloseRequestsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  company             Company                             @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  fiscalYear          AccountingFiscalYear                @relation("AccountingFiscalYearCloseSource", fields: [fiscalYearId, companyId], references: [id, companyId], onDelete: Restrict)
+  successorFiscalYear AccountingFiscalYear?               @relation("AccountingFiscalYearCloseSuccessor", fields: [successorFiscalYearId], references: [id], onDelete: Restrict)
+  requestedBy         User                                @relation("AccountingFiscalYearCloseRequestsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy          User?                               @relation("AccountingFiscalYearCloseRequestsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cancelledBy         User?                               @relation("AccountingFiscalYearCloseRequestsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  regularizationEntry AccountingJournalEntry?             @relation("AccountingCloseRegularizationEntry", fields: [regularizationEntryId], references: [id], onDelete: Restrict)
+  closingEntry        AccountingJournalEntry?             @relation("AccountingCloseClosingEntry", fields: [closingEntryId], references: [id], onDelete: Restrict)
+  openingEntry        AccountingJournalEntry?             @relation("AccountingCloseOpeningEntry", fields: [openingEntryId], references: [id], onDelete: Restrict)
+  reopenRequests      AccountingFiscalYearReopenRequest[]
 
   @@index([companyId, status, requestedAt, id])
   @@index([fiscalYearId, requestedAt, id])
   @@index([requestedById, requestedAt])
   @@map("accounting_fiscal_year_close_requests")
+}
+
+model AccountingFiscalYearReopenRequest {
+  id                            String                                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                     String                                  @db.Uuid
+  closeRequestId                String                                  @db.Uuid
+  fiscalYearId                  String                                  @db.Uuid
+  successorFiscalYearId         String                                  @db.Uuid
+  status                        AccountingFiscalYearReopenRequestStatus @default(REQUESTED)
+  reasonCode                    AccountingFiscalYearReopenReasonCode
+  reason                        String                                  @db.VarChar(500)
+  preflightSnapshot             Json
+  requestedById                 String                                  @db.Uuid
+  requestedAt                   DateTime                                @default(now()) @db.Timestamptz(3)
+  approvedById                  String?                                 @db.Uuid
+  approvedAt                    DateTime?                               @db.Timestamptz(3)
+  cancelledById                 String?                                 @db.Uuid
+  cancelledAt                   DateTime?                               @db.Timestamptz(3)
+  regularizationReversalEntryId String?                                 @unique @db.Uuid
+  closingReversalEntryId        String?                                 @unique @db.Uuid
+  openingReversalEntryId        String?                                 @unique @db.Uuid
+  createdAt                     DateTime                                @default(now()) @db.Timestamptz(3)
+  updatedAt                     DateTime                                @updatedAt @db.Timestamptz(3)
+
+  company                     Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  closeRequest                AccountingFiscalYearCloseRequest @relation(fields: [closeRequestId], references: [id], onDelete: Restrict)
+  fiscalYear                  AccountingFiscalYear             @relation("AccountingFiscalYearReopenSource", fields: [fiscalYearId, companyId], references: [id, companyId], onDelete: Restrict)
+  successorFiscalYear         AccountingFiscalYear             @relation("AccountingFiscalYearReopenSuccessor", fields: [successorFiscalYearId], references: [id], onDelete: Restrict)
+  requestedBy                 User                             @relation("AccountingFiscalYearReopenRequestsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy                  User?                            @relation("AccountingFiscalYearReopenRequestsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cancelledBy                 User?                            @relation("AccountingFiscalYearReopenRequestsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  regularizationReversalEntry AccountingJournalEntry?          @relation("AccountingReopenRegularizationEntry", fields: [regularizationReversalEntryId], references: [id], onDelete: Restrict)
+  closingReversalEntry        AccountingJournalEntry?          @relation("AccountingReopenClosingEntry", fields: [closingReversalEntryId], references: [id], onDelete: Restrict)
+  openingReversalEntry        AccountingJournalEntry?          @relation("AccountingReopenOpeningEntry", fields: [openingReversalEntryId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, status, requestedAt, id])
+  @@index([fiscalYearId, requestedAt, id])
+  @@index([closeRequestId, requestedAt, id])
+  @@index([requestedById, requestedAt])
+  @@map("accounting_fiscal_year_reopen_requests")
 }
 
 model AccountingJournalEntry {
@@ -1760,21 +1832,27 @@ model AccountingJournalEntry {
   createdAt               DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime              @updatedAt @db.Timestamptz(3)
 
-  fiscalYear            AccountingFiscalYear    @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
-  invoice               Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  customerPayment       CustomerPayment?        @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
-  customerPaymentReturn CustomerPaymentReturn?  @relation(fields: [customerPaymentReturnId], references: [id], onDelete: Restrict)
-  customerCreditRefund  CustomerCreditRefund?   @relation(fields: [customerCreditRefundId], references: [id], onDelete: Restrict)
-  supplierCreditRefund  SupplierCreditRefund?   @relation(fields: [supplierCreditRefundId], references: [id], onDelete: Restrict)
-  purchaseInvoice       PurchaseInvoice?        @relation("PurchaseInvoiceAccountingEntry", fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
-  supplierPayment       SupplierPayment?        @relation("SupplierPaymentAccountingEntry", fields: [supplierPaymentId], references: [id], onDelete: Restrict)
-  voidsInvoice          Invoice?                @relation("InvoiceVoidingEntry", fields: [voidsInvoiceId], references: [id], onDelete: Restrict)
-  reversesEntry         AccountingJournalEntry? @relation("AccountingEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
-  reversedByEntry       AccountingJournalEntry? @relation("AccountingEntryReversal")
-  createdBy             User                    @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy             User?                   @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  lines                 AccountingJournalLine[]
-  purchaseVatRecords    PurchaseVatRecord[]
+  fiscalYear                     AccountingFiscalYear               @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
+  invoice                        Invoice?                           @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  customerPayment                CustomerPayment?                   @relation(fields: [customerPaymentId], references: [id], onDelete: Restrict)
+  customerPaymentReturn          CustomerPaymentReturn?             @relation(fields: [customerPaymentReturnId], references: [id], onDelete: Restrict)
+  customerCreditRefund           CustomerCreditRefund?              @relation(fields: [customerCreditRefundId], references: [id], onDelete: Restrict)
+  supplierCreditRefund           SupplierCreditRefund?              @relation(fields: [supplierCreditRefundId], references: [id], onDelete: Restrict)
+  purchaseInvoice                PurchaseInvoice?                   @relation("PurchaseInvoiceAccountingEntry", fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  supplierPayment                SupplierPayment?                   @relation("SupplierPaymentAccountingEntry", fields: [supplierPaymentId], references: [id], onDelete: Restrict)
+  voidsInvoice                   Invoice?                           @relation("InvoiceVoidingEntry", fields: [voidsInvoiceId], references: [id], onDelete: Restrict)
+  reversesEntry                  AccountingJournalEntry?            @relation("AccountingEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
+  reversedByEntry                AccountingJournalEntry?            @relation("AccountingEntryReversal")
+  regularizationForCloseRequest  AccountingFiscalYearCloseRequest?  @relation("AccountingCloseRegularizationEntry")
+  closingForCloseRequest         AccountingFiscalYearCloseRequest?  @relation("AccountingCloseClosingEntry")
+  openingForCloseRequest         AccountingFiscalYearCloseRequest?  @relation("AccountingCloseOpeningEntry")
+  regularizationForReopenRequest AccountingFiscalYearReopenRequest? @relation("AccountingReopenRegularizationEntry")
+  closingForReopenRequest        AccountingFiscalYearReopenRequest? @relation("AccountingReopenClosingEntry")
+  openingForReopenRequest        AccountingFiscalYearReopenRequest? @relation("AccountingReopenOpeningEntry")
+  createdBy                      User                               @relation("AccountingEntriesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                      User?                              @relation("AccountingEntriesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  lines                          AccountingJournalLine[]
+  purchaseVatRecords             PurchaseVatRecord[]
 
   @@unique([fiscalYearId, sequence])
   @@index([fiscalYearId, accountingDate, id])

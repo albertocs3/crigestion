@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const maxFileBytes = 5 * 1024 * 1024;
 const maxRecords = 50_000;
@@ -122,6 +123,12 @@ export async function importNorma43(command: z.infer<typeof norma43FileSchema>, 
     const account = await tx.bankAccount.findUnique({ where: { id: command.bankAccountId }, select: { companyId: true, status: true, iban: true, currency: true } });
     if (!account || account.status !== "ACTIVE") return failure(404, "BANK_ACCOUNT_NOT_FOUND", "La cuenta bancaria no existe o esta inactiva.");
     if (account.currency !== preview.value.currency || !matchesSpanishIban(account.iban, preview.value)) return failure(422, "N43_ACCOUNT_MISMATCH", "La cuenta del fichero ya no coincide con la seleccionada.");
+    const bookingDates = [...new Set(preview.value.movements.map((movement) => movement.bookingDate))].sort();
+    for (const bookingDate of bookingDates) {
+      if (!await lockOpenFiscalYearForDatedMutation(tx, account.companyId, parseDate(bookingDate))) {
+        return failure(409, "BANK_STATEMENT_FISCAL_YEAR_NOT_OPEN", "Todos los movimientos deben pertenecer a ejercicios contables abiertos.");
+      }
+    }
     const existingKey = await tx.idempotencyRecord.findUnique({ where: { key } });
     if (existingKey) return existingKey.requestHash === context.requestHash ? { ok: true as const, status: 201 as const, value: existingKey.responseBody as { statementId: string; movementCount: number } } : failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave ya se uso con otro fichero.");
     const duplicate = await tx.bankStatement.findFirst({ where: { companyId: account.companyId, rawSha256: preview.value.rawSha256 }, select: { id: true } });

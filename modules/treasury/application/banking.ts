@@ -6,6 +6,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
 import { normalizeDateOnlyInput } from "@/modules/billing/application/invoices";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
@@ -141,6 +142,9 @@ export async function createBankMovement(command: z.infer<typeof createBankMovem
     const account = await tx.bankAccount.findFirst({ where: { id: command.bankAccountId, companyId, status: "ACTIVE" }, select: { id: true, companyId: true, currency: true } });
     if (!account) return notFound("BANK_ACCOUNT_NOT_FOUND", "La cuenta bancaria no existe o esta inactiva.");
     if (account.currency !== command.currency) return conflict("BANK_MOVEMENT_CURRENCY_MISMATCH", "La moneda no coincide con la cuenta.");
+    if (!await lockOpenFiscalYearForDatedMutation(tx, companyId, parseDate(command.bookingDate))) {
+      return conflict("BANK_MOVEMENT_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha del movimiento.");
+    }
     if (command.externalMovementNumber) {
       const duplicate = await tx.bankMovement.findFirst({ where: { bankAccountId: account.id, externalMovementNumber: command.externalMovementNumber }, select: { id: true } });
       if (duplicate) return conflict("BANK_MOVEMENT_ALREADY_EXISTS", "El numero de movimiento ya existe para la cuenta.");

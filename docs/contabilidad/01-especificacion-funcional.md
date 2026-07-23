@@ -630,22 +630,42 @@ puede cancelarla antes de la aprobacion, pero no puede aprobarla. PostgreSQL
 refuerza tanto esta separacion de actores como la unicidad de la solicitud
 pendiente. El endpoint directo de cierre queda deshabilitado.
 
-Limitacion vigente: todavia no existe una anulacion formal del cierre. Esta
-capacidad sigue siendo obligatoria antes de habilitar el cierre en produccion.
-Hasta entonces el flujo completo solo se validara sobre copias aisladas y
-descartables de staging.
+El cierre completado conserva referencias relacionales al ejercicio sucesor y
+a los asientos automaticos. Esto permite validar y ejecutar su anulacion formal
+sin depender exclusivamente del payload JSON de auditoria.
 
 ## 22. Deshacer cierre
 
-Solo el administrador puede deshacerlo.
+La anulacion usa un segundo circuito maker-checker. Una persona con
+`Accounting.RequestExerciseReopenings` selecciona un motivo y aporta una
+justificacion. Otra persona distinta con
+`Accounting.ApproveExerciseReopenings` debe aprobarla. Inicialmente ambos
+permisos se asignan al rol Administrador, pero siguen siendo necesarias dos
+identidades. La persona solicitante puede cancelar mientras la solicitud esta
+pendiente.
 
-La operación:
+Antes de solicitar y antes de aprobar se valida que el cierre conserve sus
+referencias exactas, el ejercicio origen siga cerrado, el sucesor exacto siga
+abierto y no exista actividad posterior: documentos, remesas, cobros, pagos,
+aplicaciones de credito, devoluciones, movimientos bancarios, asientos ajenos
+al cierre, solicitudes de cierre del sucesor, ejercicios posteriores ni
+cambios en el plan copiado.
 
-- Reabre el ejercicio.
-- Anula lógicamente regularización y cierre.
-- Anula o revierte la apertura relacionada.
-- Conserva todos los asientos y versiones en auditoría.
-- Registra usuario, fecha y motivo.
+La aprobacion es atomica y:
+
+- Crea contraasientos append-only de regularizacion, cierre y apertura, cuando
+  los originales existen, con lineas invertidas y enlace al asiento revertido.
+- Reabre el ejercicio origen y limpia su evidencia de cierre activa.
+- Marca el ejercicio sucesor como `REVERSED`, no operativo, sin eliminarlo.
+- Mantiene la solicitud de cierre original como `COMPLETED` y conserva todas
+  las relaciones, solicitudes, asientos y auditoria.
+- Registra actores, fecha, codigo de motivo, preflight e identificadores. La
+  justificacion libre permanece en la solicitud protegida y no se copia al
+  evento de auditoria.
+
+Un cierre posterior reutiliza el mismo sucesor, incorpora las cuentas nuevas
+del origen sin mutar las cuentas ya usadas por asientos historicos y genera una
+apertura nueva sin borrar la apertura ni el contraasiento anteriores.
 
 ## 23. Panel contable
 
@@ -715,7 +735,9 @@ Los registros contabilizados no se eliminan físicamente.
 14. Las exportaciones respetan los filtros.
 15. No se contabiliza en ejercicios cerrados.
 16. El cierre genera regularización, cierre y apertura.
-17. Solo el administrador puede deshacer el cierre y renumerar.
+17. La reapertura requiere solicitud y aprobacion por dos identidades distintas
+    con permisos especificos; inicialmente ambos permisos pertenecen al rol
+    Administrador. La renumeracion sigue reservada al administrador.
 18. Toda modificación conserva trazabilidad completa.
 
 ## 27. Decisiones pendientes para el diseño técnico
@@ -728,5 +750,4 @@ Los registros contabilizados no se eliminan físicamente.
 - Gestión de registros afectados por envíos fiscales.
 - Coordinación transaccional entre documentos, asientos e inventario.
 - Definición de cuentas para anticipos y rectificativas.
-- Política de reapertura cuando el ejercicio siguiente tiene movimientos.
 - Seguridad y conservación de justificantes.

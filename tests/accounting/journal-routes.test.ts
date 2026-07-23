@@ -14,6 +14,9 @@ import { GET as journalEntriesExportGet } from "@/app/api/accounting/journal-ent
 import { POST as fiscalYearClosePost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close/route";
 import { POST as fiscalYearCloseRequestPost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close-requests/route";
 import { POST as fiscalYearCloseApprovePost } from "@/app/api/accounting/fiscal-year-close-requests/[requestId]/approve/route";
+import { POST as fiscalYearReopenRequestPost } from "@/app/api/accounting/fiscal-year-close-requests/[closeRequestId]/reopen-requests/route";
+import { POST as fiscalYearReopenApprovePost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/approve/route";
+import { POST as fiscalYearReopenCancelPost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/cancel/route";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
@@ -89,6 +92,7 @@ describe("accounting journal HTTP contracts", () => {
   });
 
   it("creates accounts and manual journal entries through accounting contracts", async () => {
+    cookieMock.reset();
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const bankResponse = await accountsPost(
@@ -343,6 +347,7 @@ describe("accounting journal HTTP contracts", () => {
     );
 
     await createAccountingCloseApprover();
+    cookieMock.reset();
     await loginWith("cierre-aprobador", limitedPassword);
     const approverCsrf = await getCsrfToken();
     const idempotencyKey = randomUUID();
@@ -378,6 +383,64 @@ describe("accounting journal HTTP contracts", () => {
     expect(await prisma.auditEvent.count({
       where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED" }
     })).toBe(1);
+
+    await createAccountingReopenRequester();
+    cookieMock.reset();
+    await loginWith("reapertura-solicitante", limitedPassword);
+    const reopenCsrf = await getCsrfToken();
+    const reopenResponse = await fiscalYearReopenRequestPost(
+      jsonRequest(`/api/accounting/fiscal-year-close-requests/${closeRequest.id}/reopen-requests`, {
+        reasonCode: "PREMATURE_CLOSE",
+        reason: "Cierre prematuro detectado durante la validacion UAT."
+      }, { csrfToken: reopenCsrf }),
+      { params: Promise.resolve({ closeRequestId: closeRequest.id }) }
+    );
+    const firstReopenRequest = await reopenResponse.json() as { id: string };
+    const cancelReopenResponse = await fiscalYearReopenCancelPost(
+      jsonRequest(`/api/accounting/fiscal-year-reopen-requests/${firstReopenRequest.id}/cancel`, {}, { csrfToken: reopenCsrf }),
+      { params: Promise.resolve({ requestId: firstReopenRequest.id }) }
+    );
+    const replacementReopenResponse = await fiscalYearReopenRequestPost(
+      jsonRequest(`/api/accounting/fiscal-year-close-requests/${closeRequest.id}/reopen-requests`, {
+        reasonCode: "PREMATURE_CLOSE",
+        reason: "Cierre prematuro detectado durante la segunda validacion UAT."
+      }, { csrfToken: reopenCsrf }),
+      { params: Promise.resolve({ closeRequestId: closeRequest.id }) }
+    );
+    const reopenRequest = await replacementReopenResponse.json() as { id: string };
+    const reopenSelfApproval = await fiscalYearReopenApprovePost(
+      jsonRequest(`/api/accounting/fiscal-year-reopen-requests/${reopenRequest.id}/approve`, {}, { csrfToken: reopenCsrf }),
+      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+    );
+    await createAccountingReopenApprover();
+    cookieMock.reset();
+    await loginWith("reapertura-aprobador", limitedPassword);
+    const reopenApproverCsrf = await getCsrfToken();
+    const reopenApprovalKey = randomUUID();
+    const reopenApprovalRequest = () => jsonRequest(
+      `/api/accounting/fiscal-year-reopen-requests/${reopenRequest.id}/approve`,
+      {},
+      { csrfToken: reopenApproverCsrf, idempotencyKey: reopenApprovalKey }
+    );
+    const reopenApproval = await fiscalYearReopenApprovePost(
+      reopenApprovalRequest(),
+      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+    );
+    const reopenReplay = await fiscalYearReopenApprovePost(
+      reopenApprovalRequest(),
+      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+    );
+    expect(reopenResponse.status).toBe(201);
+    expect(cancelReopenResponse.status).toBe(200);
+    expect(await cancelReopenResponse.json()).toMatchObject({ status: "CANCELLED" });
+    expect(replacementReopenResponse.status).toBe(201);
+    expect(reopenSelfApproval.status).toBe(409);
+    expect(await reopenSelfApproval.json()).toMatchObject({ code: "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN" });
+    expect(reopenApproval.status).toBe(200);
+    expect(await reopenReplay.json()).toEqual(await reopenApproval.json());
+    expect(await prisma.accountingFiscalYear.findMany({
+      where: { year: { in: [2026, 2027] } }, orderBy: { year: "asc" }, select: { status: true }
+    })).toEqual([{ status: "OPEN" }, { status: "REVERSED" }]);
   });
 });
 
@@ -456,6 +519,55 @@ async function createAccountingCloseApprover(): Promise<void> {
   });
 }
 
+async function createAccountingReopenApprover(): Promise<void> {
+  const role = await prisma.role.create({
+    data: {
+      code: "AprobadorReaperturaContable",
+      name: "Aprobador reapertura contable",
+      isProtected: false,
+      permissions: {
+        create: {
+          permission: { connect: { code: "Accounting.ApproveExerciseReopenings" } }
+        }
+      }
+    }
+  });
+  await prisma.user.create({
+    data: {
+      displayName: "Aprobador reapertura",
+      userName: "reapertura-aprobador",
+      normalizedUserName: "reapertura-aprobador",
+      passwordHash: await hashPassword(limitedPassword),
+      roleId: role.id
+    }
+  });
+}
+
+async function createAccountingReopenRequester(): Promise<void> {
+  const role = await prisma.role.create({
+    data: {
+      code: "SolicitanteReaperturaContable",
+      name: "Solicitante reapertura contable",
+      isProtected: false,
+      permissions: {
+        create: [
+          { permission: { connect: { code: "Accounting.RequestExerciseReopenings" } } },
+          { permission: { connect: { code: "Accounting.ApproveExerciseReopenings" } } }
+        ]
+      }
+    }
+  });
+  await prisma.user.create({
+    data: {
+      displayName: "Solicitante reapertura",
+      userName: "reapertura-solicitante",
+      normalizedUserName: "reapertura-solicitante",
+      passwordHash: await hashPassword(limitedPassword),
+      roleId: role.id
+    }
+  });
+}
+
 function apiRequest(path: string, init: RequestInit = {}): Request {
   return new Request(`${appBaseUrl}${path}`, {
     ...init,
@@ -518,6 +630,7 @@ async function initializeForRoutes(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.accountingFiscalYearReopenRequest.deleteMany(),
     prisma.accountingFiscalYearCloseRequest.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),

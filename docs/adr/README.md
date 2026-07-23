@@ -39,6 +39,7 @@ Este directorio contiene las decisiones arquitectonicas relevantes de CriGestió
 | [ADR-0022](ADR-0022-jobs-node.md) | Aceptada | Usar jobs Node.js para trabajo de fondo |
 | [ADR-0023](ADR-0023-verifactu-modalidad-y-contrato-v1.md) | Aceptada | Adoptar modalidad VERI*FACTU y contrato fiscal V1 |
 | [ADR-0024](ADR-0024-maker-checker-cierre-contable.md) | Aceptada | Exigir maker-checker para el cierre contable |
+| [ADR-0025](ADR-0025-maker-checker-reapertura-contable.md) | Aceptada | Reabrir cierres con maker-checker y contraasientos append-only |
 
 ## Reglas de mantenimiento
 

@@ -215,6 +215,28 @@ operativa es `/app/treasury/supplier-credits`.
 - `POST /api/accounting/fiscal-years/{fiscalYearId}/close`: compatibilidad
   segura. No ejecuta ninguna mutacion y devuelve
   `FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED`.
+- `POST /api/accounting/fiscal-year-close-requests/{closeRequestId}/reopen-requests`:
+  ejecuta el preflight y solicita anular un cierre completado. Requiere
+  `Accounting.RequestExerciseReopenings`, JSON, CSRF e `Idempotency-Key`. Body:
+
+  ```json
+  {
+    "reasonCode": "OMITTED_TRANSACTION",
+    "reason": "Falta registrar una operacion del ejercicio cerrado."
+  }
+  ```
+
+  `reasonCode` admite `CLOSE_ERROR`, `OMITTED_TRANSACTION`,
+  `PREMATURE_CLOSE`, `ACCOUNTING_CORRECTION` y `OTHER`; `reason` admite de 10 a
+  500 caracteres.
+- `POST /api/accounting/fiscal-year-reopen-requests/{requestId}/approve`:
+  requiere `Accounting.ApproveExerciseReopenings`, un aprobador diferente y
+  vuelve a ejecutar el preflight. Crea contraasientos enlazados, reabre el
+  origen y marca el sucesor `REVERSED` en una transaccion. Requiere CSRF e
+  `Idempotency-Key`.
+- `POST /api/accounting/fiscal-year-reopen-requests/{requestId}/cancel`:
+  cancela una solicitud pendiente solo para quien la creo. Requiere
+  `Accounting.RequestExerciseReopenings`, CSRF e `Idempotency-Key`.
 
 La solicitud conserva el preflight inicial como evidencia. La aprobacion vuelve
 a ejecutar el preflight dentro de la transaccion de cierre y bajo bloqueo; el
@@ -241,6 +263,20 @@ Respuestas de conflicto especificas:
 | `409` | `NEXT_FISCAL_YEAR_ALREADY_EXISTS` | El siguiente ejercicio ya existe y no se modifica. |
 | `409` | `FISCAL_YEAR_NOT_OPEN` | El ejercicio ya no esta abierto. |
 | `409` | `IDEMPOTENCY_KEY_REUSED` | La clave pertenece a otra solicitud o su respuesta ya no es recuperable. |
+
+Conflictos especificos de reapertura:
+
+| Estado | Codigo | Significado |
+|---|---|---|
+| `404` | `FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND` | El cierre no existe en la empresa activa. |
+| `409` | `FISCAL_YEAR_CLOSE_REQUEST_NOT_COMPLETED` | El cierre no esta completado o carece de evidencia relacional. |
+| `409` | `FISCAL_YEAR_CLOSE_ALREADY_REOPENED` | La solicitud de cierre ya fue reabierta. |
+| `409` | `FISCAL_YEAR_REOPEN_ACTIVE_REQUEST_EXISTS` | Ya existe una reapertura pendiente para ese cierre. |
+| `404` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_FOUND` | La solicitud de reapertura no existe. |
+| `409` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_PENDING` | La solicitud ya fue completada o cancelada. |
+| `409` | `FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN` | Solicitante y aprobador son la misma persona. |
+| `409` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_CANCELLABLE` | No esta pendiente o quien cancela no es el solicitante. |
+| `409` | `FISCAL_YEAR_REOPEN_PRECONDITIONS_FAILED` | El cuerpo incluye el `preflight` y no se modifica la contabilidad. |
 
 ## 2. `GET /api/accounting/accounts`
 

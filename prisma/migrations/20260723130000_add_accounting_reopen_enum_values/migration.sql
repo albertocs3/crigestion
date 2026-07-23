@@ -1,0 +1,16 @@
+ALTER TYPE "AccountingFiscalYearStatus" ADD VALUE IF NOT EXISTS 'REVERSED';
+ALTER TYPE "AccountingEntryOrigin" ADD VALUE IF NOT EXISTS 'FISCAL_YEAR_CLOSE_REVERSAL';
+
+CREATE TYPE "AccountingFiscalYearReopenRequestStatus" AS ENUM (
+  'REQUESTED',
+  'COMPLETED',
+  'CANCELLED'
+);
+
+CREATE TYPE "AccountingFiscalYearReopenReasonCode" AS ENUM (
+  'CLOSE_ERROR',
+  'OMITTED_TRANSACTION',
+  'PREMATURE_CLOSE',
+  'ACCOUNTING_CORRECTION',
+  'OTHER'
+);

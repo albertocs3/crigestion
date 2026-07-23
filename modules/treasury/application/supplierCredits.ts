@@ -131,6 +131,7 @@ export async function applySupplierCredit(creditId: string, command: ApplySuppli
     if (amount.gt(pending)) return conflict("SUPPLIER_CREDIT_AMOUNT_EXCEEDS_PENDING", "El importe supera el pendiente del vencimiento.");
     const applicationDate = parseDateOnly(command.applicationDate);
     if (applicationDate < credit.sourceRectificationPurchaseInvoice.issueDate || applicationDate < due.purchaseInvoice.issueDate) return conflict("SUPPLIER_CREDIT_APPLICATION_DATE_INVALID", "La fecha no puede ser anterior a los documentos implicados.");
+    if (!await lockOpenFiscalYearForDatedMutation(tx, credit.companyId, applicationDate)) return conflict("SUPPLIER_CREDIT_APPLICATION_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha de compensacion.");
     const application = await tx.supplierCreditApplication.create({ data: { creditId, companyId: credit.companyId, supplierId: credit.supplierId, targetPurchaseInvoiceId: due.purchaseInvoiceId, targetDueDateId: due.id, applicationDate, amount, notes: command.notes, createdById: actor.id }, select: { id: true } });
     const settled = sum(due.allocations).plus(sum(due.creditApplications)).plus(amount);
     if (settled.equals(due.amount)) await tx.purchaseDueDate.update({ where: { id: due.id }, data: { status: "SETTLED" } });

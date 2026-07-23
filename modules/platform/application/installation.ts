@@ -85,7 +85,9 @@ const platformPermissions = [
   ["Accounting.ManageExercises", "Gestionar ejercicios contables"],
   ["Accounting.CloseExercises", "Cerrar ejercicios contables (legado)"],
   ["Accounting.RequestExerciseClosures", "Solicitar cierres de ejercicio"],
-  ["Accounting.ApproveExerciseClosures", "Aprobar cierres de ejercicio"]
+  ["Accounting.ApproveExerciseClosures", "Aprobar cierres de ejercicio"],
+  ["Accounting.RequestExerciseReopenings", "Solicitar reaperturas de ejercicio"],
+  ["Accounting.ApproveExerciseReopenings", "Aprobar reaperturas de ejercicio"]
 ] as const;
 
 export type InitializeCommand = z.infer<typeof initializeSchema>;

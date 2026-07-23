@@ -22,7 +22,7 @@ export type AccountingFiscalYearDto = {
   year: number;
   startDate: string;
   endDate: string;
-  status: "OPEN" | "CLOSED";
+  status: "OPEN" | "CLOSED" | "REVERSED";
   planCode: string;
   planVersion: string;
   accountCount: number;
@@ -84,7 +84,7 @@ const fiscalYearDtoSchema = z.object({
   year: z.number().int(),
   startDate: z.string(),
   endDate: z.string(),
-  status: z.enum(["OPEN", "CLOSED"]),
+  status: z.enum(["OPEN", "CLOSED", "REVERSED"]),
   planCode: z.string(),
   planVersion: z.string(),
   accountCount: z.number().int().nonnegative(),
@@ -212,6 +212,7 @@ export async function approveAccountingFiscalYearCloseRequest(
     if (!installation.companyId) throw new Error("Initialized installation without company.");
 
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${context.idempotencyKey}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`accounting-fiscal-cycle:${installation.companyId}`}, 0))`;
     const stored = await tx.idempotencyRecord.findUnique({
       where: { key: context.idempotencyKey },
       select: { requestHash: true, responseStatus: true, responseBody: true }
@@ -270,9 +271,18 @@ export async function approveAccountingFiscalYearCloseRequest(
     const nextYear = source.year + 1;
     const existingNext = await tx.accountingFiscalYear.findFirst({
       where: { companyId: source.companyId, year: nextYear },
-      select: { id: true }
+      select: { id: true, status: true, sourceFiscalYearId: true }
     });
-    if (existingNext) return { kind: "next-exists" as const };
+    if (existingNext) {
+      await tx.$queryRaw(
+        Prisma.sql`SELECT "id" FROM "accounting_fiscal_years"
+          WHERE "id" = ${existingNext.id}::uuid AND "companyId" = ${source.companyId}::uuid
+          FOR UPDATE`
+      );
+      if (existingNext.status !== "REVERSED" || existingNext.sourceFiscalYearId !== source.id) {
+        return { kind: "next-exists" as const };
+      }
+    }
 
     const preflight = await buildAccountingFiscalYearClosePreflight(tx, source);
     if (!preflight.ready) {
@@ -376,18 +386,17 @@ export async function approveAccountingFiscalYearCloseRequest(
       data: { status: "CLOSED", closedAt: now, closedById: actor.id },
       select: fiscalYearSelect
     });
-    const next = await tx.accountingFiscalYear.create({
-      data: {
-        companyId: source.companyId,
-        year: nextYear,
-        startDate: new Date(`${nextYear}-01-01T00:00:00.000Z`),
-        endDate: new Date(`${nextYear}-12-31T00:00:00.000Z`),
-        planCode: source.planCode,
-        planVersion: source.planVersion,
-        sourceFiscalYearId: source.id,
-        createdById: actor.id,
-        accounts: {
-          create: source.accounts.map((account) => ({
+    let next: Prisma.AccountingFiscalYearGetPayload<{ select: typeof fiscalYearSelect }>;
+    if (existingNext) {
+      const copiedSourceIds = new Set((await tx.accountingAccount.findMany({
+        where: { fiscalYearId: existingNext.id, sourceAccountId: { not: null } },
+        select: { sourceAccountId: true }
+      })).map((account) => account.sourceAccountId!));
+      const missingAccounts = source.accounts.filter((account) => !copiedSourceIds.has(account.id));
+      if (missingAccounts.length > 0) {
+        await tx.accountingAccount.createMany({
+          data: missingAccounts.map((account) => ({
+            fiscalYearId: existingNext.id,
             sourceAccountId: account.id,
             supplierId: account.supplierId,
             code: account.code,
@@ -398,10 +407,41 @@ export async function approveAccountingFiscalYearCloseRequest(
             isPostable: account.isPostable,
             createdById: actor.id
           }))
-        }
-      },
-      select: fiscalYearSelect
-    });
+        });
+      }
+      next = await tx.accountingFiscalYear.update({
+        where: { id: existingNext.id },
+        data: { status: "OPEN" },
+        select: fiscalYearSelect
+      });
+    } else {
+      next = await tx.accountingFiscalYear.create({
+        data: {
+          companyId: source.companyId,
+          year: nextYear,
+          startDate: new Date(`${nextYear}-01-01T00:00:00.000Z`),
+          endDate: new Date(`${nextYear}-12-31T00:00:00.000Z`),
+          planCode: source.planCode,
+          planVersion: source.planVersion,
+          sourceFiscalYearId: source.id,
+          createdById: actor.id,
+          accounts: {
+            create: source.accounts.map((account) => ({
+              sourceAccountId: account.id,
+              supplierId: account.supplierId,
+              code: account.code,
+              name: account.name,
+              status: account.status,
+              type: account.type,
+              level: account.level,
+              isPostable: account.isPostable,
+              createdById: actor.id
+            }))
+          }
+        },
+        select: fiscalYearSelect
+      });
+    }
     const copiedAccounts = await tx.accountingAccount.findMany({
       where: { fiscalYearId: next.id, sourceAccountId: { not: null } },
       select: { id: true, sourceAccountId: true }
@@ -463,7 +503,15 @@ export async function approveAccountingFiscalYearCloseRequest(
     const responseValue = { closed: mapFiscalYear(closed), next: mapFiscalYear(next) };
     await tx.accountingFiscalYearCloseRequest.update({
       where: { id: closeRequest.id },
-      data: { status: "COMPLETED", approvedById: actor.id, approvedAt: now }
+      data: {
+        status: "COMPLETED",
+        approvedById: actor.id,
+        approvedAt: now,
+        successorFiscalYearId: next.id,
+        regularizationEntryId: regularizationEntry?.id ?? null,
+        closingEntryId: closingEntry?.id ?? null,
+        openingEntryId: openingEntry?.id ?? null
+      }
     });
     await tx.idempotencyRecord.create({
       data: {

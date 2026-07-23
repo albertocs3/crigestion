@@ -226,6 +226,9 @@ export async function applyCustomerCredit(creditId: string, command: ApplyCustom
     if (applicationDate < credit.sourceRectificationInvoice.issueDate || applicationDate < dueDate.invoice.issueDate) {
       return conflict("CUSTOMER_CREDIT_APPLICATION_DATE_INVALID", "La fecha de compensacion no puede ser anterior a los documentos implicados.");
     }
+    if (!await lockOpenFiscalYearForDatedMutation(tx, credit.companyId, applicationDate)) {
+      return conflict("CUSTOMER_CREDIT_APPLICATION_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha de compensacion.");
+    }
 
     const application = await tx.customerCreditApplication.create({ data: {
       creditId, targetInvoiceId: dueDate.invoiceId, targetDueDateId: dueDate.id, applicationDate, amount,

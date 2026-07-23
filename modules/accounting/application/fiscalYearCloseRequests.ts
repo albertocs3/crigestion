@@ -21,6 +21,10 @@ export type FiscalYearCloseRequestDto = {
   approvedAt: string | null;
   cancelledById: string | null;
   cancelledAt: string | null;
+  successorFiscalYearId: string | null;
+  regularizationEntryId: string | null;
+  closingEntryId: string | null;
+  openingEntryId: string | null;
   preflight: AccountingFiscalYearClosePreflightReport;
 };
 
@@ -79,6 +83,10 @@ const dtoSchema = z.object({
   approvedAt: z.string().nullable(),
   cancelledById: z.string().uuid().nullable(),
   cancelledAt: z.string().nullable(),
+  successorFiscalYearId: z.string().uuid().nullable(),
+  regularizationEntryId: z.string().uuid().nullable(),
+  closingEntryId: z.string().uuid().nullable(),
+  openingEntryId: z.string().uuid().nullable(),
   preflight: preflightSchema
 }).strict();
 
@@ -93,6 +101,10 @@ const requestSelect = {
   approvedAt: true,
   cancelledById: true,
   cancelledAt: true,
+  successorFiscalYearId: true,
+  regularizationEntryId: true,
+  closingEntryId: true,
+  openingEntryId: true,
   fiscalYear: { select: { year: true } }
 } satisfies Prisma.AccountingFiscalYearCloseRequestSelect;
 
@@ -104,16 +116,19 @@ export function hashFiscalYearCloseCancellation(requestId: string): string {
   return hashIdempotencyPayload("accounting-fiscal-year-close-cancel:v1", { requestId });
 }
 
-export async function listFiscalYearCloseRequests(): Promise<FiscalYearCloseRequestDto[]> {
+export async function listFiscalYearCloseRequests(fiscalYearIds?: string[]): Promise<FiscalYearCloseRequestDto[]> {
   const installation = await prisma.installation.findFirstOrThrow({
     where: { status: "INITIALIZED" },
     select: { companyId: true }
   });
   if (!installation.companyId) throw new Error("Initialized installation without company.");
   const records = await prisma.accountingFiscalYearCloseRequest.findMany({
-    where: { companyId: installation.companyId },
+    where: {
+      companyId: installation.companyId,
+      ...(fiscalYearIds ? { fiscalYearId: { in: fiscalYearIds } } : {})
+    },
     orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
-    take: 50,
+    ...(fiscalYearIds ? {} : { take: 50 }),
     select: requestSelect
   });
   return records.map(mapRequest);
@@ -139,7 +154,11 @@ export async function requestFiscalYearClose(
       });
       if (!fiscalYear) return { kind: "not-found" as const };
       if (fiscalYear.status !== "OPEN") return { kind: "not-open" as const };
-      if (await tx.accountingFiscalYear.count({ where: { companyId, year: fiscalYear.year + 1 } })) {
+      const successor = await tx.accountingFiscalYear.findFirst({
+        where: { companyId, year: fiscalYear.year + 1 },
+        select: { status: true, sourceFiscalYearId: true }
+      });
+      if (successor && (successor.status !== "REVERSED" || successor.sourceFiscalYearId !== fiscalYear.id)) {
         return { kind: "next-exists" as const };
       }
       const active = await tx.accountingFiscalYearCloseRequest.findFirst({
@@ -320,6 +339,10 @@ function mapRequest(record: Prisma.AccountingFiscalYearCloseRequestGetPayload<{ 
     approvedAt: record.approvedAt?.toISOString() ?? null,
     cancelledById: record.cancelledById,
     cancelledAt: record.cancelledAt?.toISOString() ?? null,
+    successorFiscalYearId: record.successorFiscalYearId,
+    regularizationEntryId: record.regularizationEntryId,
+    closingEntryId: record.closingEntryId,
+    openingEntryId: record.openingEntryId,
     preflight
   };
 }

@@ -231,7 +231,8 @@ export type CreateCustomerRemittanceDraftResult =
       error: {
         code:
           | "REMITTANCE_DUE_DATE_NOT_ELIGIBLE"
-          | "REMITTANCE_DUE_DATE_ALREADY_INCLUDED";
+          | "REMITTANCE_DUE_DATE_ALREADY_INCLUDED"
+          | "REMITTANCE_FISCAL_YEAR_NOT_OPEN";
         message: string;
       };
     };
@@ -535,6 +536,7 @@ const eligibleDueDateSelect = {
       id: true,
       status: true,
       number: true,
+      companyId: true,
       customerId: true,
       customerCodeSnapshot: true,
       customerLegalNameSnapshot: true,
@@ -625,6 +627,22 @@ export async function createCustomerRemittanceDraft(
       return dueDate;
     });
     const chargeDate = parseDateOnly(command.chargeDate);
+    const installation = await tx.installation.findFirst({
+      where: { status: "INITIALIZED" },
+      select: { companyId: true }
+    });
+    if (!installation?.companyId) return { kind: "fiscal-year-not-open" as const };
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`accounting-fiscal-cycle:${installation.companyId}`}, 0))`;
+    const openFiscalYear = await tx.accountingFiscalYear.findFirst({
+      where: {
+        companyId: installation.companyId,
+        status: "OPEN",
+        startDate: { lte: chargeDate },
+        endDate: { gte: chargeDate }
+      },
+      select: { id: true }
+    });
+    if (!openFiscalYear) return { kind: "fiscal-year-not-open" as const };
     const year = chargeDate.getUTCFullYear();
     const lastRemittance = await tx.customerRemittance.findFirst({
       where: { year },
@@ -714,6 +732,17 @@ export async function createCustomerRemittanceDraft(
       error: {
         code: "REMITTANCE_DUE_DATE_NOT_ELIGIBLE",
         message: "Solo se pueden remesar vencimientos domiciliados pendientes con mandato activo."
+      }
+    };
+  }
+
+  if (result.kind === "fiscal-year-not-open") {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "REMITTANCE_FISCAL_YEAR_NOT_OPEN",
+        message: "No hay un ejercicio contable abierto para la fecha de cargo."
       }
     };
   }
