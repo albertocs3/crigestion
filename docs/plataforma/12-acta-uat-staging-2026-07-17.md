@@ -530,3 +530,38 @@ efimeras. No quedaron listeners en 3102/3103 ni recursos UAT. El backup se
 conservo. La base principal de staging mantuvo 2026 `OPEN`, rc3 siguio activa
 y el health completo permanecio en `ok`. Produccion no se consulto ni se
 modifico.
+
+## 17. Despliegue de la reapertura contable maker-checker
+
+El 2026-07-23 se preparo la reapertura formal de ejercicios sobre el commit
+`db1cf6eaf715ee8fdbf72cbf04e610fe40a24ecc`. Antes de promoverlo, la primera
+migracion de enums se hizo atomica y se ejecuto un ensayo sobre una copia
+aislada del dump verificado
+`crigestion_staging-auto-20260723T141434Z.dump`. El ensayo aplico las
+migraciones 93 y 94 en 2,2 segundos, sin migraciones incompletas, backfill
+pendiente ni asientos automaticos legacy huerfanos. La copia se descarto y la
+base principal no se modifico durante el ensayo.
+
+La candidata supero `npm run verify:release`: 73 archivos con 635 pruebas
+Vitest, TypeScript, ESLint, build optimizado y auditoria npm sin
+vulnerabilidades. La migracion controlada se ejecuto con la aplicacion y el
+worker detenidos y dejo 94 de 94 migraciones aplicadas. No se uso un despliegue
+rolling ni se intento arrancar rc3 contra el nuevo esquema.
+
+La primera build promovida, `staging-2026.07.23-rc4`, expuso al arrancar un
+conflicto de Next.js entre los segmentos dinamicos `[requestId]` y
+`[closeRequestId]`. Las migraciones habian finalizado correctamente, pero el
+health devolvio HTTP 500. Se detuvo la aplicacion, se mantuvo el worker
+compatible y no se revirtio el esquema. El hotfix unifico el segmento sin
+cambiar el contrato HTTP y supero build limpio, typecheck, ESLint y las cuatro
+pruebas dirigidas de rutas contables.
+
+El estado terminal es `staging-2026.07.23-rc5`, commit
+`8c1a51ae06d024df58ce78f9e713b093686fab50`, build ID
+`gpxzTaU6pqJSW33NzNLVV`. La aplicacion y el worker estan activos; los health
+local y publico devuelven `database`, `verifactu` y `worker` en `ok`. Los dos
+permisos nuevos estan asignados a `Administrador`, existen siete triggers de
+cierre/reapertura, no hay backfill pendiente, asientos legacy huerfanos ni
+bases temporales. El ejercicio 2026 de staging principal permanece `OPEN` y
+no se crearon solicitudes de cierre o reapertura. Produccion no se consulto ni
+se modifico.
