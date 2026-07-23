@@ -457,3 +457,76 @@ seguia `OPEN`. Produccion no se consulto ni se modifico.
 La separacion maker-checker y la anulacion formal de un cierre siguen siendo
 requisitos previos para habilitar esta operacion en produccion; este resultado
 solo aprueba el flujo tecnico sobre copias aisladas y descartables.
+
+## 16. Cierre contable maker-checker sobre copia aislada
+
+El 2026-07-23 se desplego `staging-2026.07.23-rc3`, commit
+`e97c5546f3bc9e220e7c2fa9e3d9f7c0b1ad6cca`, build ID
+`NtbqHfsbS1aCbV6UB9mX9`. La candidata habia superado
+`npm run verify:release`: 73 archivos con 634 pruebas Vitest, TypeScript,
+ESLint, build optimizado y auditoria npm sin vulnerabilidades. Una revision
+independiente detecto una carencia de evidencia terminal en base de datos; se
+corrigio antes de rc3 y la revision posterior no encontro ningun P0/P1.
+
+Antes del despliegue se creo y verifico el dump
+`crigestion_staging-auto-20260723T111636Z.dump`, incluido su checksum y catalogo
+`pg_restore`. Las migraciones de solicitudes, endurecimiento y evidencia
+terminal de cierres terminaron correctamente mediante el rol migrador
+controlado, dejando 92 de 92 migraciones aplicadas. Tras el cambio, la
+aplicacion y el worker quedaron activos y los health local y publico
+devolvieron `database`, `verifactu` y `worker` en `ok`.
+
+La UAT restauro el dump en `crigestion_test` con dos roles PostgreSQL sin
+privilegios elevados, un usuario de sistema dedicado y dos unidades
+transitorias limitadas a loopback. La build rc3 se sirvio internamente en
+`127.0.0.1:3103` y un proxy TLS efimero la expuso solo en
+`127.0.0.1:3102`, para conservar las validaciones de origen HTTPS y cookie
+segura. No se levanto un worker para la copia.
+
+Se crearon dos identidades exclusivas en la copia:
+
+- `uat_close_maker`, con `Accounting.View` y
+  `Accounting.RequestExerciseClosures`;
+- `uat_close_checker`, con `Accounting.View` y
+  `Accounting.ApproveExerciseClosures`.
+
+El primer preflight rechazo correctamente la solicitud con `409` porque la
+factura sintetica `F2600002` conservaba VeriFactu en `REJECTED`. El informe
+mostro 19 asientos, cero descuadres o diferencias entre cabeceras y lineas, y
+un unico estado VeriFactu sin resolver. La aceptacion se simulo exclusivamente
+en `crigestion_test` y quedo registrada como `UAT_FIXTURE_ADJUSTED`. El segundo
+preflight quedo `ready=true`, con todos los contadores de bloqueo a cero.
+
+La solicitud `0d573bf5-4ddc-4c53-8852-7f096a7c0486` se creo con HTTP 201. Se
+verifico:
+
+- rechazo `403 FORBIDDEN` cuando el checker intento solicitar el cierre;
+- rechazo `403 FORBIDDEN` al intentar aprobar sin el permiso correspondiente;
+- rechazo `409 FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN` cuando el maker
+  recibio temporalmente el permiso de aprobacion e intento aprobar su propia
+  solicitud;
+- rechazo `409 FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED` del endpoint de cierre
+  directo incluso con su permiso historico concedido temporalmente;
+- aprobacion HTTP 200 por `uat_close_checker`, con solicitante y aprobador
+  distintos, y replay idempotente con cuerpo JSON identico;
+- estado final `COMPLETED`, 2026 `CLOSED` y 2027 `OPEN`, ambos con 793 cuentas;
+- regularizacion `2026/000020`, por 151,00 EUR y dos lineas;
+- cierre `2026/000021`, por 182,71 EUR y cinco lineas;
+- apertura `2027/000001`, por 182,71 EUR y cinco lineas;
+- importes de cabecera y lineas iguales y Debe igual a Haber en los tres
+  asientos automaticos;
+- eventos `ACCOUNTING_FISCAL_YEAR_CLOSE_REQUESTED`,
+  `ACCOUNTING_FISCAL_YEAR_CLOSE_APPROVAL_DENIED` con motivo `SELF_APPROVAL` y
+  `ACCOUNTING_FISCAL_YEAR_CLOSED`, este ultimo con solicitud, ambos actores y
+  los tres asientos automaticos;
+- denegacion de `UPDATE` sobre auditoria al rol runtime y rechazo por trigger
+  al intentar retirar la evidencia terminal de la solicitud completada.
+
+Los permisos temporales usados para las pruebas negativas se retiraron antes
+de la comprobacion final. Al terminar se detuvieron y eliminaron ambas unidades,
+se descarto `crigestion_test` y se eliminaron los dos roles PostgreSQL, el
+usuario de sistema, el proxy TLS, el certificado y todas las credenciales
+efimeras. No quedaron listeners en 3102/3103 ni recursos UAT. El backup se
+conservo. La base principal de staging mantuvo 2026 `OPEN`, rc3 siguio activa
+y el health completo permanecio en `ok`. Produccion no se consulto ni se
+modifico.
