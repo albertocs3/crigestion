@@ -403,3 +403,57 @@ bases temporales.
 Al cierre, `rc5`, aplicacion, worker y timers estaban activos, y el health
 publico devolvia `database`, `verifactu` y `worker` en `ok`. VeriFactu continuo
 en `TEST` con produccion bloqueada. Produccion no se consulto ni se modifico.
+
+## 15. Cierre contable 2026 sobre copia aislada
+
+El 2026-07-23 se desplego `staging-2026.07.23-rc2`, commit
+`d156dff4542cdb8259bb6a0edc3b0444f5d59f6d`, build ID
+`0T7SS-I9bJtr38rhU4vo5`. La candidata habia superado TypeScript, ESLint, build
+optimizado, auditoria npm sin vulnerabilidades y 632 pruebas Vitest en 73
+archivos. Una revision independiente no encontro ningun P0/P1 pendiente para
+la UAT sobre copia aislada.
+
+Antes del despliegue se creo y verifico el dump
+`crigestion_staging-auto-20260723T095638Z.dump`, incluido su checksum y catalogo
+`pg_restore`. El migrador controlado termino correctamente con 89 de 89
+migraciones aplicadas. Tras el cambio, los health local y publico devolvieron
+`database`, `verifactu` y `worker` en `ok`. El ejercicio 2026 de la base
+principal de staging permanecio `OPEN` durante todo el ciclo.
+
+El simulacro restauro ese dump en `crigestion_test`, con roles exclusivos,
+usuario de sistema dedicado y una unidad transitoria limitada a
+`127.0.0.1:3102`. VeriFactu estuvo deshabilitado, no se levanto worker y la
+unidad no tuvo salida de red distinta de localhost. Los roles UAT no pudieron
+conectarse a `crigestion_staging`.
+
+El primer preflight rechazo correctamente el cierre con `409` porque la
+factura sintetica `F2600002` conservaba VeriFactu en `REJECTED`. El diario
+tenia 19 asientos, ninguno descuadrado, con 1.214,77 EUR tanto al Debe como al
+Haber y sin diferencias entre cabeceras y lineas. Como VeriFactu estaba
+deliberadamente deshabilitado en la copia, se simulo la aceptacion fiscal solo
+en `crigestion_test` y se registro `UAT_FIXTURE_ADJUSTED`.
+
+El segundo intento y su replay con la misma clave idempotente devolvieron el
+mismo JSON y se verifico:
+
+- 2026 `CLOSED` y 2027 `OPEN`, ambos con 793 cuentas;
+- regularizacion `2026/000020`, por 151,00 EUR y dos lineas;
+- cierre `2026/000021`, por 182,71 EUR y cinco lineas;
+- apertura `2027/000001`, por 182,71 EUR y cinco lineas;
+- saldos finales cero en grupos 6/7, cuentas patrimoniales y total de 2026;
+- cinco correspondencias exactas e invertidas entre cierre y apertura;
+- un unico evento de cierre con preflight y los tres identificadores de
+  asiento, sin contrasenas, NIF, IBAN, notas ni conceptos;
+- rechazo `403 FORBIDDEN` y evento `ACCESS_DENIED` al intentar cerrar con
+  `uat_restricted`, que carecia de `Accounting.CloseExercises`.
+
+Al terminar se detuvo y elimino la unidad transitoria, se descarto
+`crigestion_test`, se eliminaron ambos roles, el usuario de sistema, el checkout
+UAT y todas las credenciales efimeras. No quedaron listeners en 3102 ni
+recursos UAT. La release `rc2`, la aplicacion y el worker de staging seguian
+activos, el health completo permanecia en `ok` y el ejercicio 2026 principal
+seguia `OPEN`. Produccion no se consulto ni se modifico.
+
+La separacion maker-checker y la anulacion formal de un cierre siguen siendo
+requisitos previos para habilitar esta operacion en produccion; este resultado
+solo aprueba el flujo tecnico sobre copias aisladas y descartables.
