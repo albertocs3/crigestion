@@ -737,8 +737,12 @@ Los registros contabilizados no se eliminan físicamente.
 16. El cierre genera regularización, cierre y apertura.
 17. La reapertura requiere solicitud y aprobacion por dos identidades distintas
     con permisos especificos; inicialmente ambos permisos pertenecen al rol
-    Administrador. La renumeracion sigue reservada al administrador.
+    Administrador. El checker puede rechazar con motivo obligatorio, la solicitud
+    caduca a los siete dias y ambas resoluciones conservan evidencia inmutable sin
+    modificar la contabilidad. La renumeracion sigue reservada al administrador.
 18. Toda modificación conserva trazabilidad completa.
+19. El panel contable permite reconstruir cada ciclo de cierre y reapertura con
+    solicitantes, decisores, fechas, motivos y enlaces a asientos y contraasientos.
 
 ## 27. Decisiones pendientes para el diseño técnico
 

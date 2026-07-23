@@ -237,6 +237,16 @@ operativa es `/app/treasury/supplier-credits`.
 - `POST /api/accounting/fiscal-year-reopen-requests/{requestId}/cancel`:
   cancela una solicitud pendiente solo para quien la creo. Requiere
   `Accounting.RequestExerciseReopenings`, CSRF e `Idempotency-Key`.
+- `POST /api/accounting/fiscal-year-reopen-requests/{requestId}/reject`:
+  rechaza una solicitud pendiente sin modificar ejercicios ni asientos. Requiere
+  `Accounting.ApproveExerciseReopenings`, checker distinto del solicitante, JSON,
+  CSRF e `Idempotency-Key`. Body: `{ "reason": "Motivo entre 10 y 500 caracteres" }`.
+
+Cada solicitud caduca siete dias despues de `requestedAt`. La primera lectura o
+mutacion posterior materializa `EXPIRED` transaccionalmente, la audita como
+`SYSTEM` y permite registrar otra solicitud para el mismo cierre. El panel de
+historial consulta todos los ciclos de los ejercicios visibles y no depende del
+limite de 50 elementos de la lista global.
 
 La solicitud conserva el preflight inicial como evidencia. La aprobacion vuelve
 a ejecutar el preflight dentro de la transaccion de cierre y bajo bloqueo; el
@@ -273,8 +283,10 @@ Conflictos especificos de reapertura:
 | `409` | `FISCAL_YEAR_CLOSE_ALREADY_REOPENED` | La solicitud de cierre ya fue reabierta. |
 | `409` | `FISCAL_YEAR_REOPEN_ACTIVE_REQUEST_EXISTS` | Ya existe una reapertura pendiente para ese cierre. |
 | `404` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_FOUND` | La solicitud de reapertura no existe. |
-| `409` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_PENDING` | La solicitud ya fue completada o cancelada. |
+| `409` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_PENDING` | La solicitud ya alcanzo un estado terminal. |
 | `409` | `FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN` | Solicitante y aprobador son la misma persona. |
+| `409` | `FISCAL_YEAR_REOPEN_SELF_REJECTION_FORBIDDEN` | Solicitante y rechazador son la misma persona. |
+| `409` | `FISCAL_YEAR_REOPEN_REQUEST_EXPIRED` | La solicitud caduco y debe registrarse una nueva. |
 | `409` | `FISCAL_YEAR_REOPEN_REQUEST_NOT_CANCELLABLE` | No esta pendiente o quien cancela no es el solicitante. |
 | `409` | `FISCAL_YEAR_REOPEN_PRECONDITIONS_FAILED` | El cuerpo incluye el `preflight` y no se modifica la contabilidad. |
 

@@ -376,6 +376,8 @@ enum AccountingFiscalYearReopenRequestStatus {
   REQUESTED
   COMPLETED
   CANCELLED
+  REJECTED
+  EXPIRED
 }
 
 enum AccountingFiscalYearReopenReasonCode {
@@ -991,6 +993,7 @@ model User {
   requestedFiscalYearReopenings     AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsRequestedBy")
   approvedFiscalYearReopenings      AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsApprovedBy")
   cancelledFiscalYearReopenings     AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsCancelledBy")
+  rejectedFiscalYearReopenings      AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsRejectedBy")
   createdAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
   updatedAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
   createdBankAccounts               BankAccount[]                        @relation("BankAccountsCreatedBy")
@@ -1778,10 +1781,15 @@ model AccountingFiscalYearReopenRequest {
   preflightSnapshot             Json
   requestedById                 String                                  @db.Uuid
   requestedAt                   DateTime                                @default(now()) @db.Timestamptz(3)
+  expiresAt                     DateTime                                @db.Timestamptz(3)
   approvedById                  String?                                 @db.Uuid
   approvedAt                    DateTime?                               @db.Timestamptz(3)
   cancelledById                 String?                                 @db.Uuid
   cancelledAt                   DateTime?                               @db.Timestamptz(3)
+  rejectedById                  String?                                 @db.Uuid
+  rejectedAt                    DateTime?                               @db.Timestamptz(3)
+  rejectionReason               String?                                 @db.VarChar(500)
+  expiredAt                     DateTime?                               @db.Timestamptz(3)
   regularizationReversalEntryId String?                                 @unique @db.Uuid
   closingReversalEntryId        String?                                 @unique @db.Uuid
   openingReversalEntryId        String?                                 @unique @db.Uuid
@@ -1795,6 +1803,7 @@ model AccountingFiscalYearReopenRequest {
   requestedBy                 User                             @relation("AccountingFiscalYearReopenRequestsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
   approvedBy                  User?                            @relation("AccountingFiscalYearReopenRequestsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
   cancelledBy                 User?                            @relation("AccountingFiscalYearReopenRequestsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  rejectedBy                  User?                            @relation("AccountingFiscalYearReopenRequestsRejectedBy", fields: [rejectedById], references: [id], onDelete: Restrict)
   regularizationReversalEntry AccountingJournalEntry?          @relation("AccountingReopenRegularizationEntry", fields: [regularizationReversalEntryId], references: [id], onDelete: Restrict)
   closingReversalEntry        AccountingJournalEntry?          @relation("AccountingReopenClosingEntry", fields: [closingReversalEntryId], references: [id], onDelete: Restrict)
   openingReversalEntry        AccountingJournalEntry?          @relation("AccountingReopenOpeningEntry", fields: [openingReversalEntryId], references: [id], onDelete: Restrict)
@@ -1803,6 +1812,8 @@ model AccountingFiscalYearReopenRequest {
   @@index([fiscalYearId, requestedAt, id])
   @@index([closeRequestId, requestedAt, id])
   @@index([requestedById, requestedAt])
+  @@index([companyId, status, expiresAt, id])
+  @@index([rejectedById, rejectedAt])
   @@map("accounting_fiscal_year_reopen_requests")
 }
 

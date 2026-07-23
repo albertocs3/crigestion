@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import {
@@ -17,6 +18,7 @@ import { POST as fiscalYearCloseApprovePost } from "@/app/api/accounting/fiscal-
 import { POST as fiscalYearReopenRequestPost } from "@/app/api/accounting/fiscal-year-close-requests/[requestId]/reopen-requests/route";
 import { POST as fiscalYearReopenApprovePost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/approve/route";
 import { POST as fiscalYearReopenCancelPost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/cancel/route";
+import { POST as fiscalYearReopenRejectPost } from "@/app/api/accounting/fiscal-year-reopen-requests/[requestId]/reject/route";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
@@ -416,19 +418,61 @@ describe("accounting journal HTTP contracts", () => {
     cookieMock.reset();
     await loginWith("reapertura-aprobador", limitedPassword);
     const reopenApproverCsrf = await getCsrfToken();
+    const rejectionKey = randomUUID();
+    const rejectionRequest = () => jsonRequest(
+      `/api/accounting/fiscal-year-reopen-requests/${reopenRequest.id}/reject`,
+      { reason: "La justificacion no acredita una reapertura contable segura." },
+      { csrfToken: reopenApproverCsrf, idempotencyKey: rejectionKey }
+    );
+    const reopenRejection = await fiscalYearReopenRejectPost(
+      rejectionRequest(),
+      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+    );
+    const reopenRejectionReplay = await fiscalYearReopenRejectPost(
+      rejectionRequest(),
+      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+    );
+    const reopenRejectionBody = await reopenRejection.json();
+    const reopenRejectionReplayBody = await reopenRejectionReplay.json();
+
+    const rejectedRecord = await prisma.accountingFiscalYearReopenRequest.findUniqueOrThrow({
+      where: { id: reopenRequest.id },
+      select: {
+        companyId: true,
+        closeRequestId: true,
+        fiscalYearId: true,
+        successorFiscalYearId: true,
+        preflightSnapshot: true,
+        requestedById: true
+      }
+    });
+    const requestedAt = new Date();
+    const approvedReopenRequest = await prisma.accountingFiscalYearReopenRequest.create({
+      data: {
+        ...rejectedRecord,
+        preflightSnapshot: rejectedRecord.preflightSnapshot as Prisma.InputJsonValue,
+        reasonCode: "ACCOUNTING_CORRECTION",
+        reason: "Correccion contable respaldada tras el rechazo inicial de UAT.",
+        requestedAt,
+        expiresAt: new Date(requestedAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+      },
+      select: { id: true }
+    });
+
+    const finalApproverCsrf = reopenApproverCsrf;
     const reopenApprovalKey = randomUUID();
     const reopenApprovalRequest = () => jsonRequest(
-      `/api/accounting/fiscal-year-reopen-requests/${reopenRequest.id}/approve`,
+      `/api/accounting/fiscal-year-reopen-requests/${approvedReopenRequest.id}/approve`,
       {},
-      { csrfToken: reopenApproverCsrf, idempotencyKey: reopenApprovalKey }
+      { csrfToken: finalApproverCsrf, idempotencyKey: reopenApprovalKey }
     );
     const reopenApproval = await fiscalYearReopenApprovePost(
       reopenApprovalRequest(),
-      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+      { params: Promise.resolve({ requestId: approvedReopenRequest.id }) }
     );
     const reopenReplay = await fiscalYearReopenApprovePost(
       reopenApprovalRequest(),
-      { params: Promise.resolve({ requestId: reopenRequest.id }) }
+      { params: Promise.resolve({ requestId: approvedReopenRequest.id }) }
     );
     expect(reopenResponse.status).toBe(201);
     expect(cancelReopenResponse.status).toBe(200);
@@ -436,6 +480,9 @@ describe("accounting journal HTTP contracts", () => {
     expect(replacementReopenResponse.status).toBe(201);
     expect(reopenSelfApproval.status).toBe(409);
     expect(await reopenSelfApproval.json()).toMatchObject({ code: "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN" });
+    expect(reopenRejection.status).toBe(200);
+    expect(reopenRejectionBody).toMatchObject({ status: "REJECTED" });
+    expect(reopenRejectionReplayBody).toEqual(reopenRejectionBody);
     expect(reopenApproval.status).toBe(200);
     expect(await reopenReplay.json()).toEqual(await reopenApproval.json());
     expect(await prisma.accountingFiscalYear.findMany({

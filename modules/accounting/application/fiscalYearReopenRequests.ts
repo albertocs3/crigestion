@@ -17,7 +17,14 @@ export const requestFiscalYearReopeningSchema = z.object({
   reason: z.string().trim().min(10).max(500)
 }).strict();
 
+export const rejectFiscalYearReopeningSchema = z.object({
+  reason: z.string().trim().min(10).max(500)
+}).strict();
+
 export type RequestFiscalYearReopeningCommand = z.infer<typeof requestFiscalYearReopeningSchema>;
+export type RejectFiscalYearReopeningCommand = z.infer<typeof rejectFiscalYearReopeningSchema>;
+
+const REOPEN_REQUEST_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type FiscalYearReopenPreflightReport = {
   sourceClosed: boolean;
@@ -42,20 +49,33 @@ export type FiscalYearReopenRequestDto = {
   successorFiscalYearId: string;
   year: number;
   successorYear: number;
-  status: "REQUESTED" | "COMPLETED" | "CANCELLED";
+  status: "REQUESTED" | "COMPLETED" | "CANCELLED" | "REJECTED" | "EXPIRED";
   reasonCode: RequestFiscalYearReopeningCommand["reasonCode"];
   reason: string;
   requestedById: string;
   requestedByName: string;
   requestedAt: string;
+  expiresAt: string;
   approvedById: string | null;
+  approvedByName: string | null;
   approvedAt: string | null;
   cancelledById: string | null;
+  cancelledByName: string | null;
   cancelledAt: string | null;
+  rejectedById: string | null;
+  rejectedByName: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+  expiredAt: string | null;
   regularizationReversalEntryId: string | null;
   closingReversalEntryId: string | null;
   openingReversalEntryId: string | null;
   originalEntries: {
+    regularization: { id: string; number: string } | null;
+    closing: { id: string; number: string } | null;
+    opening: { id: string; number: string } | null;
+  };
+  reversalEntries: {
     regularization: { id: string; number: string } | null;
     closing: { id: string; number: string } | null;
     opening: { id: string; number: string } | null;
@@ -82,6 +102,8 @@ type Result =
           | "FISCAL_YEAR_REOPEN_REQUEST_NOT_FOUND"
           | "FISCAL_YEAR_REOPEN_REQUEST_NOT_PENDING"
           | "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN"
+          | "FISCAL_YEAR_REOPEN_SELF_REJECTION_FORBIDDEN"
+          | "FISCAL_YEAR_REOPEN_REQUEST_EXPIRED"
           | "FISCAL_YEAR_REOPEN_REQUEST_NOT_CANCELLABLE"
           | "FISCAL_YEAR_REOPEN_PRECONDITIONS_FAILED"
           | "IDEMPOTENCY_KEY_REUSED";
@@ -113,20 +135,33 @@ const dtoSchema = z.object({
   successorFiscalYearId: z.string().uuid(),
   year: z.number().int(),
   successorYear: z.number().int(),
-  status: z.enum(["REQUESTED", "COMPLETED", "CANCELLED"]),
+  status: z.enum(["REQUESTED", "COMPLETED", "CANCELLED", "REJECTED", "EXPIRED"]),
   reasonCode: requestFiscalYearReopeningSchema.shape.reasonCode,
   reason: z.string(),
   requestedById: z.string().uuid(),
   requestedByName: z.string(),
   requestedAt: z.string(),
+  expiresAt: z.string(),
   approvedById: z.string().uuid().nullable(),
+  approvedByName: z.string().nullable(),
   approvedAt: z.string().nullable(),
   cancelledById: z.string().uuid().nullable(),
+  cancelledByName: z.string().nullable(),
   cancelledAt: z.string().nullable(),
+  rejectedById: z.string().uuid().nullable(),
+  rejectedByName: z.string().nullable(),
+  rejectedAt: z.string().nullable(),
+  rejectionReason: z.string().nullable(),
+  expiredAt: z.string().nullable(),
   regularizationReversalEntryId: z.string().uuid().nullable(),
   closingReversalEntryId: z.string().uuid().nullable(),
   openingReversalEntryId: z.string().uuid().nullable(),
   originalEntries: z.object({
+    regularization: z.object({ id: z.string().uuid(), number: z.string() }).nullable(),
+    closing: z.object({ id: z.string().uuid(), number: z.string() }).nullable(),
+    opening: z.object({ id: z.string().uuid(), number: z.string() }).nullable()
+  }).strict(),
+  reversalEntries: z.object({
     regularization: z.object({ id: z.string().uuid(), number: z.string() }).nullable(),
     closing: z.object({ id: z.string().uuid(), number: z.string() }).nullable(),
     opening: z.object({ id: z.string().uuid(), number: z.string() }).nullable()
@@ -145,14 +180,25 @@ const requestSelect = {
   preflightSnapshot: true,
   requestedById: true,
   requestedAt: true,
+  expiresAt: true,
   approvedById: true,
   approvedAt: true,
   cancelledById: true,
   cancelledAt: true,
+  rejectedById: true,
+  rejectedAt: true,
+  rejectionReason: true,
+  expiredAt: true,
   regularizationReversalEntryId: true,
   closingReversalEntryId: true,
   openingReversalEntryId: true,
   requestedBy: { select: { displayName: true } },
+  approvedBy: { select: { displayName: true } },
+  cancelledBy: { select: { displayName: true } },
+  rejectedBy: { select: { displayName: true } },
+  regularizationReversalEntry: { select: { id: true, number: true } },
+  closingReversalEntry: { select: { id: true, number: true } },
+  openingReversalEntry: { select: { id: true, number: true } },
   closeRequest: {
     select: {
       regularizationEntry: { select: { id: true, number: true } },
@@ -218,15 +264,29 @@ export function hashFiscalYearReopenCancellation(requestId: string): string {
   return hashIdempotencyPayload("accounting-fiscal-year-reopen-cancel:v1", { requestId });
 }
 
-export async function listFiscalYearReopenRequests(closeRequestIds?: string[]): Promise<FiscalYearReopenRequestDto[]> {
-  const companyId = await currentCompanyId(prisma);
-  const records = await prisma.accountingFiscalYearReopenRequest.findMany({
-    where: { companyId, ...(closeRequestIds ? { closeRequestId: { in: closeRequestIds } } : {}) },
-    orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
-    ...(closeRequestIds ? {} : { take: 50 }),
-    select: requestSelect
+export function hashFiscalYearReopenRejection(
+  requestId: string,
+  command: RejectFiscalYearReopeningCommand
+): string {
+  return hashIdempotencyPayload("accounting-fiscal-year-reopen-reject:v1", { requestId, ...command });
+}
+
+export async function listFiscalYearReopenRequests(
+  closeRequestIds?: string[],
+  now: Date = new Date()
+): Promise<FiscalYearReopenRequestDto[]> {
+  return prisma.$transaction(async (tx) => {
+    const companyId = await currentCompanyId(tx);
+    await lockFiscalCycle(tx, companyId);
+    await expireStaleReopenRequests(tx, companyId, now, closeRequestIds);
+    const records = await tx.accountingFiscalYearReopenRequest.findMany({
+      where: { companyId, ...(closeRequestIds ? { closeRequestId: { in: closeRequestIds } } : {}) },
+      orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+      ...(closeRequestIds ? {} : { take: 50 }),
+      select: requestSelect
+    });
+    return records.map(mapRequest);
   });
-  return records.map(mapRequest);
 }
 
 export async function requestFiscalYearReopening(
@@ -242,6 +302,7 @@ export async function requestFiscalYearReopening(
       const replay = await replayMutation(tx, context, 201);
       if (replay) return replay;
       await lockCloseRequest(tx, closeRequestId, companyId);
+      await expireStaleReopenRequests(tx, companyId, new Date(), [closeRequestId]);
       const close = await loadCloseEvidence(tx, closeRequestId, companyId);
       if (!close) return { kind: "close-not-found" as const };
       if (close.status !== "COMPLETED" || !close.successorFiscalYearId || !close.successorFiscalYear) {
@@ -266,6 +327,7 @@ export async function requestFiscalYearReopening(
         });
         return { kind: "preconditions-failed" as const, preflight };
       }
+      const requestedAt = new Date();
       const created = await tx.accountingFiscalYearReopenRequest.create({
         data: {
           companyId,
@@ -275,7 +337,9 @@ export async function requestFiscalYearReopening(
           reasonCode: command.reasonCode,
           reason: command.reason,
           preflightSnapshot: preflight as unknown as Prisma.InputJsonValue,
-          requestedById: actor.id
+          requestedById: actor.id,
+          requestedAt,
+          expiresAt: new Date(requestedAt.getTime() + REOPEN_REQUEST_LIFETIME_MS)
         },
         select: requestSelect
       });
@@ -308,6 +372,7 @@ export async function approveFiscalYearReopening(
     await beginLocks(tx, companyId, context.idempotencyKey);
     const replay = await replayMutation(tx, context, 200);
     if (replay) return replay;
+    await expireStaleReopenRequests(tx, companyId, new Date());
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "accounting_fiscal_year_reopen_requests"
       WHERE "id" = ${requestId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
     const request = await tx.accountingFiscalYearReopenRequest.findFirst({
@@ -315,6 +380,7 @@ export async function approveFiscalYearReopening(
       select: { id: true, closeRequestId: true, status: true, requestedById: true, reasonCode: true }
     });
     if (!request) return { kind: "request-not-found" as const };
+    if (request.status === "EXPIRED") return { kind: "request-expired" as const };
     if (request.status !== "REQUESTED") return { kind: "request-not-pending" as const };
     if (request.requestedById === actor.id) {
       await audit(tx, "ACCOUNTING_FISCAL_YEAR_REOPEN_APPROVAL_DENIED", actor, context, {
@@ -406,6 +472,7 @@ export async function cancelFiscalYearReopening(
     await beginLocks(tx, companyId, context.idempotencyKey);
     const replay = await replayMutation(tx, context, 200);
     if (replay) return replay;
+    await expireStaleReopenRequests(tx, companyId, new Date());
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "accounting_fiscal_year_reopen_requests"
       WHERE "id" = ${requestId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
     const request = await tx.accountingFiscalYearReopenRequest.findFirst({
@@ -413,6 +480,7 @@ export async function cancelFiscalYearReopening(
       select: { id: true, closeRequestId: true, fiscalYearId: true, successorFiscalYearId: true, status: true, requestedById: true }
     });
     if (!request) return { kind: "request-not-found" as const };
+    if (request.status === "EXPIRED") return { kind: "request-expired" as const };
     if (request.status !== "REQUESTED" || request.requestedById !== actor.id) {
       await audit(tx, "ACCOUNTING_FISCAL_YEAR_REOPEN_CANCELLATION_DENIED", actor, context, {
         reopenRequestId: request.id,
@@ -435,6 +503,66 @@ export async function cancelFiscalYearReopening(
     });
     await storeReplay(tx, context, 200, value);
     return { kind: "cancelled" as const, value };
+  });
+  return mapMutationResult(result, 200);
+}
+
+export async function rejectFiscalYearReopening(
+  requestId: string,
+  command: RejectFiscalYearReopeningCommand,
+  actor: SessionUser,
+  context: MutationContext
+): Promise<Result> {
+  const result = await prisma.$transaction(async (tx) => {
+    const companyId = await currentCompanyId(tx);
+    await beginLocks(tx, companyId, context.idempotencyKey);
+    const replay = await replayMutation(tx, context, 200);
+    if (replay) return replay;
+    await expireStaleReopenRequests(tx, companyId, new Date());
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "accounting_fiscal_year_reopen_requests"
+      WHERE "id" = ${requestId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
+    const request = await tx.accountingFiscalYearReopenRequest.findFirst({
+      where: { id: requestId, companyId },
+      select: {
+        id: true,
+        closeRequestId: true,
+        fiscalYearId: true,
+        successorFiscalYearId: true,
+        status: true,
+        requestedById: true
+      }
+    });
+    if (!request) return { kind: "request-not-found" as const };
+    if (request.status === "EXPIRED") return { kind: "request-expired" as const };
+    if (request.status !== "REQUESTED") return { kind: "request-not-pending" as const };
+    if (request.requestedById === actor.id) {
+      await audit(tx, "ACCOUNTING_FISCAL_YEAR_REOPEN_REJECTION_DENIED", actor, context, {
+        reopenRequestId: request.id,
+        closeRequestId: request.closeRequestId,
+        denialReason: "SELF_REJECTION"
+      });
+      return { kind: "self-rejection" as const };
+    }
+    const rejected = await tx.accountingFiscalYearReopenRequest.update({
+      where: { id: request.id },
+      data: {
+        status: "REJECTED",
+        rejectedById: actor.id,
+        rejectedAt: new Date(),
+        rejectionReason: command.reason
+      },
+      select: requestSelect
+    });
+    const value = mapRequest(rejected);
+    await audit(tx, "ACCOUNTING_FISCAL_YEAR_REOPEN_REJECTED", actor, context, {
+      reopenRequestId: request.id,
+      closeRequestId: request.closeRequestId,
+      fiscalYearId: request.fiscalYearId,
+      successorFiscalYearId: request.successorFiscalYearId,
+      requestedByUserId: request.requestedById
+    });
+    await storeReplay(tx, context, 200, value);
+    return { kind: "rejected" as const, value };
   });
   return mapMutationResult(result, 200);
 }
@@ -624,7 +752,51 @@ async function createReversalEntry(
 
 async function beginLocks(tx: Prisma.TransactionClient, companyId: string, idempotencyKey: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`;
+  await lockFiscalCycle(tx, companyId);
+}
+
+async function lockFiscalCycle(tx: Prisma.TransactionClient, companyId: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`accounting-fiscal-cycle:${companyId}`}, 0))`;
+}
+
+async function expireStaleReopenRequests(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  now: Date,
+  closeRequestIds?: string[]
+): Promise<void> {
+  if (closeRequestIds?.length === 0) return;
+  const stale = await tx.accountingFiscalYearReopenRequest.findMany({
+    where: {
+      companyId,
+      status: "REQUESTED",
+      expiresAt: { lte: now },
+      ...(closeRequestIds ? { closeRequestId: { in: closeRequestIds } } : {})
+    },
+    orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      closeRequestId: true,
+      fiscalYearId: true,
+      successorFiscalYearId: true,
+      requestedById: true,
+      expiresAt: true
+    }
+  });
+  for (const request of stale) {
+    await tx.accountingFiscalYearReopenRequest.update({
+      where: { id: request.id },
+      data: { status: "EXPIRED", expiredAt: now }
+    });
+    await auditSystem(tx, "ACCOUNTING_FISCAL_YEAR_REOPEN_EXPIRED", {
+      reopenRequestId: request.id,
+      closeRequestId: request.closeRequestId,
+      fiscalYearId: request.fiscalYearId,
+      successorFiscalYearId: request.successorFiscalYearId,
+      requestedByUserId: request.requestedById,
+      expiresAt: request.expiresAt.toISOString()
+    });
+  }
 }
 
 async function lockCloseRequest(tx: Prisma.TransactionClient, closeRequestId: string, companyId: string): Promise<void> {
@@ -703,6 +875,20 @@ async function audit(
   });
 }
 
+async function auditSystem(
+  tx: Prisma.TransactionClient,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  await tx.auditEvent.create({
+    data: {
+      eventType,
+      actorType: "SYSTEM",
+      payload: payload as Prisma.InputJsonValue
+    }
+  });
+}
+
 function entryReferences(close: CloseEvidence) {
   return {
     regularization: close.regularizationEntry ? { id: close.regularizationEntry.id, number: close.regularizationEntry.number } : null,
@@ -725,10 +911,18 @@ function mapRequest(record: Prisma.AccountingFiscalYearReopenRequestGetPayload<{
     requestedById: record.requestedById,
     requestedByName: record.requestedBy.displayName,
     requestedAt: record.requestedAt.toISOString(),
+    expiresAt: record.expiresAt.toISOString(),
     approvedById: record.approvedById,
+    approvedByName: record.approvedBy?.displayName ?? null,
     approvedAt: record.approvedAt?.toISOString() ?? null,
     cancelledById: record.cancelledById,
+    cancelledByName: record.cancelledBy?.displayName ?? null,
     cancelledAt: record.cancelledAt?.toISOString() ?? null,
+    rejectedById: record.rejectedById,
+    rejectedByName: record.rejectedBy?.displayName ?? null,
+    rejectedAt: record.rejectedAt?.toISOString() ?? null,
+    rejectionReason: record.rejectionReason,
+    expiredAt: record.expiredAt?.toISOString() ?? null,
     regularizationReversalEntryId: record.regularizationReversalEntryId,
     closingReversalEntryId: record.closingReversalEntryId,
     openingReversalEntryId: record.openingReversalEntryId,
@@ -736,6 +930,11 @@ function mapRequest(record: Prisma.AccountingFiscalYearReopenRequestGetPayload<{
       regularization: record.closeRequest.regularizationEntry,
       closing: record.closeRequest.closingEntry,
       opening: record.closeRequest.openingEntry
+    },
+    reversalEntries: {
+      regularization: record.regularizationReversalEntry,
+      closing: record.closingReversalEntry,
+      opening: record.openingReversalEntry
     },
     preflight: preflightSchema.parse(record.preflightSnapshot)
   };
@@ -745,7 +944,7 @@ function mapMutationResult(
   result: { kind: string; value?: FiscalYearReopenRequestDto; preflight?: FiscalYearReopenPreflightReport },
   successStatus: 200 | 201
 ): Result {
-  if (result.kind === "created" || result.kind === "completed" || result.kind === "cancelled" || result.kind === "replayed") {
+  if (result.kind === "created" || result.kind === "completed" || result.kind === "cancelled" || result.kind === "rejected" || result.kind === "replayed") {
     return { ok: true, status: successStatus, value: result.value! };
   }
   if (result.kind === "close-not-found") return failure(404, "FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND", "La solicitud de cierre no existe.");
@@ -755,6 +954,8 @@ function mapMutationResult(
   if (result.kind === "request-not-found") return failure(404, "FISCAL_YEAR_REOPEN_REQUEST_NOT_FOUND", "La solicitud de reapertura no existe.");
   if (result.kind === "request-not-pending") return failure(409, "FISCAL_YEAR_REOPEN_REQUEST_NOT_PENDING", "La solicitud de reapertura ya no esta pendiente.");
   if (result.kind === "self-approval") return failure(409, "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN", "La persona solicitante no puede aprobar su propia reapertura.");
+  if (result.kind === "self-rejection") return failure(409, "FISCAL_YEAR_REOPEN_SELF_REJECTION_FORBIDDEN", "La persona solicitante no puede rechazar su propia reapertura.");
+  if (result.kind === "request-expired") return failure(409, "FISCAL_YEAR_REOPEN_REQUEST_EXPIRED", "La solicitud de reapertura ha caducado. Debe registrarse una nueva solicitud.");
   if (result.kind === "not-cancellable") return failure(409, "FISCAL_YEAR_REOPEN_REQUEST_NOT_CANCELLABLE", "Solo la persona solicitante puede cancelar una reapertura pendiente.");
   if (result.kind === "preconditions-failed") {
     return {

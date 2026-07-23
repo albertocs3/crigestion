@@ -21,7 +21,10 @@ import {
 import {
   approveFiscalYearReopening,
   hashFiscalYearReopenApproval,
+  hashFiscalYearReopenRejection,
   hashFiscalYearReopenRequest,
+  listFiscalYearReopenRequests,
+  rejectFiscalYearReopening,
   requestFiscalYearReopening
 } from "@/modules/accounting/application/fiscalYearReopenRequests";
 import {
@@ -31,6 +34,7 @@ import {
 } from "@/modules/platform/application/installation";
 import { createCustomer } from "@/modules/customers/application/customers";
 import { createInvoiceDraft } from "@/modules/billing/application/invoices";
+import { listFiscalYearLifecycleHistory } from "@/modules/accounting/application/fiscalYearLifecycleHistory";
 
 const adminPassword = "Cambiar-esta-clave-2026";
 const baseCommand: InitializeCommand = {
@@ -373,11 +377,65 @@ describe("accounting journal application service", () => {
     });
     expect(selfApproval).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_REOPEN_SELF_APPROVAL_FORBIDDEN" } });
 
+    const rejectionCommand = { reason: "La evidencia aportada no justifica reabrir el ejercicio." };
+    await expect(prisma.accountingFiscalYearReopenRequest.update({
+      where: { id: reopenRequested.value.id },
+      data: {
+        status: "REJECTED",
+        rejectedById: requester.id,
+        rejectedAt: new Date(),
+        rejectionReason: rejectionCommand.reason
+      }
+    })).rejects.toThrow("ACCOUNTING_REOPEN_REQUEST_REJECTER_MUST_BE_CHECKER");
+    await expect(prisma.accountingFiscalYearReopenRequest.update({
+      where: { id: reopenRequested.value.id },
+      data: { status: "EXPIRED", expiredAt: new Date() }
+    })).rejects.toThrow("ACCOUNTING_REOPEN_REQUEST_EXPIRY_PREMATURE");
+    const selfRejection = await rejectFiscalYearReopening(reopenRequested.value.id, rejectionCommand, requester, {
+      idempotencyKey: `test-reopen-self-reject:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRejection(reopenRequested.value.id, rejectionCommand)
+    });
+    expect(selfRejection).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_REOPEN_SELF_REJECTION_FORBIDDEN" } });
+    const rejectionContext = {
+      idempotencyKey: `test-reopen-reject:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRejection(reopenRequested.value.id, rejectionCommand)
+    };
+    const rejected = await rejectFiscalYearReopening(reopenRequested.value.id, rejectionCommand, reopenApprover, rejectionContext);
+    expect(rejected).toMatchObject({ ok: true, value: { status: "REJECTED", rejectionReason: rejectionCommand.reason } });
+    expect(await rejectFiscalYearReopening(reopenRequested.value.id, rejectionCommand, reopenApprover, rejectionContext)).toEqual(rejected);
+    await expect(prisma.accountingFiscalYearReopenRequest.update({
+      where: { id: reopenRequested.value.id },
+      data: { rejectionReason: "Alteracion no permitida de la decision terminal." }
+    })).rejects.toThrow("ACCOUNTING_REOPEN_REQUEST_TERMINAL_EVIDENCE_IMMUTABLE");
+
+    const expiringRequest = await requestFiscalYearReopening(closeRequested.value.id, reopenCommand, requester, {
+      idempotencyKey: `test-reopen-after-rejection:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRequest(closeRequested.value.id, reopenCommand)
+    });
+    if (!expiringRequest.ok) throw new Error(expiringRequest.error.code);
+    const future = new Date(new Date(expiringRequest.value.expiresAt).getTime() + 1_000);
+    const expiredHistory = await listFiscalYearReopenRequests([closeRequested.value.id], future);
+    expect(expiredHistory.find((request) => request.id === expiringRequest.value.id)).toMatchObject({
+      status: "EXPIRED",
+      expiredAt: future.toISOString()
+    });
+    const expiredApproval = await approveFiscalYearReopening(expiringRequest.value.id, reopenApprover, {
+      idempotencyKey: `test-reopen-expired-approve:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenApproval(expiringRequest.value.id)
+    });
+    expect(expiredApproval).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_REOPEN_REQUEST_EXPIRED" } });
+
+    const finalReopenRequested = await requestFiscalYearReopening(closeRequested.value.id, reopenCommand, requester, {
+      idempotencyKey: `test-reopen-after-expiry:${randomUUID()}`,
+      requestHash: hashFiscalYearReopenRequest(closeRequested.value.id, reopenCommand)
+    });
+    if (!finalReopenRequested.ok) throw new Error(finalReopenRequested.error.code);
+
     const approvalContext = {
       idempotencyKey: `test-reopen-approve:${randomUUID()}`,
-      requestHash: hashFiscalYearReopenApproval(reopenRequested.value.id)
+      requestHash: hashFiscalYearReopenApproval(finalReopenRequested.value.id)
     };
-    const reopened = await approveFiscalYearReopening(reopenRequested.value.id, reopenApprover, approvalContext);
+    const reopened = await approveFiscalYearReopening(finalReopenRequested.value.id, reopenApprover, approvalContext);
     expect(reopened).toMatchObject({
       ok: true,
       value: {
@@ -386,7 +444,18 @@ describe("accounting journal application service", () => {
         successorFiscalYearId: firstClose.value.next.id
       }
     });
-    expect(await approveFiscalYearReopening(reopenRequested.value.id, reopenApprover, approvalContext)).toEqual(reopened);
+    expect(await approveFiscalYearReopening(finalReopenRequested.value.id, reopenApprover, approvalContext)).toEqual(reopened);
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_FISCAL_YEAR_REOPEN_REJECTED" } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_FISCAL_YEAR_REOPEN_EXPIRED", actorType: "SYSTEM" } })).toBe(1);
+    const lifecycleHistory = await listFiscalYearLifecycleHistory([fiscalYear.id]);
+    expect(lifecycleHistory[0]).toMatchObject({
+      closeRequest: { id: closeRequested.value.id, status: "COMPLETED" },
+      reopenRequests: expect.arrayContaining([
+        expect.objectContaining({ status: "COMPLETED", reversalEntries: expect.any(Array) }),
+        expect.objectContaining({ status: "REJECTED", rejectionReason: rejectionCommand.reason }),
+        expect.objectContaining({ status: "EXPIRED", terminalByName: "Sistema" })
+      ])
+    });
     expect(await prisma.accountingFiscalYear.findMany({
       where: { id: { in: [fiscalYear.id, firstClose.value.next.id] } },
       orderBy: { year: "asc" },

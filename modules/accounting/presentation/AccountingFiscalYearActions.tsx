@@ -125,14 +125,17 @@ export function AccountingFiscalYearReopenActions({
   const [state, setState] = useState<State>({ status: "idle" });
   const [reasonCode, setReasonCode] = useState("CLOSE_ERROR");
   const [reason, setReason] = useState("");
+  const [rejectionReason, setRejectionReason] = useState("");
   const idempotencyKey = useRef<string | null>(null);
 
-  async function mutate(action: "request" | "approve" | "cancel") {
+  async function mutate(action: "request" | "approve" | "cancel" | "reject") {
     const prompt = action === "request"
       ? `Solicitar la anulacion del cierre de ${year}? Otra persona debera aprobarla.`
       : action === "approve"
         ? `Anular el cierre y reabrir ${year}? Se generaran contraasientos y ${year + 1} quedara no operativo.`
-        : `Cancelar la solicitud de reapertura de ${year}?`;
+        : action === "reject"
+          ? `Rechazar la solicitud de reapertura de ${year}? La contabilidad no se modificara.`
+          : `Cancelar la solicitud de reapertura de ${year}?`;
     if (!window.confirm(prompt)) return;
     setState({ status: "submitting" });
     idempotencyKey.current ??= crypto.randomUUID();
@@ -143,11 +146,15 @@ export function AccountingFiscalYearReopenActions({
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          ...(action === "request" ? { "Content-Type": "application/json" } : {}),
+          ...(action === "request" || action === "reject" ? { "Content-Type": "application/json" } : {}),
           "Idempotency-Key": idempotencyKey.current,
           "X-CSRF-Token": await fetchCsrfToken()
         },
-        ...(action === "request" ? { body: JSON.stringify({ reasonCode, reason }) } : {})
+        ...(action === "request"
+          ? { body: JSON.stringify({ reasonCode, reason }) }
+          : action === "reject"
+            ? { body: JSON.stringify({ reason: rejectionReason }) }
+            : {})
       });
       const body = (await response.json().catch(() => null)) as { message?: string; preflight?: FiscalYearReopenRequestDto["preflight"] } | null;
       if (response.ok) {
@@ -158,7 +165,9 @@ export function AccountingFiscalYearReopenActions({
             ? "Solicitud de reapertura creada."
             : action === "approve"
               ? `Cierre anulado mediante contraasientos. Ejercicio ${year} reabierto y ${year + 1} marcado como no operativo.`
-              : "Solicitud de reapertura cancelada."
+              : action === "reject"
+                ? "Solicitud de reapertura rechazada sin modificar la contabilidad."
+                : "Solicitud de reapertura cancelada."
         });
         router.refresh();
         return;
@@ -199,6 +208,7 @@ export function AccountingFiscalYearReopenActions({
       <summary>Reapertura pendiente de {year}</summary>
       <span>Solicita: <strong>{request.requestedByName}</strong></span>
       <span>Fecha: {new Date(request.requestedAt).toLocaleString("es-ES")}</span>
+      <span>Caduca: {new Date(request.expiresAt).toLocaleString("es-ES")}</span>
       <span>Motivo: {reopenReasonLabel(request.reasonCode)}</span>
       <span>Justificacion: {request.reason}</span>
       <span>Ejercicio afectado: {request.year}; sucesor que quedara no operativo: {request.successorYear}</span>
@@ -208,7 +218,16 @@ export function AccountingFiscalYearReopenActions({
     </details> : null}
     {!request && !canRequest && canApprove ? <span className="muted">Esperando una solicitud de reapertura de otra persona.</span> : null}
     {request && isRequester && canRequest ? <button className="button button-secondary" disabled={state.status === "submitting"} onClick={() => mutate("cancel")} type="button">Cancelar solicitud</button> : null}
-    {request && !isRequester && canApprove ? <button className="button button-danger-soft" disabled={state.status === "submitting"} onClick={() => mutate("approve")} type="button">{state.status === "submitting" ? "Validando..." : "Anular cierre y reabrir"}</button> : null}
+    {request && !isRequester && canApprove ? <>
+      <label>Motivo del rechazo
+        <textarea value={rejectionReason} minLength={10} maxLength={500} onChange={(event) => { setRejectionReason(event.target.value); idempotencyKey.current = null; }} />
+      </label>
+      <span className="muted">Obligatorio solo para rechazar; entre 10 y 500 caracteres ({rejectionReason.length}/500).</span>
+      <div className="form-actions">
+        <button className="button button-danger-soft" disabled={state.status === "submitting"} onClick={() => mutate("approve")} type="button">{state.status === "submitting" ? "Validando..." : "Anular cierre y reabrir"}</button>
+        <button className="button button-secondary" disabled={state.status === "submitting" || rejectionReason.trim().length < 10} onClick={() => mutate("reject")} type="button">Rechazar solicitud</button>
+      </div>
+    </> : null}
     {request && isRequester && canApprove ? <span className="message">Debe aprobar otra persona.</span> : null}
     {state.message ? <span role={state.status === "error" ? "alert" : "status"} className={state.status === "error" ? "message error" : "message"}>{state.message}</span> : null}
   </div>;

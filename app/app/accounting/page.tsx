@@ -9,7 +9,9 @@ import { AccountingAccountCreateForm } from "@/modules/accounting/presentation/A
 import { listAccountingFiscalYears } from "@/modules/accounting/application/fiscalYears";
 import { listFiscalYearCloseRequests } from "@/modules/accounting/application/fiscalYearCloseRequests";
 import { listFiscalYearReopenRequests } from "@/modules/accounting/application/fiscalYearReopenRequests";
+import { listFiscalYearLifecycleHistory } from "@/modules/accounting/application/fiscalYearLifecycleHistory";
 import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm, AccountingFiscalYearReopenActions } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
+import { AccountingFiscalYearLifecycleHistory } from "@/modules/accounting/presentation/AccountingFiscalYearLifecycleHistory";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -74,6 +76,7 @@ export default async function AccountingPage({
   ]);
   const closeRequests = await listFiscalYearCloseRequests(fiscalYears.map((fiscalYear) => fiscalYear.id));
   const reopenRequests = await listFiscalYearReopenRequests(closeRequests.map((request) => request.id));
+  const lifecycleHistory = await listFiscalYearLifecycleHistory(fiscalYears.map((fiscalYear) => fiscalYear.id));
   const canManageEntries = authorization.user.permissions.includes(
     "Accounting.ManageEntries"
   );
@@ -187,6 +190,8 @@ export default async function AccountingPage({
             })}</tbody></table></div>
           </div>
         ) : null}
+
+        {fiscalYears.length > 0 ? <AccountingFiscalYearLifecycleHistory items={lifecycleHistory} /> : null}
 
         {canEditSelectedFiscalYear ? (
           <div className="panel stack">

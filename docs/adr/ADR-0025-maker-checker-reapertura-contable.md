@@ -18,8 +18,15 @@ La anulacion formal del cierre usa una solicitud de reapertura independiente.
 Una persona con `Accounting.RequestExerciseReopenings` indica un motivo
 clasificado y una justificacion. Otra persona distinta, con
 `Accounting.ApproveExerciseReopenings`, repite el preflight y aprueba la
-operacion. Solicitud, aprobacion y cancelacion tienen CSRF, control de origen,
-idempotencia, bloqueos y auditoria.
+operacion. El checker tambien puede rechazarla con una justificacion obligatoria,
+sin alterar la contabilidad. Solicitud, aprobacion, rechazo y cancelacion tienen
+CSRF, control de origen, idempotencia, bloqueos y auditoria.
+
+Una solicitud permanece activa durante siete dias exactos desde su creacion. La
+primera lectura o mutacion posterior al vencimiento materializa `EXPIRED` bajo
+el mismo bloqueo del ciclo contable y registra un evento de auditoria `SYSTEM`.
+Los estados `COMPLETED`, `CANCELLED`, `REJECTED` y `EXPIRED` son terminales e
+inmutables; rechazo y caducidad liberan el cierre para una nueva solicitud.
 
 La solicitud de cierre original permanece `COMPLETED`. Sus referencias al
 ejercicio sucesor y a los asientos de regularizacion, cierre y apertura son
@@ -33,8 +40,9 @@ El preflight solo permite reabrir si el sucesor exacto sigue abierto y no tiene
 actividad ajena al historial estructural del cierre: documentos, remesas,
 cobros, pagos, aplicaciones de credito, devoluciones, movimientos bancarios,
 asientos no vinculados, cierre propio, ejercicio hijo o alteraciones del plan
-copiado. PostgreSQL refuerza estados terminales,
-maker-checker, referencias exactas y equivalencia de los contraasientos.
+copiado. PostgreSQL refuerza estados terminales, maker-checker tanto en
+aprobacion como en rechazo, referencias exactas y equivalencia de los
+contraasientos.
 
 Si el ejercicio reabierto vuelve a cerrarse, se reutiliza el mismo sucesor
 `REVERSED`: se incorporan las cuentas nuevas del origen sin modificar las ya
@@ -51,6 +59,9 @@ año.
   libre ni datos personales.
 - La historia contable es append-only y puede reconstruirse mediante claves
   foraneas, no solo desde JSON de auditoria.
+- El historial operativo se consulta directamente por ciclos de cierre, sin el
+  limite de la lista global, y muestra actores, resoluciones, asientos originales
+  y contraasientos enlazados.
 - Una vez que el sucesor contiene actividad real, la reapertura se bloquea y la
   correccion debe realizarse mediante el procedimiento contable aplicable.
 - La habilitacion en produccion sigue siendo una decision operativa separada.
