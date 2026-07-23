@@ -606,4 +606,37 @@ La base efimera se descarto automaticamente. No quedaron bases UAT, listeners
 3102/3103 ni unidades transitorias. La base principal mantuvo 94 migraciones,
 2026 `OPEN` y cero solicitudes de cierre o reapertura. La aplicacion rc5 y el
 worker siguieron activos, y los health local y publico permanecieron en `ok`.
+
+## 19. Preparacion aislada del ciclo terminal de reapertura
+
+El 2026-07-23 se publico el tag inmutable `staging-2026.07.23-rc6` sobre el
+commit `e65657550aa7ff02dee422e73d143f7b9aa527a6`. La candidata incorpora rechazo
+maker-checker, caducidad a 168 horas, estados terminales inmutables e historial
+relacional de cierres y reaperturas. La validacion completa paso 73 archivos y
+635 pruebas Vitest en ejecucion determinista, TypeScript, ESLint, build
+optimizado y auditoria npm sin vulnerabilidades.
+
+La release se materializo sin activarla en
+`/opt/crigestion-staging/releases/staging-2026.07.23-rc6`, con build ID
+`Tz5nxI9_KSjMzr5wi2khl`, propiedad `root:crigestion-staging-release` y permisos
+`0750` en la release y el motor Prisma. Se conservaron temporalmente las
+dependencias de desarrollo necesarias para el migrador controlado; el prune se
+reserva para despues de una eventual migracion de la base principal.
+
+Antes del ensayo se verificaron checksum y catalogo del backup
+`crigestion_staging-auto-20260723T145041Z.dump`. El dump, con 94 migraciones, se
+restauro en una base efimera `crigestion_reopen_rc6_*`. Las migraciones 95 y 96
+se aplicaron en 113 ms y dejaron:
+
+- los estados `REQUESTED`, `COMPLETED`, `CANCELLED`, `REJECTED` y `EXPIRED`;
+- las cinco columnas nuevas de caducidad y rechazo;
+- cero restricciones sin validar y cero discrepancias en el backfill de 168
+  horas;
+- el trigger unico de reapertura con controles de checker distinto y
+  caducidad no prematura.
+
+La base y el dump temporales se descartaron automaticamente. El enlace
+`/opt/crigestion-staging/current` permanecio en `staging-2026.07.23-rc5`, la
+base principal mantuvo 94 migraciones y la aplicacion y el worker siguieron
+activos con health completo. No se consulto ni modifico produccion.
 Produccion no se consulto ni se modifico.
