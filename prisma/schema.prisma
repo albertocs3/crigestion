@@ -365,6 +365,12 @@ enum AccountingFiscalYearStatus {
   CLOSED
 }
 
+enum AccountingFiscalYearCloseRequestStatus {
+  REQUESTED
+  COMPLETED
+  CANCELLED
+}
+
 enum AccountingEntryOrigin {
   MANUAL
   INVOICE
@@ -433,6 +439,7 @@ model Company {
 
   installation             Installation?
   accountingFiscalYears    AccountingFiscalYear[]
+  fiscalYearCloseRequests  AccountingFiscalYearCloseRequest[]
   bankAccounts             BankAccount[]
   bankStatements           BankStatement[]
   invoices                 Invoice[]
@@ -961,6 +968,9 @@ model User {
   createdAccountingAccounts         AccountingAccount[]                  @relation("AccountingAccountsCreatedBy")
   createdAccountingFiscalYears      AccountingFiscalYear[]               @relation("AccountingFiscalYearsCreatedBy")
   closedAccountingFiscalYears       AccountingFiscalYear[]               @relation("AccountingFiscalYearsClosedBy")
+  requestedFiscalYearClosures       AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsRequestedBy")
+  approvedFiscalYearClosures        AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsApprovedBy")
+  cancelledFiscalYearClosures       AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsCancelledBy")
   createdAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
   updatedAccountingEntries          AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
   createdBankAccounts               BankAccount[]                        @relation("BankAccountsCreatedBy")
@@ -1688,11 +1698,40 @@ model AccountingFiscalYear {
   closedBy          User?                    @relation("AccountingFiscalYearsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
   accounts          AccountingAccount[]
   journalEntries    AccountingJournalEntry[]
+  closeRequests     AccountingFiscalYearCloseRequest[]
 
   @@unique([companyId, year])
+  @@unique([id, companyId])
   @@index([companyId, status, year])
   @@index([sourceFiscalYearId])
   @@map("accounting_fiscal_years")
+}
+
+model AccountingFiscalYearCloseRequest {
+  id                String                                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId         String                                 @db.Uuid
+  fiscalYearId      String                                 @db.Uuid
+  status            AccountingFiscalYearCloseRequestStatus @default(REQUESTED)
+  preflightSnapshot Json
+  requestedById     String                                 @db.Uuid
+  requestedAt       DateTime                               @default(now()) @db.Timestamptz(3)
+  approvedById      String?                                @db.Uuid
+  approvedAt        DateTime?                              @db.Timestamptz(3)
+  cancelledById     String?                                @db.Uuid
+  cancelledAt       DateTime?                              @db.Timestamptz(3)
+  createdAt         DateTime                               @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime                               @updatedAt @db.Timestamptz(3)
+
+  company     Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  fiscalYear  AccountingFiscalYear @relation(fields: [fiscalYearId, companyId], references: [id, companyId], onDelete: Restrict)
+  requestedBy User                 @relation("AccountingFiscalYearCloseRequestsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy  User?                @relation("AccountingFiscalYearCloseRequestsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  cancelledBy User?                @relation("AccountingFiscalYearCloseRequestsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+
+  @@index([companyId, status, requestedAt, id])
+  @@index([fiscalYearId, requestedAt, id])
+  @@index([requestedById, requestedAt])
+  @@map("accounting_fiscal_year_close_requests")
 }
 
 model AccountingJournalEntry {

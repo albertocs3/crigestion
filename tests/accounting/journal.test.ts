@@ -8,10 +8,16 @@ import {
   listJournalEntries
 } from "@/modules/accounting/application/journal";
 import {
-  closeAccountingFiscalYear,
+  approveAccountingFiscalYearCloseRequest,
   createInitialAccountingFiscalYear,
-  hashAccountingFiscalYearClose
+  hashAccountingFiscalYearCloseApproval
 } from "@/modules/accounting/application/fiscalYears";
+import {
+  cancelFiscalYearCloseRequest,
+  hashFiscalYearCloseCancellation,
+  hashFiscalYearCloseRequest,
+  requestFiscalYearClose
+} from "@/modules/accounting/application/fiscalYearCloseRequests";
 import {
   hashRequestBody,
   initializePlatform,
@@ -36,6 +42,7 @@ const baseCommand: InitializeCommand = {
 
 describe("accounting journal application service", () => {
   beforeEach(async () => {
+    closeRequestCache.clear();
     await resetPlatformTables();
     await initializeForAccounting();
   });
@@ -200,12 +207,94 @@ describe("accounting journal application service", () => {
     expect(result).toEqual({
       ok: false,
       status: 404,
-      error: { code: "FISCAL_YEAR_NOT_FOUND", message: "El ejercicio no existe." }
+      error: { code: "FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND", message: "La solicitud de cierre no existe." }
     });
     expect(await prisma.accountingFiscalYear.findUniqueOrThrow({
       where: { id: foreignYear.id },
       select: { status: true }
     })).toEqual({ status: "OPEN" });
+  });
+
+  it("requires another person to approve and replays both workflow steps", async () => {
+    const requester = await loginAsAdmin();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026 } });
+    const requestContext = {
+      idempotencyKey: `test-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id),
+      correlationId: "close-request-0001"
+    };
+    const requested = await requestFiscalYearClose(fiscalYear.id, requester, requestContext);
+    expect(requested).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED", requestedById: requester.id } });
+    expect(await requestFiscalYearClose(fiscalYear.id, requester, requestContext)).toEqual(requested);
+    if (!requested.ok) throw new Error(requested.error.code);
+    const approver = await createActorLike(requester, "close-approver");
+    await expect(prisma.accountingFiscalYearCloseRequest.update({
+      where: { id: requested.value.id },
+      data: { status: "COMPLETED", approvedById: approver.id, approvedAt: new Date() }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_REQUEST_COMPLETION_EVIDENCE_INVALID");
+    await expect(prisma.accountingFiscalYearCloseRequest.update({
+      where: { id: requested.value.id },
+      data: { status: "COMPLETED", approvedById: requester.id, approvedAt: new Date() }
+    })).rejects.toThrow();
+
+    const selfApproval = await approveAccountingFiscalYearCloseRequest(requested.value.id, requester, {
+      idempotencyKey: `test-close-self:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearCloseApproval(requested.value.id)
+    });
+    expect(selfApproval).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN" } });
+    const approvalContext = {
+      idempotencyKey: `test-close-approve:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearCloseApproval(requested.value.id),
+      correlationId: "close-approval-0001"
+    };
+    const approved = await approveAccountingFiscalYearCloseRequest(requested.value.id, approver, approvalContext);
+    expect(approved).toMatchObject({ ok: true, value: { closed: { status: "CLOSED" }, next: { year: 2027, status: "OPEN" } } });
+    expect(await approveAccountingFiscalYearCloseRequest(requested.value.id, approver, approvalContext)).toEqual(approved);
+    expect(await prisma.accountingFiscalYearCloseRequest.findUniqueOrThrow({ where: { id: requested.value.id }, select: { status: true, approvedById: true } })).toEqual({ status: "COMPLETED", approvedById: approver.id });
+    await expect(prisma.accountingFiscalYearCloseRequest.update({
+      where: { id: requested.value.id },
+      data: { approvedAt: new Date(Date.now() + 1_000) }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_REQUEST_TERMINAL_EVIDENCE_IMMUTABLE");
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSE_APPROVAL_DENIED" } })).toBe(1);
+  });
+
+  it("allows only the requester to cancel and releases the active-request guard", async () => {
+    const requester = await loginAsAdmin();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026 } });
+    const first = await requestFiscalYearClose(fiscalYear.id, requester, {
+      idempotencyKey: `test-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
+    });
+    if (!first.ok) throw new Error(first.error.code);
+    const duplicate = await requestFiscalYearClose(fiscalYear.id, requester, {
+      idempotencyKey: `test-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
+    });
+    expect(duplicate).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_CLOSE_ACTIVE_REQUEST_EXISTS" } });
+    const other = await createActorLike(requester, "close-canceller");
+    await expect(prisma.accountingFiscalYearCloseRequest.update({
+      where: { id: first.value.id },
+      data: { status: "CANCELLED", cancelledById: other.id, cancelledAt: new Date() }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_REQUEST_CANCELLER_MUST_BE_REQUESTER");
+    const denied = await cancelFiscalYearCloseRequest(first.value.id, other, {
+      idempotencyKey: `test-close-cancel-denied:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseCancellation(first.value.id)
+    });
+    expect(denied).toMatchObject({ ok: false, error: { code: "FISCAL_YEAR_CLOSE_REQUEST_NOT_CANCELLABLE" } });
+    const cancelled = await cancelFiscalYearCloseRequest(first.value.id, requester, {
+      idempotencyKey: `test-close-cancel:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseCancellation(first.value.id)
+    });
+    expect(cancelled).toMatchObject({ ok: true, value: { status: "CANCELLED", cancelledById: requester.id } });
+    await expect(prisma.accountingFiscalYearCloseRequest.update({
+      where: { id: first.value.id },
+      data: { cancelledAt: new Date(Date.now() + 1_000) }
+    })).rejects.toThrow("ACCOUNTING_CLOSE_REQUEST_TERMINAL_EVIDENCE_IMMUTABLE");
+    const replacement = await requestFiscalYearClose(fiscalYear.id, requester, {
+      idempotencyKey: `test-close-request:${randomUUID()}`,
+      requestHash: hashFiscalYearCloseRequest(fiscalYear.id)
+    });
+    expect(replacement).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED" } });
   });
 
   it("blocks closing when the preflight finds unsupported balances", async () => {
@@ -291,8 +380,8 @@ describe("accounting journal application service", () => {
         ok: false,
         status: 409,
         error: {
-          code: "FISCAL_YEAR_NOT_OPEN",
-          message: "Solo se puede cerrar un ejercicio abierto."
+          code: "FISCAL_YEAR_CLOSE_REQUEST_NOT_PENDING",
+          message: "La solicitud de cierre ya no esta pendiente."
         }
       }
     ]);
@@ -583,6 +672,97 @@ async function loginAsAdmin() {
   return result.value.user;
 }
 
+const closeRequestCache = new Map<string, Promise<string>>();
+
+function hashAccountingFiscalYearClose(fiscalYearId: string): string {
+  return `legacy-close-test:${fiscalYearId}`;
+}
+
+async function closeAccountingFiscalYear(
+  fiscalYearId: string,
+  actor: Awaited<ReturnType<typeof loginAsAdmin>>,
+  context: { idempotencyKey: string; requestHash: string; correlationId?: string }
+) {
+  let pending = closeRequestCache.get(fiscalYearId);
+  if (!pending) {
+    pending = createPendingCloseRequest(fiscalYearId, actor.id);
+    closeRequestCache.set(fiscalYearId, pending);
+  }
+  const closeRequestId = await pending;
+  return approveAccountingFiscalYearCloseRequest(closeRequestId, actor, {
+    ...context,
+    requestHash: context.requestHash === "0".repeat(64)
+      ? context.requestHash
+      : hashAccountingFiscalYearCloseApproval(closeRequestId)
+  });
+}
+
+async function createPendingCloseRequest(fiscalYearId: string, approverId: string): Promise<string> {
+  const fiscalYear = await prisma.accountingFiscalYear.findUniqueOrThrow({
+    where: { id: fiscalYearId },
+    select: { companyId: true }
+  });
+  const role = await prisma.role.findFirstOrThrow();
+  const requester = await prisma.user.create({
+    data: {
+      displayName: "Solicitante cierre",
+      userName: `close-requester-${randomUUID()}`,
+      normalizedUserName: `close-requester-${randomUUID()}`,
+      passwordHash: "test-only",
+      roleId: role.id
+    },
+    select: { id: true }
+  });
+  if (requester.id === approverId) throw new Error("Test requester must differ from approver.");
+  return (await prisma.accountingFiscalYearCloseRequest.create({
+    data: {
+      companyId: fiscalYear.companyId,
+      fiscalYearId,
+      requestedById: requester.id,
+      preflightSnapshot: emptyClosePreflight
+    },
+    select: { id: true }
+  })).id;
+}
+
+async function createActorLike(
+  actor: Awaited<ReturnType<typeof loginAsAdmin>>,
+  prefix: string
+): Promise<Awaited<ReturnType<typeof loginAsAdmin>>> {
+  const role = await prisma.role.findFirstOrThrow();
+  const suffix = randomUUID();
+  const user = await prisma.user.create({
+    data: {
+      displayName: "Usuario de prueba cierre",
+      userName: `${prefix}-${suffix}`,
+      normalizedUserName: `${prefix}-${suffix}`,
+      passwordHash: "test-only",
+      roleId: role.id
+    },
+    select: { id: true, userName: true, displayName: true }
+  });
+  return { ...actor, ...user };
+}
+
+const emptyClosePreflight = {
+  ready: true,
+  journalEntryCount: 0,
+  unbalancedEntryCount: 0,
+  headerLineMismatchCount: 0,
+  invalidEntryShapeCount: 0,
+  invalidLineCount: 0,
+  crossFiscalYearLineCount: 0,
+  draftInvoiceCount: 0,
+  invoiceWithoutEntryCount: 0,
+  unresolvedVerifactuInvoiceCount: 0,
+  draftPurchaseCount: 0,
+  purchaseWithoutEntryCount: 0,
+  pendingCustomerRefundCount: 0,
+  pendingSupplierRefundCount: 0,
+  unsupportedAccountBalanceCount: 0,
+  resultAccountReady: true
+};
+
 async function initializeForAccounting(): Promise<void> {
   const rawBody = JSON.stringify(baseCommand);
   const result = await initializePlatform(
@@ -611,6 +791,7 @@ async function createOpenFiscalYear(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.accountingFiscalYearCloseRequest.deleteMany(),
     prisma.invoiceDueDate.deleteMany(),
     prisma.invoice.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),

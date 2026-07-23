@@ -47,6 +47,10 @@ export type CloseAccountingFiscalYearResult =
           | "FISCAL_YEAR_NOT_FOUND"
           | "FISCAL_YEAR_NOT_OPEN"
           | "NEXT_FISCAL_YEAR_ALREADY_EXISTS"
+          | "FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED"
+          | "FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND"
+          | "FISCAL_YEAR_CLOSE_REQUEST_NOT_PENDING"
+          | "FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN"
           | "FISCAL_YEAR_CLOSE_PRECONDITIONS_FAILED"
           | "IDEMPOTENCY_KEY_REUSED";
         message: string;
@@ -59,8 +63,8 @@ export type AccountingFiscalYearCloseMutationContext = Pick<RequestContext, "cor
   requestHash: string;
 };
 
-export function hashAccountingFiscalYearClose(fiscalYearId: string): string {
-  return hashIdempotencyPayload("accounting-fiscal-year-close:v1", { fiscalYearId });
+export function hashAccountingFiscalYearCloseApproval(closeRequestId: string): string {
+  return hashIdempotencyPayload("accounting-fiscal-year-close-approve:v1", { closeRequestId });
 }
 
 const fiscalYearSelect = {
@@ -195,8 +199,8 @@ export async function createInitialAccountingFiscalYear(
   return { ok: true, status: 201, value: mapFiscalYear(result.fiscalYear) };
 }
 
-export async function closeAccountingFiscalYear(
-  fiscalYearId: string,
+export async function approveAccountingFiscalYearCloseRequest(
+  closeRequestId: string,
   actor: SessionUser,
   context: AccountingFiscalYearCloseMutationContext
 ): Promise<CloseAccountingFiscalYearResult> {
@@ -217,8 +221,37 @@ export async function closeAccountingFiscalYear(
       if (stored.requestHash !== context.requestHash || stored.responseStatus !== 200 || !replay.success) {
         return { kind: "idempotency-conflict" as const };
       }
-      if (replay.data.closed.id !== fiscalYearId) return { kind: "idempotency-conflict" as const };
       return { kind: "replayed" as const, value: replay.data };
+    }
+
+    await tx.$queryRaw(
+      Prisma.sql`SELECT "id" FROM "accounting_fiscal_year_close_requests"
+        WHERE "id" = ${closeRequestId}::uuid
+          AND "companyId" = ${installation.companyId}::uuid
+        FOR UPDATE`
+    );
+    const closeRequest = await tx.accountingFiscalYearCloseRequest.findFirst({
+      where: { id: closeRequestId, companyId: installation.companyId },
+      select: { id: true, fiscalYearId: true, status: true, requestedById: true }
+    });
+    if (!closeRequest) return { kind: "request-not-found" as const };
+    if (closeRequest.status !== "REQUESTED") return { kind: "request-not-pending" as const };
+    const fiscalYearId = closeRequest.fiscalYearId;
+    if (closeRequest.requestedById === actor.id) {
+      await tx.auditEvent.create({
+        data: {
+          eventType: "ACCOUNTING_FISCAL_YEAR_CLOSE_APPROVAL_DENIED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            closeRequestId: closeRequest.id,
+            fiscalYearId,
+            denialReason: "SELF_APPROVAL",
+            ...(context.correlationId ? { correlationId: context.correlationId } : {})
+          }
+        }
+      });
+      return { kind: "self-approval" as const };
     }
 
     await tx.$queryRaw(
@@ -249,6 +282,8 @@ export async function closeAccountingFiscalYear(
           actorType: "USER",
           payload: {
             actorUserId: actor.id,
+            requestedByUserId: closeRequest.requestedById,
+            closeRequestId: closeRequest.id,
             fiscalYearId: source.id,
             year: source.year,
             preflight,
@@ -404,6 +439,8 @@ export async function closeAccountingFiscalYear(
         actorType: "USER",
         payload: {
           actorUserId: actor.id,
+          requestedByUserId: closeRequest.requestedById,
+          closeRequestId: closeRequest.id,
           fiscalYearId: source.id,
           year: source.year,
           nextFiscalYearId: next.id,
@@ -424,6 +461,10 @@ export async function closeAccountingFiscalYear(
     });
 
     const responseValue = { closed: mapFiscalYear(closed), next: mapFiscalYear(next) };
+    await tx.accountingFiscalYearCloseRequest.update({
+      where: { id: closeRequest.id },
+      data: { status: "COMPLETED", approvedById: actor.id, approvedAt: now }
+    });
     await tx.idempotencyRecord.create({
       data: {
         key: context.idempotencyKey,
@@ -437,6 +478,9 @@ export async function closeAccountingFiscalYear(
   });
 
   if (result.kind === "not-found") return failure(404, "FISCAL_YEAR_NOT_FOUND", "El ejercicio no existe.");
+  if (result.kind === "request-not-found") return failure(404, "FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND", "La solicitud de cierre no existe.");
+  if (result.kind === "request-not-pending") return failure(409, "FISCAL_YEAR_CLOSE_REQUEST_NOT_PENDING", "La solicitud de cierre ya no esta pendiente.");
+  if (result.kind === "self-approval") return failure(409, "FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN", "La persona solicitante no puede aprobar su propio cierre.");
   if (result.kind === "not-open") return failure(409, "FISCAL_YEAR_NOT_OPEN", "Solo se puede cerrar un ejercicio abierto.");
   if (result.kind === "next-exists") return failure(409, "NEXT_FISCAL_YEAR_ALREADY_EXISTS", "El ejercicio siguiente ya existe; no se han sobrescrito sus cuentas.");
   if (result.kind === "idempotency-conflict") return failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave idempotente ya se uso con otra solicitud.");
@@ -556,6 +600,10 @@ function failure(
     | "FISCAL_YEAR_NOT_FOUND"
     | "FISCAL_YEAR_NOT_OPEN"
     | "NEXT_FISCAL_YEAR_ALREADY_EXISTS"
+    | "FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED"
+    | "FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND"
+    | "FISCAL_YEAR_CLOSE_REQUEST_NOT_PENDING"
+    | "FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN"
     | "IDEMPOTENCY_KEY_REUSED",
   message: string
 ): CloseAccountingFiscalYearResult {

@@ -38,6 +38,7 @@ Este directorio contiene las decisiones arquitectonicas relevantes de CriGestió
 | [ADR-0021](ADR-0021-prisma.md) | Aceptada | Usar Prisma como ORM y herramienta de migracion |
 | [ADR-0022](ADR-0022-jobs-node.md) | Aceptada | Usar jobs Node.js para trabajo de fondo |
 | [ADR-0023](ADR-0023-verifactu-modalidad-y-contrato-v1.md) | Aceptada | Adoptar modalidad VERI*FACTU y contrato fiscal V1 |
+| [ADR-0024](ADR-0024-maker-checker-cierre-contable.md) | Aceptada | Exigir maker-checker para el cierre contable |
 
 ## Reglas de mantenimiento
 

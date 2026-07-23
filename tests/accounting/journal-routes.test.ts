@@ -12,6 +12,8 @@ import {
 } from "@/app/api/accounting/journal-entries/route";
 import { GET as journalEntriesExportGet } from "@/app/api/accounting/journal-entries/export/route";
 import { POST as fiscalYearClosePost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close/route";
+import { POST as fiscalYearCloseRequestPost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close-requests/route";
+import { POST as fiscalYearCloseApprovePost } from "@/app/api/accounting/fiscal-year-close-requests/[requestId]/approve/route";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
@@ -300,7 +302,7 @@ describe("accounting journal HTTP contracts", () => {
     });
   });
 
-  it("validates and replays the fiscal year close HTTP contract", async () => {
+  it("blocks direct close and executes a maker-checker close idempotently", async () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
@@ -318,35 +320,57 @@ describe("accounting journal HTTP contracts", () => {
       ),
       routeContext("not-a-uuid")
     );
-    const missingIdempotencyResponse = await fiscalYearClosePost(
+    const directResponse = await fiscalYearClosePost(
       jsonRequest(
         `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
         {},
-        { csrfToken, idempotencyKey: null }
+        { csrfToken }
       ),
       routeContext(fiscalYear.id)
     );
+    const missingIdempotencyResponse = await fiscalYearCloseRequestPost(
+      jsonRequest(`/api/accounting/fiscal-years/${fiscalYear.id}/close-requests`, {}, { csrfToken, idempotencyKey: null }),
+      routeContext(fiscalYear.id)
+    );
+    const requestResponse = await fiscalYearCloseRequestPost(
+      jsonRequest(`/api/accounting/fiscal-years/${fiscalYear.id}/close-requests`, {}, { csrfToken }),
+      routeContext(fiscalYear.id)
+    );
+    const closeRequest = await requestResponse.json() as { id: string };
+    const selfApproval = await fiscalYearCloseApprovePost(
+      jsonRequest(`/api/accounting/fiscal-year-close-requests/${closeRequest.id}/approve`, {}, { csrfToken }),
+      { params: Promise.resolve({ requestId: closeRequest.id }) }
+    );
+
+    await createAccountingCloseApprover();
+    await loginWith("cierre-aprobador", limitedPassword);
+    const approverCsrf = await getCsrfToken();
     const idempotencyKey = randomUUID();
-    const closeRequest = () => jsonRequest(
-      `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
+    const approvalRequest = () => jsonRequest(
+      `/api/accounting/fiscal-year-close-requests/${closeRequest.id}/approve`,
       {},
-      { csrfToken, idempotencyKey }
+      { csrfToken: approverCsrf, idempotencyKey }
     );
-    const firstResponse = await fiscalYearClosePost(
-      closeRequest(),
-      routeContext(fiscalYear.id)
+    const firstResponse = await fiscalYearCloseApprovePost(
+      approvalRequest(),
+      { params: Promise.resolve({ requestId: closeRequest.id }) }
     );
-    const replayResponse = await fiscalYearClosePost(
-      closeRequest(),
-      routeContext(fiscalYear.id)
+    const replayResponse = await fiscalYearCloseApprovePost(
+      approvalRequest(),
+      { params: Promise.resolve({ requestId: closeRequest.id }) }
     );
 
     expect(invalidIdResponse.status).toBe(422);
     expect(await invalidIdResponse.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(directResponse.status).toBe(409);
+    expect(await directResponse.json()).toMatchObject({ code: "FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED" });
     expect(missingIdempotencyResponse.status).toBe(400);
     expect(await missingIdempotencyResponse.json()).toMatchObject({
       code: "IDEMPOTENCY_KEY_REQUIRED"
     });
+    expect(requestResponse.status).toBe(201);
+    expect(selfApproval.status).toBe(409);
+    expect(await selfApproval.json()).toMatchObject({ code: "FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN" });
     expect(firstResponse.status).toBe(200);
     expect(replayResponse.status).toBe(200);
     expect(await replayResponse.json()).toEqual(await firstResponse.json());
@@ -402,6 +426,30 @@ async function createAccountingViewer(): Promise<void> {
       displayName: "Usuario Contabilidad Lectura",
       userName: "contabilidad-lectura",
       normalizedUserName: "contabilidad-lectura",
+      passwordHash: await hashPassword(limitedPassword),
+      roleId: role.id
+    }
+  });
+}
+
+async function createAccountingCloseApprover(): Promise<void> {
+  const role = await prisma.role.create({
+    data: {
+      code: "AprobadorCierreContable",
+      name: "Aprobador cierre contable",
+      isProtected: false,
+      permissions: {
+        create: {
+          permission: { connect: { code: "Accounting.ApproveExerciseClosures" } }
+        }
+      }
+    }
+  });
+  await prisma.user.create({
+    data: {
+      displayName: "Aprobador cierre",
+      userName: "cierre-aprobador",
+      normalizedUserName: "cierre-aprobador",
       passwordHash: await hashPassword(limitedPassword),
       roleId: role.id
     }
@@ -470,6 +518,7 @@ async function initializeForRoutes(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.accountingFiscalYearCloseRequest.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),

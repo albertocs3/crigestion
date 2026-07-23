@@ -18,7 +18,9 @@ Permisos:
 | `Accounting.View` | Consultar cuentas y diario. |
 | `Accounting.ManageEntries` | Crear cuentas y asientos manuales. |
 | `Accounting.ManageExercises` | Crear la primera contabilidad. |
-| `Accounting.CloseExercises` | Cerrar ejercicios y crear el siguiente. |
+| `Accounting.RequestExerciseClosures` | Solicitar o cancelar el cierre de un ejercicio. |
+| `Accounting.ApproveExerciseClosures` | Aprobar y ejecutar el cierre solicitado por otra persona. |
+| `Accounting.CloseExercises` | Permiso legado; no habilita el cierre directo. |
 | `Suppliers.View` | Consultar el maestro de proveedores. |
 | `Suppliers.Manage` | Crear, editar y cambiar el estado de proveedores. |
 | `Purchases.View` | Consultar facturas de compra y vencimientos de proveedor. |
@@ -199,14 +201,24 @@ operativa es `/app/treasury/supplier-credits`.
 - `GET /api/accounting/fiscal-years`: requiere `Accounting.View`.
 - `POST /api/accounting/fiscal-years`: crea la primera contabilidad con PGC
   PYMES; requiere `Accounting.ManageExercises`, CSRF e `Idempotency-Key`.
-- `POST /api/accounting/fiscal-years/{fiscalYearId}/close`: regulariza grupos 6
-  y 7, genera el asiento de cierre patrimonial, crea el siguiente ejercicio,
-  copia sus cuentas y genera la apertura. Requiere `Accounting.CloseExercises`,
-  CSRF e `Idempotency-Key`. El identificador debe ser UUID y el ejercicio debe
-  pertenecer a la empresa inicializada. Una repeticion con la misma clave
-  devuelve el mismo resultado sin duplicar ejercicios ni asientos.
+- `POST /api/accounting/fiscal-years/{fiscalYearId}/close-requests`: ejecuta el
+  preflight y crea una solicitud pendiente. Requiere
+  `Accounting.RequestExerciseClosures`, CSRF e `Idempotency-Key`.
+- `POST /api/accounting/fiscal-year-close-requests/{requestId}/approve`: exige
+  `Accounting.ApproveExerciseClosures` y que el aprobador sea distinto del
+  solicitante. Repite el preflight y, en la misma transaccion, regulariza grupos
+  6 y 7, genera el cierre patrimonial, crea el siguiente ejercicio, copia sus
+  cuentas y genera la apertura. Requiere CSRF e `Idempotency-Key`.
+- `POST /api/accounting/fiscal-year-close-requests/{requestId}/cancel`: permite
+  cancelar una solicitud pendiente solo a quien la creo. Requiere
+  `Accounting.RequestExerciseClosures`, CSRF e `Idempotency-Key`.
+- `POST /api/accounting/fiscal-years/{fiscalYearId}/close`: compatibilidad
+  segura. No ejecuta ninguna mutacion y devuelve
+  `FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED`.
 
-El cierre ejecuta un preflight dentro de la misma transaccion y bajo bloqueo.
+La solicitud conserva el preflight inicial como evidencia. La aprobacion vuelve
+a ejecutar el preflight dentro de la transaccion de cierre y bajo bloqueo; el
+snapshot inicial nunca autoriza por si solo la operacion.
 Rechaza asientos descuadrados o incoherentes, lineas invalidas o cruzadas entre
 ejercicios, documentos en borrador o sin asiento, facturas con VeriFactu no
 resuelto, devoluciones pendientes, saldos no soportados de grupos 0/8/9 y la
@@ -220,6 +232,12 @@ Respuestas de conflicto especificas:
 | Estado | Codigo | Significado |
 |---|---|---|
 | `409` | `FISCAL_YEAR_CLOSE_PRECONDITIONS_FAILED` | El cuerpo incluye el informe `preflight` con los bloqueos detectados. |
+| `409` | `FISCAL_YEAR_CLOSE_ACTIVE_REQUEST_EXISTS` | Ya existe una solicitud pendiente para el ejercicio. |
+| `404` | `FISCAL_YEAR_CLOSE_REQUEST_NOT_FOUND` | La solicitud no existe en la empresa activa. |
+| `409` | `FISCAL_YEAR_CLOSE_REQUEST_NOT_PENDING` | La solicitud ya fue completada o cancelada. |
+| `409` | `FISCAL_YEAR_CLOSE_SELF_APPROVAL_FORBIDDEN` | Solicitante y aprobador son la misma persona. |
+| `409` | `FISCAL_YEAR_CLOSE_REQUEST_NOT_CANCELLABLE` | No esta pendiente o quien cancela no es el solicitante. |
+| `409` | `FISCAL_YEAR_CLOSE_APPROVAL_REQUIRED` | El endpoint directo esta deshabilitado. |
 | `409` | `NEXT_FISCAL_YEAR_ALREADY_EXISTS` | El siguiente ejercicio ya existe y no se modifica. |
 | `409` | `FISCAL_YEAR_NOT_OPEN` | El ejercicio ya no esta abierto. |
 | `409` | `IDEMPOTENCY_KEY_REUSED` | La clave pertenece a otra solicitud o su respuesta ya no es recuperable. |

@@ -7,7 +7,8 @@ import {
 } from "@/modules/accounting/application/journal";
 import { AccountingAccountCreateForm } from "@/modules/accounting/presentation/AccountingAccountCreateForm";
 import { listAccountingFiscalYears } from "@/modules/accounting/application/fiscalYears";
-import { AccountingFiscalYearCloseButton, AccountingFiscalYearCreateForm } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
+import { listFiscalYearCloseRequests } from "@/modules/accounting/application/fiscalYearCloseRequests";
+import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
@@ -61,20 +62,25 @@ export default async function AccountingPage({
     year: params.year,
     entryId: params.entryId
   });
-  const [accounts, entries, fiscalYears] = await Promise.all([
+  const [accounts, entries, fiscalYears, closeRequests] = await Promise.all([
     accountsPayload.success
       ? listAccountingAccounts(accountsPayload.data, authorization.user)
       : { accounts: [], nextCursor: null },
     entriesPayload.success
       ? listJournalEntries(entriesPayload.data, authorization.user)
       : { entries: [], nextCursor: null },
-    listAccountingFiscalYears()
+    listAccountingFiscalYears(),
+    listFiscalYearCloseRequests()
   ]);
   const canManageEntries = authorization.user.permissions.includes(
     "Accounting.ManageEntries"
   );
   const canManageExercises = authorization.user.permissions.includes("Accounting.ManageExercises");
-  const canCloseExercises = authorization.user.permissions.includes("Accounting.CloseExercises");
+  const canRequestClosures = authorization.user.permissions.includes("Accounting.RequestExerciseClosures");
+  const canApproveClosures = authorization.user.permissions.includes("Accounting.ApproveExerciseClosures");
+  const pendingCloseByFiscalYear = new Map(
+    closeRequests.filter((request) => request.status === "REQUESTED").map((request) => [request.fiscalYearId, request])
+  );
 
   return (
     <main className="shell">
@@ -157,7 +163,7 @@ export default async function AccountingPage({
         {fiscalYears.length > 0 ? (
           <div className="panel stack">
             <div><h2>Ejercicios contables</h2><p className="muted">Cada ejercicio conserva su propio plan de cuentas.</p></div>
-            <div className="table-wrap"><table><thead><tr><th>Ejercicio</th><th>Estado</th><th>Plan</th><th>Cuentas</th><th>Acciones</th></tr></thead><tbody>{fiscalYears.map((fiscalYear) => <tr key={fiscalYear.id}><td><strong>{fiscalYear.year}</strong></td><td>{fiscalYear.status === "OPEN" ? "Abierto" : "Cerrado"}</td><td>{fiscalYear.planCode} {fiscalYear.planVersion}</td><td>{fiscalYear.accountCount}</td><td>{fiscalYear.status === "OPEN" && canCloseExercises ? <AccountingFiscalYearCloseButton fiscalYearId={fiscalYear.id} year={fiscalYear.year} /> : "-"}</td></tr>)}</tbody></table></div>
+            <div className="table-wrap"><table><thead><tr><th>Ejercicio</th><th>Estado</th><th>Plan</th><th>Cuentas</th><th>Acciones</th></tr></thead><tbody>{fiscalYears.map((fiscalYear) => <tr key={fiscalYear.id}><td><strong>{fiscalYear.year}</strong></td><td>{fiscalYear.status === "OPEN" ? "Abierto" : "Cerrado"}</td><td>{fiscalYear.planCode} {fiscalYear.planVersion}</td><td>{fiscalYear.accountCount}</td><td>{fiscalYear.status === "OPEN" && (canRequestClosures || canApproveClosures) ? <AccountingFiscalYearCloseActions fiscalYearId={fiscalYear.id} year={fiscalYear.year} request={pendingCloseByFiscalYear.get(fiscalYear.id) ?? null} actorUserId={authorization.user.id} canRequest={canRequestClosures} canApprove={canApproveClosures} /> : "-"}</td></tr>)}</tbody></table></div>
           </div>
         ) : null}
 

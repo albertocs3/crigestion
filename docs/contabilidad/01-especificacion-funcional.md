@@ -612,7 +612,12 @@ de los asientos automaticos, los ejercicios origen y destino, el usuario, la
 correlacion y los recuentos de lineas. No se incluyen conceptos ni datos
 personales en el payload de auditoria.
 
-La operacion requiere `Accounting.CloseExercises`, CSRF, origen permitido e
+El cierre usa un circuito maker-checker. Una persona con
+`Accounting.RequestExerciseClosures` crea la solicitud despues de superar el
+preflight inicial. Otra persona, distinta por identidad aunque comparta rol,
+debe tener `Accounting.ApproveExerciseClosures` para aprobarla. La aprobacion
+repite el preflight y ejecuta regularizacion, cierre, copia y apertura dentro de
+la misma transaccion. Todas las mutaciones requieren CSRF, origen permitido e
 idempotencia. El cierre se serializa con bloqueos para impedir dobles aperturas.
 Las altas o cambios fechados de borradores de venta, compras y solicitudes de
 devolucion toman un bloqueo compatible sobre el ejercicio abierto. Si una de
@@ -620,11 +625,15 @@ estas mutaciones confirma primero, el preflight del cierre la ve; si el cierre
 confirma primero, la mutacion fechada se rechaza. Nunca pueden confirmarse ambos
 resultados dejando un documento pendiente dentro de un ejercicio cerrado.
 
-Limitacion vigente: la autorizacion del cierre todavia no implementa un circuito
-maker-checker de solicitud y aprobacion por usuarios distintos. Tampoco existe
-todavia una anulacion formal del cierre. Estas dos capacidades son obligatorias
-antes de habilitar el cierre en produccion. Hasta entonces el cierre solo se
-validara sobre copias aisladas y descartables de staging.
+Solo puede existir una solicitud pendiente por ejercicio. La persona solicitante
+puede cancelarla antes de la aprobacion, pero no puede aprobarla. PostgreSQL
+refuerza tanto esta separacion de actores como la unicidad de la solicitud
+pendiente. El endpoint directo de cierre queda deshabilitado.
+
+Limitacion vigente: todavia no existe una anulacion formal del cierre. Esta
+capacidad sigue siendo obligatoria antes de habilitar el cierre en produccion.
+Hasta entonces el flujo completo solo se validara sobre copias aisladas y
+descartables de staging.
 
 ## 22. Deshacer cierre
 

@@ -3,6 +3,7 @@
 import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
+import type { FiscalYearCloseRequestDto } from "@/modules/accounting/application/fiscalYearCloseRequests";
 
 type State = { status: "idle" | "submitting" | "success" | "error"; message?: string };
 type ClosePreflight = {
@@ -41,20 +42,42 @@ export function AccountingFiscalYearCreateForm({ defaultYear }: { defaultYear: n
   return <form className="form-grid" onSubmit={submit}><fieldset><legend>Crear primera contabilidad</legend><p className="muted">Se creara el ejercicio y se cargara el PGC PYMES con subcuentas operativas.</p><label>Ejercicio<input name="year" type="number" min={2000} max={2100} defaultValue={defaultYear} required /></label></fieldset><div className="form-actions"><button className="button" disabled={state.status === "submitting"} type="submit">{state.status === "submitting" ? "Creando..." : "Crear contabilidad"}</button>{state.message ? <p className={state.status === "error" ? "message error" : "message"}>{state.message}</p> : null}</div></form>;
 }
 
-export function AccountingFiscalYearCloseButton({ fiscalYearId, year }: { fiscalYearId: string; year: number }) {
+export function AccountingFiscalYearCloseActions({
+  fiscalYearId,
+  year,
+  request,
+  actorUserId,
+  canRequest,
+  canApprove
+}: {
+  fiscalYearId: string;
+  year: number;
+  request: FiscalYearCloseRequestDto | null;
+  actorUserId: string;
+  canRequest: boolean;
+  canApprove: boolean;
+}) {
   const router = useRouter();
   const [state, setState] = useState<State>({ status: "idle" });
   const idempotencyKey = useRef<string | null>(null);
-  async function close() {
-    if (!window.confirm(`Cerrar ${year}, copiar el plan y generar la apertura de ${year + 1}?`)) return;
+  async function mutate(action: "request" | "approve" | "cancel") {
+    const prompt = action === "request"
+      ? `Solicitar el cierre de ${year}? Otra persona debera aprobarlo.`
+      : action === "approve"
+        ? `Aprobar y ejecutar el cierre de ${year}? Se volvera a validar el ejercicio.`
+        : `Cancelar la solicitud de cierre de ${year}?`;
+    if (!window.confirm(prompt)) return;
     setState({ status: "submitting" });
     idempotencyKey.current ??= crypto.randomUUID();
     try {
-      const response = await fetch(`/api/accounting/fiscal-years/${fiscalYearId}/close`, { method: "POST", headers: { "Idempotency-Key": idempotencyKey.current, "X-CSRF-Token": await fetchCsrfToken() } });
+      const url = action === "request"
+        ? `/api/accounting/fiscal-years/${fiscalYearId}/close-requests`
+        : `/api/accounting/fiscal-year-close-requests/${request?.id}/${action}`;
+      const response = await fetch(url, { method: "POST", headers: { "Idempotency-Key": idempotencyKey.current, "X-CSRF-Token": await fetchCsrfToken() } });
       const body = (await response.json().catch(() => null)) as { message?: string; preflight?: ClosePreflight } | null;
       if (response.ok) {
         idempotencyKey.current = null;
-        setState({ status: "success", message: `Cierre completado. Ejercicio ${year + 1} abierto.` });
+        setState({ status: "success", message: action === "request" ? "Solicitud creada." : action === "approve" ? `Cierre completado. Ejercicio ${year + 1} abierto.` : "Solicitud cancelada." });
         router.refresh();
         return;
       }
@@ -67,11 +90,19 @@ export function AccountingFiscalYearCloseButton({ fiscalYearId, year }: { fiscal
     } catch {
       setState({
         status: "error",
-        message: "Resultado incierto. Reintenta para reutilizar la misma clave idempotente."
+        message: "Resultado incierto. Reintenta sin cambiar la accion para reutilizar la misma clave idempotente."
       });
     }
   }
-  return <div className="form-actions"><button className="button button-danger-soft" disabled={state.status === "submitting"} onClick={close} type="button">{state.status === "submitting" ? "Cerrando..." : `Cerrar ${year}`}</button>{state.message ? <span className={state.status === "error" ? "message error" : "message"}>{state.message}</span> : null}</div>;
+  const isRequester = request?.requestedById === actorUserId;
+  return <div className="form-actions">
+    {!request && canRequest ? <button className="button button-danger-soft" disabled={state.status === "submitting"} onClick={() => mutate("request")} type="button">{state.status === "submitting" ? "Solicitando..." : `Solicitar cierre ${year}`}</button> : null}
+    {request ? <span className="muted">Pendiente desde {new Date(request.requestedAt).toLocaleString("es-ES")}</span> : null}
+    {request && isRequester && canRequest ? <button className="button button-secondary" disabled={state.status === "submitting"} onClick={() => mutate("cancel")} type="button">Cancelar solicitud</button> : null}
+    {request && !isRequester && canApprove ? <button className="button button-danger-soft" disabled={state.status === "submitting"} onClick={() => mutate("approve")} type="button">{state.status === "submitting" ? "Validando..." : "Aprobar y cerrar"}</button> : null}
+    {request && isRequester && canApprove ? <span className="message">Debe aprobar otra persona.</span> : null}
+    {state.message ? <span className={state.status === "error" ? "message error" : "message"}>{state.message}</span> : null}
+  </div>;
 }
 
 function formatClosePreflight(report: ClosePreflight): string {
