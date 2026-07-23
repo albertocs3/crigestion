@@ -16,6 +16,7 @@ import { commitPreparedVerifactuAltaInTransaction } from "@/modules/billing/appl
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { isVerifactuPreparationAllowed } from "@/modules/platform/application/operationalEnvironment";
 import { isTfmDemoRuntimeEnvironment } from "@/modules/platform/application/tfmDemoEnvironment";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const defaultLimit = 25;
 const maxLimit = 100;
@@ -458,7 +459,8 @@ type CatalogTaxRateNotFoundResult = {
 export type CreateInvoiceDraftResult =
   | { ok: true; status: 201; value: InvoiceDetail }
   | CustomerNotFoundResult
-  | CustomerNotActiveResult;
+  | CustomerNotActiveResult
+  | InvoiceNotIssuableResult;
 
 export type AddInvoiceLineResult =
   | { ok: true; status: 201; value: InvoiceDetail }
@@ -623,6 +625,9 @@ export async function createInvoiceDraft(
     }
 
     const issueDate = parseDateOnly(command.issueDate);
+    if (!installation?.companyId || !await lockOpenFiscalYearForDatedMutation(tx, installation.companyId, issueDate)) {
+      return { kind: "fiscal-year-not-open" as const };
+    }
     const invoice = await tx.invoice.create({
       data: {
         companyId: installation?.companyId,
@@ -677,6 +682,10 @@ export async function createInvoiceDraft(
 
   if (result.kind === "customer-not-active") {
     return customerNotActive();
+  }
+
+  if (result.kind === "fiscal-year-not-open") {
+    return invoiceAccountingFiscalYearNotOpen();
   }
 
   return {

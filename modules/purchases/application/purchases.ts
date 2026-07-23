@@ -6,6 +6,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { calculateInvoiceLine, calculateInvoiceTaxSummaries, calculateInvoiceTotals } from "@/modules/billing/application/calculations";
 import type { SessionUser } from "@/modules/platform/application/auth";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const money = z.string().regex(/^\d{1,12}(\.\d{1,2})?$/);
@@ -139,6 +140,7 @@ export async function createPurchase(command: z.infer<typeof createPurchaseSchem
     const supplier = await tx.supplier.findFirst({ where: { id: command.supplierId, companyId, status: "ACTIVE" } });
     if (!supplier) return failure(404, "SUPPLIER_NOT_FOUND", "El proveedor activo no existe.");
     const dates = parsePurchaseDates(command); if (!dates.ok) return dates.failure;
+    if (!await lockOpenFiscalYearForDatedMutation(tx, companyId, dates.value.accountingDate)) return failure(409, "PURCHASE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha contable.");
     const row = await tx.purchaseInvoice.create({ data: { companyId, supplierId: supplier.id, supplierCodeSnapshot: supplier.code, supplierAccountingCodeSnapshot: supplier.accountingCode, supplierLegalNameSnapshot: supplier.legalName, supplierTaxIdLast4Snapshot: supplier.taxIdLast4, supplierTaxIdEncryptedSnapshot: supplier.taxIdEncrypted, supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber), ...dates.value, notes: command.notes, createdById: actor.id }, include: detailInclude });
     const value = mapDetail(row); await audit(tx, "PURCHASE_DRAFT_CREATED", actor, context, { companyId, purchaseInvoiceId: row.id, supplierId: supplier.id }); await persist(tx, actor, context, 201, value);
     return { ok: true, status: 201, value };
@@ -153,6 +155,7 @@ export async function updatePurchase(id: string, command: z.infer<typeof updateP
     if (locked.status !== "DRAFT") return failure(409, "PURCHASE_NOT_DRAFT", "La compra registrada no se puede modificar.");
     if (locked.version !== command.expectedVersion) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de guardar.");
     const dates = parsePurchaseDates(command); if (!dates.ok) return dates.failure;
+    if (!companyId || !await lockOpenFiscalYearForDatedMutation(tx, companyId, dates.value.accountingDate)) return failure(409, "PURCHASE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha contable.");
     const changed = await tx.purchaseInvoice.updateMany({ where: { id, version: command.expectedVersion, status: "DRAFT" }, data: { supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber), ...dates.value, notes: command.notes, updatedById: actor.id, version: { increment: 1 } } });
     if (changed.count !== 1) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de guardar.");
     const value = mapDetail(await findDetail(tx, id)); await audit(tx, "PURCHASE_DRAFT_UPDATED", actor, context, { companyId, purchaseInvoiceId: id }); await persist(tx, actor, context, 200, value); return { ok: true, status: 200, value };

@@ -9,13 +9,16 @@ import {
 } from "@/modules/accounting/application/journal";
 import {
   closeAccountingFiscalYear,
-  createInitialAccountingFiscalYear
+  createInitialAccountingFiscalYear,
+  hashAccountingFiscalYearClose
 } from "@/modules/accounting/application/fiscalYears";
 import {
   hashRequestBody,
   initializePlatform,
   type InitializeCommand
 } from "@/modules/platform/application/installation";
+import { createCustomer } from "@/modules/customers/application/customers";
+import { createInvoiceDraft } from "@/modules/billing/application/invoices";
 
 const adminPassword = "Cambiar-esta-clave-2026";
 const baseCommand: InitializeCommand = {
@@ -85,7 +88,11 @@ describe("accounting journal application service", () => {
       actor
     );
     expect(sale.ok).toBe(true);
-    const closed = await closeAccountingFiscalYear(created.value.id, actor);
+    const closeContext = {
+      idempotencyKey: `test-accounting-close:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearClose(created.value.id)
+    };
+    const closed = await closeAccountingFiscalYear(created.value.id, actor, closeContext);
 
     expect(closed.ok).toBe(true);
     if (!closed.ok) throw new Error(closed.error.code);
@@ -113,6 +120,277 @@ describe("accounting journal application service", () => {
     expect(automaticEntries.every((entry) => entry.totalDebit.equals(entry.totalCredit))).toBe(true);
     expect(automaticEntries[2]).toMatchObject({ origin: "OPENING", year: 2027 });
     expect(automaticEntries[2]?.lines).toHaveLength(2);
+
+    await prisma.accountingAccount.create({
+      data: {
+        fiscalYearId: closed.value.next.id,
+        code: "572000098",
+        name: "Cuenta creada despues del cierre",
+        type: "ACTIVO",
+        level: 9,
+        isPostable: true,
+        createdById: actor.id
+      }
+    });
+    const replay = await closeAccountingFiscalYear(created.value.id, actor, closeContext);
+    expect(replay).toEqual(closed);
+    expect((await prisma.accountingFiscalYear.findUniqueOrThrow({
+      where: { id: closed.value.next.id }, select: { _count: { select: { accounts: true } } }
+    }))._count.accounts).toBe(closed.value.next.accountCount + 1);
+    expect(await prisma.accountingJournalEntry.count({
+      where: { origin: { in: ["REGULARIZATION", "CLOSING", "OPENING"] } }
+    })).toBe(3);
+    expect(await prisma.auditEvent.count({
+      where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED" }
+    })).toBe(1);
+    const closeAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED" },
+      select: { payload: true }
+    });
+    expect(closeAudit.payload).toMatchObject({
+      actorUserId: actor.id,
+      fiscalYearId: created.value.id,
+      nextFiscalYearId: closed.value.next.id,
+      preflight: { ready: true, journalEntryCount: 1 },
+      automaticEntries: {
+        regularization: { number: "2026/000002" },
+        closing: { number: "2026/000003" },
+        opening: { number: "2027/000001" }
+      }
+    });
+    expect(JSON.stringify(closeAudit.payload)).not.toContain("Venta antes del cierre");
+
+    const conflict = await closeAccountingFiscalYear(created.value.id, actor, {
+      ...closeContext,
+      requestHash: "0".repeat(64)
+    });
+    expect(conflict).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "IDEMPOTENCY_KEY_REUSED" }
+    });
+  });
+
+  it("does not close a fiscal year owned by another company", async () => {
+    const actor = await loginAsAdmin();
+    const foreignCompany = await prisma.company.create({
+      data: {
+        legalName: "Empresa ajena",
+        taxId: "B87654321",
+        email: "foreign@example.test"
+      }
+    });
+    const foreignYear = await prisma.accountingFiscalYear.create({
+      data: {
+        companyId: foreignCompany.id,
+        year: 2026,
+        startDate: new Date("2026-01-01T00:00:00.000Z"),
+        endDate: new Date("2026-12-31T00:00:00.000Z"),
+        planCode: "PGC_PYMES",
+        planVersion: "2021.1",
+        createdById: actor.id
+      }
+    });
+
+    const result = await closeAccountingFiscalYear(foreignYear.id, actor, {
+      idempotencyKey: `test-foreign-close:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearClose(foreignYear.id)
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 404,
+      error: { code: "FISCAL_YEAR_NOT_FOUND", message: "El ejercicio no existe." }
+    });
+    expect(await prisma.accountingFiscalYear.findUniqueOrThrow({
+      where: { id: foreignYear.id },
+      select: { status: true }
+    })).toEqual({ status: "OPEN" });
+  });
+
+  it("blocks closing when the preflight finds unsupported balances", async () => {
+    const actor = await loginAsAdmin();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+      where: { year: 2026 }
+    });
+    const [bank, unsupported] = await Promise.all([
+      createAccountingAccount(
+        { code: "572000001", name: "Banco UAT", type: "ACTIVO", level: 9, isPostable: true },
+        actor
+      ),
+      createAccountingAccount(
+        { code: "099000000", name: "Cuenta no soportada", type: "OTROS", level: 9, isPostable: true },
+        actor
+      )
+    ]);
+    if (!bank.ok || !unsupported.ok) throw new Error("Could not create preflight accounts.");
+    const entry = await createManualJournalEntry(
+      {
+        accountingDate: "2026-07-10",
+        concept: "Saldo grupo 0",
+        lines: [
+          { accountId: bank.value.id, concept: "Banco", debit: "10.00", credit: "0.00" },
+          { accountId: unsupported.value.id, concept: "Grupo 0", debit: "0.00", credit: "10.00" }
+        ]
+      },
+      actor
+    );
+    expect(entry.ok).toBe(true);
+
+    const result = await closeAccountingFiscalYear(fiscalYear.id, actor, {
+      idempotencyKey: `test-preflight-close:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearClose(fiscalYear.id),
+      correlationId: "accounting-close-preflight-0001"
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      error: {
+        code: "FISCAL_YEAR_CLOSE_PRECONDITIONS_FAILED",
+        preflight: { ready: false, unsupportedAccountBalanceCount: 1 }
+      }
+    });
+    expect(await prisma.accountingFiscalYear.findUniqueOrThrow({
+      where: { id: fiscalYear.id }, select: { status: true }
+    })).toEqual({ status: "OPEN" });
+    expect(await prisma.accountingFiscalYear.count({ where: { year: 2027 } })).toBe(0);
+    expect(await prisma.accountingJournalEntry.count({
+      where: { origin: { in: ["REGULARIZATION", "CLOSING", "OPENING"] } }
+    })).toBe(0);
+    expect(await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSE_BLOCKED" },
+      select: { payload: true }
+    })).toMatchObject({
+      payload: {
+        actorUserId: actor.id,
+        fiscalYearId: fiscalYear.id,
+        correlationId: "accounting-close-preflight-0001",
+        preflight: { unsupportedAccountBalanceCount: 1, ready: false }
+      }
+    });
+  });
+
+  it("serializes concurrent close requests without duplicate years or entries", async () => {
+    const actor = await loginAsAdmin();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+      where: { year: 2026 }
+    });
+    const contexts = [randomUUID(), randomUUID()].map((key) => ({
+      idempotencyKey: `test-concurrent-close:${key}`,
+      requestHash: hashAccountingFiscalYearClose(fiscalYear.id)
+    }));
+
+    const results = await Promise.all(
+      contexts.map((context) => closeAccountingFiscalYear(fiscalYear.id, actor, context))
+    );
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toEqual([
+      {
+        ok: false,
+        status: 409,
+        error: {
+          code: "FISCAL_YEAR_NOT_OPEN",
+          message: "Solo se puede cerrar un ejercicio abierto."
+        }
+      }
+    ]);
+    expect(await prisma.accountingFiscalYear.count({ where: { year: 2027 } })).toBe(1);
+    expect(await prisma.auditEvent.count({
+      where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED" }
+    })).toBe(1);
+  });
+
+  it("rolls back without automatic entries when the next fiscal year already exists", async () => {
+    const actor = await loginAsAdmin();
+    const installation = await prisma.installation.findFirstOrThrow();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+      where: { year: 2026 }
+    });
+    await prisma.accountingFiscalYear.create({
+      data: {
+        companyId: installation.companyId!,
+        year: 2027,
+        startDate: new Date("2027-01-01T00:00:00.000Z"),
+        endDate: new Date("2027-12-31T00:00:00.000Z"),
+        status: "CLOSED",
+        closedAt: new Date("2028-01-01T00:00:00.000Z"),
+        closedById: actor.id,
+        planCode: "PGC_PYMES",
+        planVersion: "2021.1",
+        createdById: actor.id
+      }
+    });
+
+    const result = await closeAccountingFiscalYear(fiscalYear.id, actor, {
+      idempotencyKey: `test-next-exists:${randomUUID()}`,
+      requestHash: hashAccountingFiscalYearClose(fiscalYear.id)
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "NEXT_FISCAL_YEAR_ALREADY_EXISTS" }
+    });
+    expect(await prisma.accountingFiscalYear.findUniqueOrThrow({
+      where: { id: fiscalYear.id }, select: { status: true }
+    })).toEqual({ status: "OPEN" });
+    expect(await prisma.accountingJournalEntry.count({
+      where: { origin: { in: ["REGULARIZATION", "CLOSING", "OPENING"] } }
+    })).toBe(0);
+  });
+
+  it("serializes closing against creation of a dated invoice draft", async () => {
+    const actor = await loginAsAdmin();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+      where: { year: 2026 }
+    });
+    const customer = await createCustomer({
+      type: "COMPANY",
+      legalName: "Cliente carrera cierre SL",
+      taxId: "B12345674",
+      fiscalTreatment: "DOMESTIC",
+      email: "cierre@example.test",
+      fiscalAddressLine: "Calle Prueba 1",
+      fiscalPostalCode: "28001",
+      fiscalCity: "Madrid",
+      fiscalProvince: "Madrid",
+      fiscalCountry: "ES",
+      defaultPaymentMethod: "BANK_TRANSFER",
+      paymentTermsType: "IMMEDIATE",
+      paymentDays: null,
+      paymentFixedDay: null,
+      creditLimit: null,
+    }, actor);
+    if (!customer.ok) throw new Error(customer.error.code);
+
+    const [draft, close] = await Promise.all([
+      createInvoiceDraft({
+        customerId: customer.value.id,
+        issueDate: "2026-12-31",
+        operationDate: "2026-12-31",
+        notes: null
+      }, actor),
+      closeAccountingFiscalYear(fiscalYear.id, actor, {
+        idempotencyKey: `test-draft-race:${randomUUID()}`,
+        requestHash: hashAccountingFiscalYearClose(fiscalYear.id)
+      })
+    ]);
+
+    expect(draft.ok && close.ok).toBe(false);
+    if (draft.ok) {
+      expect(close).toMatchObject({
+        ok: false,
+        error: {
+          code: "FISCAL_YEAR_CLOSE_PRECONDITIONS_FAILED",
+          preflight: { draftInvoiceCount: 1 }
+        }
+      });
+    } else {
+      expect(draft.error.code).toBe("INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN");
+      expect(close.ok).toBe(true);
+    }
   });
 
   it("creates postable accounts and balanced manual journal entries", async () => {
@@ -333,6 +611,8 @@ async function createOpenFiscalYear(): Promise<void> {
 
 async function resetPlatformTables(): Promise<void> {
   await prisma.$transaction([
+    prisma.invoiceDueDate.deleteMany(),
+    prisma.invoice.deleteMany(),
     prisma.accountingJournalLine.deleteMany(),
     prisma.accountingJournalEntry.deleteMany(),
     prisma.accountingAccount.deleteMany(),
@@ -348,6 +628,8 @@ async function resetPlatformTables(): Promise<void> {
     prisma.customerRemittanceLine.deleteMany(),
 
     prisma.customerRemittance.deleteMany(),
+
+    prisma.customer.deleteMany(),
 
     prisma.user.deleteMany(),
     prisma.rolePermission.deleteMany(),

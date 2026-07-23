@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { normalizeDateOnlyInput } from "@/modules/billing/application/invoices";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const defaultLimit = 25;
 const maxLimit = 100;
@@ -254,10 +255,12 @@ export async function requestCustomerCreditRefund(creditId: string, command: Req
     if (amount.gt(mapped.availableAmount)) return conflict("CUSTOMER_CREDIT_AMOUNT_EXCEEDS_AVAILABLE", "El importe supera el saldo disponible del credito.");
     const bankAccount = await tx.bankAccount.findFirst({ where: { id: command.bankAccountId, companyId: credit.companyId, status: "ACTIVE" }, select: { id: true } });
     if (!bankAccount) return conflict("CUSTOMER_CREDIT_REFUND_BANK_ACCOUNT_NOT_AVAILABLE", "La cuenta bancaria no esta disponible.");
-    if (parseDateOnly(command.requestedDate) < credit.sourceRectificationInvoice.issueDate) return conflict("CUSTOMER_CREDIT_REFUND_DATE_INVALID", "La fecha no puede ser anterior a la rectificativa.");
+    const requestedDate = parseDateOnly(command.requestedDate);
+    if (requestedDate < credit.sourceRectificationInvoice.issueDate) return conflict("CUSTOMER_CREDIT_REFUND_DATE_INVALID", "La fecha no puede ser anterior a la rectificativa.");
+    if (!await lockOpenFiscalYearForDatedMutation(tx, credit.companyId, requestedDate)) return conflict("CUSTOMER_CREDIT_REFUND_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha de la solicitud.");
     const refund = await tx.customerCreditRefund.create({ data: {
       creditId, companyId: credit.companyId, customerId: credit.customerId, bankAccountId: bankAccount.id,
-      requestedDate: parseDateOnly(command.requestedDate), amount, reasonCode: command.reasonCode,
+      requestedDate, amount, reasonCode: command.reasonCode,
       reference: command.reference, notes: command.notes, requestedById: actor.id
     }, select: { id: true } });
     await tx.auditEvent.create({ data: { eventType: "CUSTOMER_CREDIT_REFUND_REQUESTED", actorType: "USER", payload: {

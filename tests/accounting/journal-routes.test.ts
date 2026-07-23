@@ -11,6 +11,7 @@ import {
   POST as journalEntriesPost
 } from "@/app/api/accounting/journal-entries/route";
 import { GET as journalEntriesExportGet } from "@/app/api/accounting/journal-entries/export/route";
+import { POST as fiscalYearClosePost } from "@/app/api/accounting/fiscal-years/[fiscalYearId]/close/route";
 import { prisma } from "@/lib/prisma";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import {
@@ -297,6 +298,62 @@ describe("accounting journal HTTP contracts", () => {
     expect(await unauthenticatedResponse.json()).toMatchObject({
       code: "UNAUTHENTICATED"
     });
+  });
+
+  it("validates and replays the fiscal year close HTTP contract", async () => {
+    await loginAsAdmin();
+    const csrfToken = await getCsrfToken();
+    const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({
+      where: { year: 2026 }
+    });
+    const routeContext = (fiscalYearId: string) => ({
+      params: Promise.resolve({ fiscalYearId })
+    });
+
+    const invalidIdResponse = await fiscalYearClosePost(
+      jsonRequest(
+        "/api/accounting/fiscal-years/not-a-uuid/close",
+        {},
+        { csrfToken }
+      ),
+      routeContext("not-a-uuid")
+    );
+    const missingIdempotencyResponse = await fiscalYearClosePost(
+      jsonRequest(
+        `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
+        {},
+        { csrfToken, idempotencyKey: null }
+      ),
+      routeContext(fiscalYear.id)
+    );
+    const idempotencyKey = randomUUID();
+    const closeRequest = () => jsonRequest(
+      `/api/accounting/fiscal-years/${fiscalYear.id}/close`,
+      {},
+      { csrfToken, idempotencyKey }
+    );
+    const firstResponse = await fiscalYearClosePost(
+      closeRequest(),
+      routeContext(fiscalYear.id)
+    );
+    const replayResponse = await fiscalYearClosePost(
+      closeRequest(),
+      routeContext(fiscalYear.id)
+    );
+
+    expect(invalidIdResponse.status).toBe(422);
+    expect(await invalidIdResponse.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(missingIdempotencyResponse.status).toBe(400);
+    expect(await missingIdempotencyResponse.json()).toMatchObject({
+      code: "IDEMPOTENCY_KEY_REQUIRED"
+    });
+    expect(firstResponse.status).toBe(200);
+    expect(replayResponse.status).toBe(200);
+    expect(await replayResponse.json()).toEqual(await firstResponse.json());
+    expect(await prisma.accountingFiscalYear.count({ where: { year: 2027 } })).toBe(1);
+    expect(await prisma.auditEvent.count({
+      where: { eventType: "ACCOUNTING_FISCAL_YEAR_CLOSED" }
+    })).toBe(1);
   });
 });
 

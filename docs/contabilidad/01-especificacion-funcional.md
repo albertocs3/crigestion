@@ -578,8 +578,9 @@ El ejercicio coincide normalmente con el año natural.
 ### Reglas
 
 - Se crea manualmente.
-- Normalmente existe un único ejercicio abierto.
-- Durante el cierre pueden coexistir el ejercicio anterior y el siguiente abiertos.
+- Existe un unico ejercicio abierto por empresa, reforzado en PostgreSQL.
+- El cierre cambia el ejercicio anterior a cerrado y crea el siguiente abierto
+  dentro de la misma transaccion; no hay un estado confirmado con ambos abiertos.
 - No existen cierres ni bloqueos mensuales o trimestrales.
 - Un ejercicio cerrado impide modificar documentos y asientos.
 
@@ -606,9 +607,24 @@ con nuevos identificadores y referencia a la cuenta de origen. No copia
 apuntes ni saldos. Si el ejercicio siguiente ya existe, el cierre se rechaza y
 no sobrescribe su plan contable.
 
-Se conservará un informe con validaciones, resultados, usuario y fecha.
+Se conserva en auditoria el informe de preflight, los identificadores y numeros
+de los asientos automaticos, los ejercicios origen y destino, el usuario, la
+correlacion y los recuentos de lineas. No se incluyen conceptos ni datos
+personales en el payload de auditoria.
 
-Los asientos automáticos de regularización, cierre y apertura solo pueden modificarse por el administrador mientras el ejercicio lo permita.
+La operacion requiere `Accounting.CloseExercises`, CSRF, origen permitido e
+idempotencia. El cierre se serializa con bloqueos para impedir dobles aperturas.
+Las altas o cambios fechados de borradores de venta, compras y solicitudes de
+devolucion toman un bloqueo compatible sobre el ejercicio abierto. Si una de
+estas mutaciones confirma primero, el preflight del cierre la ve; si el cierre
+confirma primero, la mutacion fechada se rechaza. Nunca pueden confirmarse ambos
+resultados dejando un documento pendiente dentro de un ejercicio cerrado.
+
+Limitacion vigente: la autorizacion del cierre todavia no implementa un circuito
+maker-checker de solicitud y aprobacion por usuarios distintos. Tampoco existe
+todavia una anulacion formal del cierre. Estas dos capacidades son obligatorias
+antes de habilitar el cierre en produccion. Hasta entonces el cierre solo se
+validara sobre copias aisladas y descartables de staging.
 
 ## 22. Deshacer cierre
 

@@ -202,7 +202,27 @@ operativa es `/app/treasury/supplier-credits`.
 - `POST /api/accounting/fiscal-years/{fiscalYearId}/close`: regulariza grupos 6
   y 7, genera el asiento de cierre patrimonial, crea el siguiente ejercicio,
   copia sus cuentas y genera la apertura. Requiere `Accounting.CloseExercises`,
-  CSRF e `Idempotency-Key`.
+  CSRF e `Idempotency-Key`. El identificador debe ser UUID y el ejercicio debe
+  pertenecer a la empresa inicializada. Una repeticion con la misma clave
+  devuelve el mismo resultado sin duplicar ejercicios ni asientos.
+
+El cierre ejecuta un preflight dentro de la misma transaccion y bajo bloqueo.
+Rechaza asientos descuadrados o incoherentes, lineas invalidas o cruzadas entre
+ejercicios, documentos en borrador o sin asiento, facturas con VeriFactu no
+resuelto, devoluciones pendientes, saldos no soportados de grupos 0/8/9 y la
+ausencia de una cuenta `129000000` activa e imputable cuando sea necesaria.
+Los productores de borradores y devoluciones pendientes usan la misma barrera
+del ejercicio, evitando inserciones concurrentes que pudieran escapar al
+preflight.
+
+Respuestas de conflicto especificas:
+
+| Estado | Codigo | Significado |
+|---|---|---|
+| `409` | `FISCAL_YEAR_CLOSE_PRECONDITIONS_FAILED` | El cuerpo incluye el informe `preflight` con los bloqueos detectados. |
+| `409` | `NEXT_FISCAL_YEAR_ALREADY_EXISTS` | El siguiente ejercicio ya existe y no se modifica. |
+| `409` | `FISCAL_YEAR_NOT_OPEN` | El ejercicio ya no esta abierto. |
+| `409` | `IDEMPOTENCY_KEY_REUSED` | La clave pertenece a otra solicitud o su respuesta ya no es recuperable. |
 
 ## 2. `GET /api/accounting/accounts`
 

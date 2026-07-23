@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import type { SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { refreshPurchasePaymentStatus } from "@/modules/purchases/application/purchases";
+import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/application/fiscalYearMutationBarrier";
 
 const dateOnlySchema = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/).refine(isValidDateOnly, "La fecha no es valida.");
 const moneySchema = z.string().trim().regex(/^\d{1,12}\.\d{2}$/).refine((value) => new Prisma.Decimal(value).gt(0), "El importe debe ser positivo.");
@@ -152,6 +153,7 @@ export async function requestSupplierCreditRefund(creditId: string, command: Req
     if (amount.gt(mapped.availableAmount)) return conflict("SUPPLIER_CREDIT_AMOUNT_EXCEEDS_AVAILABLE", "El importe supera el saldo disponible del credito.");
     const requestedDate = parseDateOnly(command.requestedDate);
     if (requestedDate < credit.sourceRectificationPurchaseInvoice.issueDate) return conflict("SUPPLIER_CREDIT_REFUND_DATE_INVALID", "La fecha no puede ser anterior a la rectificativa.");
+    if (!await lockOpenFiscalYearForDatedMutation(tx, credit.companyId, requestedDate)) return conflict("SUPPLIER_CREDIT_REFUND_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha de la solicitud.");
     if (command.paymentMethod === "BANK_TRANSFER") {
       const bank = await tx.bankAccount.findFirst({ where: { id: command.bankAccountId!, companyId: credit.companyId, status: "ACTIVE", currency: credit.currency }, select: { id: true } });
       if (!bank) return conflict("SUPPLIER_CREDIT_REFUND_BANK_ACCOUNT_NOT_AVAILABLE", "La cuenta bancaria no esta disponible.");

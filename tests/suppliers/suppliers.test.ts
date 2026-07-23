@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { login } from "@/modules/platform/application/auth";
-import { closeAccountingFiscalYear } from "@/modules/accounting/application/fiscalYears";
+import { closeAccountingFiscalYear, hashAccountingFiscalYearClose } from "@/modules/accounting/application/fiscalYears";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
 import { createSupplier, listSuppliers, supplierRequestHash, updateSupplier, updateSupplierStatus } from "@/modules/suppliers/application/suppliers";
 
@@ -59,7 +59,7 @@ describe("suppliers application service", () => {
 
   it("uses optimistic concurrency and renames only accounts in open years", async () => {
     const actor = await admin(); const command = payload(); const created = await createSupplier(command, actor, context("create", command)); if (!created.ok) throw new Error(created.error.code);
-    const firstYear = await prisma.accountingFiscalYear.findFirstOrThrow(); const closed = await closeAccountingFiscalYear(firstYear.id, actor); expect(closed.ok).toBe(true);
+    const firstYear = await prisma.accountingFiscalYear.findFirstOrThrow(); const closed = await closeAccountingFiscalYear(firstYear.id, actor, { idempotencyKey: `test-supplier-close:${randomUUID()}`, requestHash: hashAccountingFiscalYearClose(firstYear.id) }); expect(closed.ok).toBe(true);
     const update = updatePayload(created.value.version, { legalName: "Proveedor Renombrado SL" }); const result = await updateSupplier(created.value.id, update, actor, context("update", update));
     expect(result).toMatchObject({ ok: true, value: { version: 2, legalName: "Proveedor Renombrado SL" } });
     const accounts = await prisma.accountingAccount.findMany({ where: { supplierId: created.value.id }, orderBy: { fiscalYear: { year: "asc" } }, select: { id: true, sourceAccountId: true, code: true, name: true } }); expect(accounts.map((row) => row.name)).toEqual(["Proveedor Demo SL", "Proveedor Renombrado SL"]); expect(accounts[1]).toMatchObject({ sourceAccountId: accounts[0]!.id, code: "400000001" });
