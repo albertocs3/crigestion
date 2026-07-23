@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireAuthenticatedPage } from "@/modules/platform/presentation/pageAccess";
 import { ChangePasswordForm } from "@/modules/platform/presentation/ChangePasswordForm";
+import { resolveTreasuryHomeHref } from "@/modules/platform/presentation/homeNavigation";
 import { LogoutButton } from "@/modules/platform/presentation/LogoutButton";
 
 export const dynamic = "force-dynamic";
@@ -8,6 +9,7 @@ export const dynamic = "force-dynamic";
 export default async function AppHomePage() {
   const session = await requireAuthenticatedPage();
   const permissions = session.user.permissions;
+  const treasuryHref = resolveTreasuryHomeHref(permissions);
   const utilities = [
     permissions.includes("Platform.ManageUsers")
       ? { href: "/app/users", label: "Gestionar usuarios" }
@@ -56,8 +58,8 @@ export default async function AppHomePage() {
     permissions.includes("Billing.View")
       ? { href: "/app/invoices", label: "Facturas", tone: "billing" }
       : null,
-    permissions.includes("Treasury.ManagePayments") || permissions.includes("Treasury.ManageSupplierPayments") || permissions.includes("Treasury.ViewSupplierPayments")
-      ? { href: "/app/treasury", label: "Tesoreria", tone: "treasury" }
+    treasuryHref
+      ? { href: treasuryHref, label: "Tesoreria", tone: "treasury" }
       : null,
     permissions.includes("Accounting.View")
       ? { href: "/app/accounting", label: "Contabilidad", tone: "accounting" }
