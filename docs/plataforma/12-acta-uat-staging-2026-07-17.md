@@ -658,3 +658,36 @@ puede leer `_prisma_migrations`, modificar `audit_events` ni obtener `UPDATE`
 sobre secuencias. No quedaron bases, dumps ni listeners temporales y el journal
 no registro errores durante la ventana. Produccion permanecio fuera de alcance.
 Produccion no se consulto ni se modifico.
+
+## 20. UAT aislada de rechazo y caducidad de reapertura en rc6
+
+El 2026-07-23 se verificaron checksum y catalogo del backup
+`crigestion_staging-auto-20260723T161844Z.dump`, se restauro en una base
+efimera `crigestion_reopen_rc6_*` y se aplicaron las migraciones 95 y 96 de la
+release activa. El ejecutor uso el codigo real de rc6, Prisma, transacciones,
+triggers PostgreSQL y el rol runtime; no se levanto ningun listener ni worker
+adicional.
+
+El preflight detecto una factura sintetica con VeriFactu sin resolver. Se
+ajusto un unico estado a `ACCEPTED` exclusivamente en la copia y se registro
+`UAT_FIXTURE_ADJUSTED`. A continuacion se comprobo:
+
+- cierre maker-checker de 2026 y apertura de 2027;
+- denegacion del autorrechazo por el maker;
+- rechazo por un checker distinto y replay idempotente identico;
+- inmutabilidad PostgreSQL de la evidencia terminal `REJECTED`;
+- creacion de una nueva solicitud tras el rechazo;
+- materializacion transaccional de `EXPIRED` al superar las 168 horas;
+- denegacion de la aprobacion caducada con
+  `FISCAL_YEAR_REOPEN_REQUEST_EXPIRED`;
+- eventos unicos de denegacion, rechazo y caducidad `SYSTEM`, sin claves
+  sensibles, contrasenas, tokens, secretos ni IBAN;
+- denegacion del rol runtime al intentar modificar `audit_events`.
+
+En la copia, el resultado anterior al descarte fue 2026 `CLOSED` y 2027
+`OPEN`, sin ejecutar una reapertura. El `trap` elimino la base y el dump
+temporales; la verificacion posterior confirmo ausencia de bases UAT, ficheros
+y listeners 3102/3103. Staging principal permanecio con 96 migraciones, 2026
+`OPEN` y cero solicitudes de cierre o reapertura. El health local mantuvo
+`database`, `verifactu` y `worker` en `ok`. Produccion no se consulto ni se
+modifico.
