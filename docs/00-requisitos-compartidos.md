@@ -438,6 +438,6 @@ Las pantallas de comunicaciones, incidencias, actuaciones y observaciones mostra
 - Procedimiento técnico de bloqueo y anonimización.
 - Algoritmo decimal exacto por tipo de documento.
 - Gestión de ajustes de céntimos en documentos fiscales.
-- Sistema de entrega de notificaciones en escritorio.
+- Sistema de entrega de notificaciones web; ADR-0016 permanece pendiente de revision.
 - Política técnica de copias de seguridad.
 - Base jurídica y análisis de impacto de protección de datos.

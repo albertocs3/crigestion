@@ -15,6 +15,31 @@ Se integra con:
 
 El módulo utilizará los datos maestros comunes y no mantendrá copias independientes de clientes, usuarios, productos ni formas de pago.
 
+### Estado de implementacion (corte local 2026-08-06)
+
+La rebanada tecnica local implementa alta, listado, detalle, edicion atomica de
+borradores, activacion manual, cancelacion inmediata, registro o retirada de
+una baja futura, una barrera interna capaz de aplicarla antes de renovar y la
+vista previa operativa que agrupa candidatos y reserva borradores completos de
+factura de renovacion.
+Incluye numeracion anual segura
+ante concurrencia, snapshots de catalogo e impuestos, precios fijos o por
+licencia, permisos separados para datos economicos y cancelacion, idempotencia,
+historial append-only, inmutabilidad PostgreSQL y auditoria. El contrato
+autoritativo esta en [Contratos HTTP](02-contratos-api.md).
+
+Planes, cambios contractuales programados, edicion economica de la vista previa,
+gestion avanzada de exclusiones y reactivacion siguen pendientes. El runner
+manual ya aplica
+la baja vencida antes de reservar y delega en Facturacion la creacion de factura,
+lineas, impuestos y vencimiento usando snapshots contractuales. El ledger
+`RESERVED` evita duplicar empresa, suscripcion y periodo. La confirmacion
+interna emite la factura, crea el asiento y la evidencia VeriFactu, cambia todo
+el grupo a `BILLED` y avanza cada `nextRenewalDate` con una sola transaccion.
+La emision generica permanece bloqueada para el origen `SUBSCRIPTION`. El
+usuario puede confirmar la reserva con permisos segregados o liberarla con
+motivo; ambas operaciones son idempotentes, auditadas y serializadas entre si.
+
 ## 1. Propósito
 
 El módulo permitirá crear, mantener, renovar y facturar contratos periódicos de software y servicios.
@@ -451,7 +476,7 @@ Mostrará:
 - Fecha del intento.
 - Usuario.
 - Detalle del error.
-- Número de intentos.
+- Número de preparaciones del expediente; las confirmaciones quedan en el ledger detallado.
 
 Permitirá:
 
@@ -477,6 +502,29 @@ Si vuelve a fallar:
 
 Una suscripción pendiente no se incluirá automáticamente en vistas previas ordinarias.
 
+### Estado de implementacion local (corte 2026-08-06)
+
+La exclusion manual, la cola independiente paginada y la seleccion filtrada
+mediante `includePending=true`, el
+reintento por identificador de expediente y los cierres por facturacion o baja
+ya estan implementados. La fecha, actor, motivo, contador y ultimo codigo de
+error forman parte de la proyeccion operativa; el motivo completo requiere el
+permiso `Subscriptions.ManageRenewalExclusions`.
+
+El corte posterior incorpora ledger append-only de intentos y apertura
+all-or-none de pendientes cuando una preparacion completamente aceptada queda
+bloqueada por cliente inactivo o ejercicio contable cerrado. Los errores de
+seguridad, contrato HTTP, seleccion, version, concurrencia y rate limit nunca
+alteran el estado contractual. Una confirmacion contable o VeriFactu fallida
+conserva el borrador y sus reservas para reintento y solo registra el intento.
+
+La activacion administrativa sin facturar se implementa como condonacion
+irreversible de un unico periodo, con permiso dedicado, justificacion y avance
+canonico. Conserva una valoracion economica inmutable del periodo para control
+de ingresos condonados, aunque no genera factura, asiento ni VeriFactu. Queda
+fuera la clasificacion de nuevos bloqueos automaticos distintos
+de los dos codigos estables anteriores.
+
 ## 15. Resultado del proceso
 
 Al finalizar se mostrará y conservará un informe con:
@@ -489,6 +537,7 @@ Al finalizar se mostrará y conservará un informe con:
 - Errores de validación.
 - Errores de generación.
 - Importes totales.
+- Periodos condonados e importes de sus snapshots economicos.
 - Usuario y fecha de ejecución.
 
 ## 16. Avisos internos

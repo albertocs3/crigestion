@@ -130,7 +130,8 @@ Orden recomendado:
     `VERIFACTU_WORKER_EXPECTED_DATABASE`, `VERIFACTU_MIGRATION_DATABASE_URL` y
     `VERIFACTU_MIGRATION_EXPECTED_DATABASE`; ambos nombres deben terminar en
     `_test`. Detener la tarea Windows y arrancar
-    explicitamente `docker compose --profile verifactu-test up -d
+    explicitamente `docker compose -f docker-compose.yml -f
+    docker-compose.verifactu-test.yml --profile verifactu-test up -d
     verifactu-worker-test`; Compose exige que el servicio one-shot
     `verifactu-migrate-test` complete `prisma migrate deploy` antes del worker.
     Confirmar despues el estado `healthy` del contenedor. Desde el host,

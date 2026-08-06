@@ -824,9 +824,10 @@ Responsable de:
 
 - Crear avisos individuales.
 - Resumir procesos masivos.
-- Solicitar ventana emergente para avisos críticos.
+- Solicitar una notificacion visible para avisos criticos.
 
-La entrega en escritorio pertenece a infraestructura.
+La entrega web pertenece a infraestructura y su mecanismo se decidira al
+revisar ADR-0016.
 
 ## 17. Adjunto
 

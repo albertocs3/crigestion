@@ -809,7 +809,7 @@ Todos los procesos se ejecutarán como `Sistema` y dejarán auditoría resumida.
 - Elegir repositorio y antivirus.
 - Definir el formato, cifrado y versión de las copias.
 - Determinar cómo preservar la auditoría durante una restauración.
-- Definir el identificador de dispositivo para una aplicación de escritorio.
+- Definir si la aplicacion web necesita identificar sesiones o dispositivos de confianza.
 - Diseñar el esquema de notificaciones en tiempo real.
 - Concretar los registros técnicos y niveles de gravedad.
 

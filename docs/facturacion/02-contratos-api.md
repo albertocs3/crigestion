@@ -467,7 +467,20 @@ Los conflictos funcionales devuelven `409` con un codigo estable y no alteran
 la factura. La rectificacion permanece cerrada para facturas integradas en
 VeriFactu mientras no genere un ALTA rectificativa real.
 
-## 16. Bloqueo por Mantenimiento
+## 16. Emision interna de renovaciones
+
+Facturacion expone un nucleo `server-only` que recibe `TransactionClient` y un
+origen esperado. El wrapper HTTP ordinario solo admite `MANUAL`; Suscripciones
+es el unico consumidor del origen `SUBSCRIPTION` y conserva la propiedad de la
+transaccion agregada.
+
+El nucleo reutiliza las mismas validaciones, numeracion, asiento, preparacion
+VeriFactu y auditoria de la emision manual. No registra una idempotencia propia
+ni realiza transporte AEAT. Devuelve el resultado al orquestador para que este
+confirme ledger y periodos antes del commit. Los fallos de preparacion fiscal se
+propagan y provocan rollback total.
+
+## 17. Bloqueo por Mantenimiento
 
 Todas las mutaciones nuevas anteriores devuelven `423
 MAINTENANCE_MODE_ACTIVE` si la plataforma esta en mantenimiento. Las consultas

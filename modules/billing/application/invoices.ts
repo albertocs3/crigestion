@@ -23,6 +23,10 @@ const maxLimit = 100;
 
 class VerifactuPreparationUnavailableError extends Error {}
 
+export function isVerifactuPreparationUnavailableError(error: unknown): boolean {
+  return error instanceof VerifactuPreparationUnavailableError;
+}
+
 const dateOnlySchema = z.preprocess(
   (value) => (typeof value === "string" ? normalizeDateOnlyInput(value) : value),
   z
@@ -706,7 +710,8 @@ export async function addInvoiceLine(
       where: { id: invoiceId },
       select: {
         id: true,
-        status: true
+        status: true,
+        origin: true
       }
     });
 
@@ -714,7 +719,7 @@ export async function addInvoiceLine(
       return { kind: "invoice-not-found" as const };
     }
 
-    if (invoice.status !== "DRAFT") {
+    if (invoice.status !== "DRAFT" || invoice.origin === "SUBSCRIPTION") {
       return { kind: "invoice-not-editable" as const };
     }
 
@@ -846,10 +851,10 @@ export async function replaceInvoiceDueDates(
     );
     const invoice = await tx.invoice.findUnique({
       where: { id: invoiceId },
-      select: { id: true, documentType: true, status: true, issueDate: true, total: true }
+      select: { id: true, documentType: true, origin: true, status: true, issueDate: true, total: true }
     });
     if (!invoice) return { kind: "not-found" as const };
-    if (invoice.status !== "DRAFT" || invoice.documentType !== "STANDARD") {
+    if (invoice.status !== "DRAFT" || invoice.documentType !== "STANDARD" || invoice.origin === "SUBSCRIPTION") {
       return { kind: "not-editable" as const };
     }
     const total = command.dueDates.reduce(
@@ -899,7 +904,30 @@ export async function issueInvoice(
   context: IssueInvoiceRequestContext = {},
   dependencies: IssueInvoiceDependencies = {}
 ): Promise<IssueInvoiceResult> {
-  const result = await prisma.$transaction(async (tx) => {
+  return issueInvoiceWithClient(null, "MANUAL", invoiceId, command, actor, context, dependencies);
+}
+
+export async function issueSubscriptionRenewalInvoiceInTransaction(
+  tx: Prisma.TransactionClient,
+  invoiceId: string,
+  command: IssueInvoiceCommand,
+  actor: SessionUser,
+  context: IssueInvoiceRequestContext,
+  dependencies: IssueInvoiceDependencies = {}
+): Promise<IssueInvoiceResult> {
+  return issueInvoiceWithClient(tx, "SUBSCRIPTION", invoiceId, command, actor, context, dependencies);
+}
+
+async function issueInvoiceWithClient(
+  transactionClient: Prisma.TransactionClient | null,
+  expectedOrigin: "MANUAL" | "SUBSCRIPTION",
+  invoiceId: string,
+  command: IssueInvoiceCommand,
+  actor: SessionUser,
+  context: IssueInvoiceRequestContext,
+  dependencies: IssueInvoiceDependencies
+): Promise<IssueInvoiceResult> {
+  const work = async (tx: Prisma.TransactionClient) => {
     await tx.$queryRaw(
       Prisma.sql`SELECT "id" FROM "invoices" WHERE "id" = ${invoiceId}::uuid FOR UPDATE`
     );
@@ -909,6 +937,7 @@ export async function issueInvoice(
         id: true,
         companyId: true,
         documentType: true,
+        origin: true,
         company: { select: { legalName: true, taxId: true } },
         status: true,
         paymentStatus: true,
@@ -965,6 +994,10 @@ export async function issueInvoice(
     }
 
     if (invoice.status !== "DRAFT") {
+      return { kind: "invoice-not-issuable" as const };
+    }
+
+    if (invoice.origin !== expectedOrigin) {
       return { kind: "invoice-not-issuable" as const };
     }
 
@@ -1096,6 +1129,9 @@ export async function issueInvoice(
 
     const verifactuEnabled = dependencies.verifactuEnabled ?? readVerifactuEnabled();
     const verifactuEnvironment = dependencies.verifactuEnvironment ?? readVerifactuEnvironment();
+    const issueClock = await tx.$queryRaw<Array<{ issuedAt: Date }>>`SELECT clock_timestamp() AS "issuedAt"`;
+    const issuedAt = issueClock[0]?.issuedAt;
+    if (!issuedAt) throw new Error("INVOICE_DATABASE_CLOCK_UNAVAILABLE");
 
     await tx.invoice.update({
       where: { id: invoiceId },
@@ -1106,7 +1142,7 @@ export async function issueInvoice(
         numberSequence: sequence.value,
         number,
         issueDate,
-        issuedAt: new Date(),
+        issuedAt,
         issuedById: actor.id,
         updatedById: actor.id
       }
@@ -1250,8 +1286,10 @@ export async function issueInvoice(
       kind: "issued" as const,
       invoice: await findInvoiceDetail(tx, invoiceId)
     };
-  }).catch((error: unknown) => {
+  };
+  const result = await (transactionClient ? work(transactionClient) : prisma.$transaction(work)).catch((error: unknown) => {
     if (error instanceof VerifactuPreparationUnavailableError) {
+      if (transactionClient) throw error;
       return { kind: "verifactu-preparation-unavailable" as const };
     }
     throw error;

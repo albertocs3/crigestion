@@ -75,8 +75,8 @@ jobs:
           VERIFACTU_MIGRATION_EXPECTED_DATABASE: crigestion_ci_test
         run: |
           cp .env.docker.example .env.docker
-          docker compose --profile verifactu-test config --quiet
-          docker compose --profile verifactu-test build verifactu-migrate-test verifactu-worker-test
+          docker compose -f docker-compose.yml -f docker-compose.verifactu-test.yml --profile verifactu-test config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.verifactu-test.yml --profile verifactu-test build verifactu-migrate-test verifactu-worker-test
 
       - name: Verify release
         run: npm run verify:release

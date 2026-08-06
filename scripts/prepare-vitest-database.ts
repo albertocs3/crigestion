@@ -12,11 +12,11 @@ if (process.env.CI !== "true" && existsSync(".env.vitest.local")) {
 async function main(): Promise<void> {
   const identity = await verifyVitestDatabaseEnvironment();
   console.info(
-    `Preparing disposable database: ${identity.databaseName} (${identity.databaseUser}, ${identity.applicationName})`
+    `Resetting disposable database: ${identity.databaseName} (${identity.databaseUser}, ${identity.applicationName})`
   );
 
   const prismaCli = fileURLToPath(new URL("../node_modules/prisma/build/index.js", import.meta.url));
-  const result = spawnSync(process.execPath, [prismaCli, "migrate", "deploy"], {
+  const result = spawnSync(process.execPath, [prismaCli, "migrate", "reset", "--force", "--skip-seed"], {
     env: process.env,
     stdio: "inherit"
   });

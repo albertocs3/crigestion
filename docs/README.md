@@ -24,12 +24,13 @@ La base tecnologica vigente es:
 9. [Registro de decisiones arquitectonicas](adr/README.md)
 10. [Backlog tecnico de la primera rebanada vertical](07-backlog-tecnico-primera-rebanada.md)
 11. [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md)
-12. [Preparacion del entorno en macOS](setup-mac.md)
-13. [Estado verificable de implementacion](09-estado-implementacion.md)
-14. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
-15. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
-16. [Acta UAT de staging 2026-07-17](plataforma/12-acta-uat-staging-2026-07-17.md)
-17. Especificaciones funcionales y tecnicas de cada modulo.
+12. [Preparacion del entorno en Windows](setup-windows.md)
+13. [Preparacion del entorno en macOS](setup-mac.md)
+14. [Estado verificable de implementacion](09-estado-implementacion.md)
+15. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
+16. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
+17. [Acta UAT acumulada de staging](plataforma/12-acta-uat-staging-2026-07-17.md)
+18. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 
@@ -59,7 +60,7 @@ La base tecnologica vigente es:
 |---|---|
 | Clientes y Tiendas | [Especificacion funcional](clientes/01-especificacion-funcional.md), [Contratos HTTP](clientes/02-contratos-api.md), [Modelo fisico](clientes/03-modelo-fisico-datos.md) |
 | Catalogo e Inventario | [Especificacion funcional](catalogo/01-especificacion-funcional.md), [Contratos HTTP](catalogo/02-contratos-api.md), [Modelo fisico](catalogo/03-modelo-fisico-datos.md) |
-| Suscripciones | [Especificacion funcional](suscripciones/01-especificacion-funcional.md) |
+| Suscripciones | [Especificacion funcional](suscripciones/01-especificacion-funcional.md), [Contratos HTTP](suscripciones/02-contratos-api.md) |
 | Facturacion | [Especificacion funcional](facturacion/01-especificacion-funcional.md), [Contratos HTTP](facturacion/02-contratos-api.md), [Modelo fisico](facturacion/03-modelo-fisico-datos.md), [Diseno de pantallas](facturacion/04-diseno-pantallas.md), [Plan de pruebas](facturacion/05-plan-de-pruebas.md), [Contrato VeriFactu V1](facturacion/06-contrato-verifactu-v1.md) |
 | Atencion al Cliente | [Especificacion funcional](atencion-cliente/01-especificacion-funcional.md) |
 | Contabilidad, Compras y Proveedores | [Especificacion funcional](contabilidad/01-especificacion-funcional.md) |
@@ -85,7 +86,7 @@ La base tecnologica vigente es:
 | Registro de decisiones arquitectonicas | Adaptado inicialmente |
 | Plan de creacion fisica | Adaptado inicialmente |
 | Backlog tecnico primera rebanada vertical | Implementado; se conserva como trazabilidad historica |
-| Estado incremental del producto | Actualizado al corte 2026-07-12 |
+| Estado incremental del producto | Actualizado al corte 2026-08-05 |
 
 ## 6. Precedencia
 

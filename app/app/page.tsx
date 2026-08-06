@@ -58,6 +58,9 @@ export default async function AppHomePage() {
     permissions.includes("Billing.View")
       ? { href: "/app/invoices", label: "Facturas", tone: "billing" }
       : null,
+    permissions.includes("Subscriptions.View")
+      ? { href: "/app/subscriptions", label: "Suscripciones", tone: "billing" }
+      : null,
     treasuryHref
       ? { href: treasuryHref, label: "Tesoreria", tone: "treasury" }
       : null,

@@ -54,7 +54,7 @@ El sistema evitará aplicaciones y registros paralelos. Cada operación se regis
 - Zona horaria funcional: `Europe/Madrid`.
 - Una única cuenta bancaria empresarial.
 - Usuarios exclusivamente internos.
-- Aplicación de escritorio conectada a servicios y almacenamiento comunes.
+- Aplicacion web interna conectada a servicios y almacenamiento comunes.
 
 ## 4. Usuarios
 

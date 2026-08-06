@@ -443,8 +443,10 @@ credito no es utilizable hasta que el estado fiscal de la rectificativa sea
 `ACCEPTED`, `ACCEPTED_WITH_ERRORS` o `NOT_APPLICABLE`; un rechazo o estado
 incierto conserva el saldo retenido y no genera salidas de dinero.
 
-El despliegue reproducible usa `Dockerfile.worker` y el perfil Compose opt-in
-`verifactu-test`. La imagen se construye con Node 22, genera Prisma durante el
+El despliegue reproducible usa `Dockerfile.worker` y el fichero Compose opt-in
+`docker-compose.verifactu-test.yml`, que conserva el perfil `verifactu-test`.
+La separacion permite arrancar PostgreSQL local sin exigir secretos ni
+confirmaciones del worker. La imagen se construye con Node 22, genera Prisma durante el
 build, ejecuta como usuario no root, no contiene ficheros `.env` y no publica
 puertos. El servicio fija TEST, usa filesystem de solo lectura, `init`,
 `SIGTERM`, 60 segundos de gracia y reinicio `unless-stopped`.

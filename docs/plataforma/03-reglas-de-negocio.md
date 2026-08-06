@@ -416,6 +416,6 @@ Las reglas funcionales no fijan todavía:
 - Formato de copias.
 - Gestión de claves de las copias.
 - Registro externo utilizado durante una restauración.
-- Canal técnico de notificaciones en escritorio.
+- Canal tecnico de notificaciones web y estrategia de entrega en tiempo real.
 
 El modelo conceptual derivado se encuentra en [Modelo de dominio de Plataforma](04-modelo-de-dominio.md).

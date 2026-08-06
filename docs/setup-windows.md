@@ -191,11 +191,17 @@ No edites migraciones ya aplicadas salvo que estes trabajando contra una base lo
 Ejecuta:
 
 ```powershell
+npm run test:db:prepare
+npm test
 npm run typecheck
 npm run lint
 npm run audit
 npm run build
 ```
+
+`test:db:prepare` comprueba usuario, host, nombre y confirmacion de la base
+desechable antes de restablecer su esquema y aplicar todas las migraciones. No
+debe apuntar nunca a una base operativa.
 
 ## 11. Arranque de la aplicacion
 

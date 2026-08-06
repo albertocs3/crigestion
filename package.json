@@ -42,7 +42,7 @@
   "dependencies": {
     "@prisma/client": "^6.10.1",
     "dotenv": "^17.2.3",
-    "next": "^15.5.21",
+    "next": "^15.5.22",
     "node-forge": "1.4.0",
     "pg": "^8.22.0",
     "qrcode": "1.5.4",
@@ -63,13 +63,13 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "eslint": "^9.29.0",
-    "eslint-config-next": "^15.3.4",
+    "eslint-config-next": "^15.5.22",
     "prisma": "^6.10.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.9"
   },
   "overrides": {
-    "postcss": "8.5.16",
+    "postcss": "8.5.25",
     "sharp": "$sharp"
   }
 }

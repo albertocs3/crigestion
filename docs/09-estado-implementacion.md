@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-07-22.
+Fecha de corte: 2026-08-06.
 
 ## 2. Rebanadas disponibles
 
@@ -16,13 +16,16 @@ Fecha de corte: 2026-07-22.
 | Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Proveedores | Operativa inicial | Maestro fiscal desplegado y aceptado en staging: alta, edicion, baja logica, subcuenta 400, idempotencia, concurrencia optimista, RBAC, auditoria y datos sensibles cifrados. |
-| Compras | Operativa local pendiente de candidata y UAT | Borradores, lineas, vencimientos, registro contable, IVA soportado, stock, pagos y rectificacion total impagada o totalmente pagada. El caso pagado crea credito append-only, compensable o reembolsable por banco/caja con maker-checker. |
+| Compras | Operativa inicial en staging | Borradores, lineas, vencimientos, registro contable, IVA soportado, stock, pagos y rectificacion total impagada o totalmente pagada. El caso pagado crea credito append-only, compensable o reembolsable por banco/caja con maker-checker. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
-| Contabilidad | Operativa inicial | PGC PYMES, cuentas, asientos manuales, ejercicios, regularizacion, cierre y apertura. |
+| Contabilidad | Operativa inicial en staging | PGC PYMES, cuentas, asientos manuales, ejercicios y ciclo maker-checker de cierre y reapertura mediante contraasientos append-only. |
 | Tesoreria y SEPA | Operativa inicial | Vencimientos, previsiones de cobro, remesas, SEPA, respuestas bancarias controladas, devoluciones, saldos a favor, compensaciones y reembolsos segregados. |
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
+| Suscripciones | Operativa inicial local | Ciclo contractual y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
+| Atencion al cliente | No implementada | Existe especificacion funcional, pero no hay modulo de incidencias, actuaciones ni adjuntos asociados. |
+| Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
 `Operativa inicial` significa que existe una rebanada integrada y probada, no
 que todo el alcance funcional del modulo este terminado.
@@ -47,15 +50,107 @@ funcionales en [Tesoreria y SEPA](tesoreria/01-especificacion-funcional.md).
 
 ## 4. Evidencia de validacion
 
-Evidencia actualizada el 22 de julio de 2026 sobre PostgreSQL desechable:
+La release inmutable `staging-2026.07.23-rc6`, commit
+`e65657550aa7ff02dee422e73d143f7b9aa527a6`, constituye la evidencia integrada
+mas reciente de staging:
 
-- El repositorio contiene 87 migraciones; la base desechable las aplica desde cero antes de validar.
-- Vitest: 71 archivos y 619 pruebas superadas.
-- TypeScript, ESLint y build optimizado de Next.js completados correctamente.
-- `npm audit --audit-level=high`: sin vulnerabilidades detectadas.
+- 96 migraciones aplicadas y verificadas.
+- Vitest: 73 archivos y 635 pruebas superadas.
+- TypeScript, ESLint, build optimizado de Next.js y auditoria npm completados.
+- Health local y publico con base de datos, VeriFactu TEST y worker en `ok`.
+- UAT aislada del cierre y reapertura maker-checker, incluidos rechazo,
+  caducidad, idempotencia e inmutabilidad de evidencia terminal.
 
-La aceptacion funcional de `staging-2026.07.17-rc5`, incluidas las pruebas de
-autenticacion, RBAC, sesiones, tesoreria y auditoria desde navegador, se conserva en el
+La reactivacion local del 5 de agosto de 2026 actualizo Next.js 15 dentro de su
+misma major, corrigio los advisories de PostCSS y `brace-expansion`, y separo el
+Compose base del perfil VeriFactu para poder arrancar PostgreSQL sin exigir las
+credenciales del worker. Sobre una base desechable restablecida desde cero se
+aplicaron las 96 migraciones y pasaron 73 archivos con 635 pruebas. TypeScript,
+ESLint, build optimizado con Next.js 15.5.22 y `npm audit --audit-level=high`
+tambien finalizaron correctamente. No se ejecuto Playwright porque el entorno
+local no dispone todavia de `.env.e2e.local`.
+
+El corte local de Suscripciones del 5 de agosto de 2026 anadio las migraciones
+97 a 101 y supero 75 archivos con 653 pruebas. Incluye alta, edicion de
+borradores, activacion, cancelacion inmediata, preparacion o revocacion de una
+baja futura y una barrera interna que aplica una orden vencida antes de dejar
+continuar una renovacion. El runner y la facturacion todavia no existen. Tambien
+finalizaron correctamente TypeScript, ESLint, el build optimizado de Next.js 15.5.22,
+`npm audit --audit-level=high`, `prisma validate` y la aplicacion desde cero de
+todas las migraciones sobre la base desechable. La revision independiente de
+seguridad y datos no encontro riesgos P0; sus hallazgos P1 de aislamiento por
+empresa, idempotencia de UI y trazabilidad se corrigieron antes de esta
+validacion.
+
+El corte local del 6 de agosto de 2026 anade la migracion 102 y la frontera
+interna Suscripciones-Facturacion. El orquestador aplica primero bajas vencidas,
+reserva de forma idempotente un borrador completo y conserva
+`nextRenewalDate`. PostgreSQL exige identidad unica del periodo, correspondencia
+completa de lineas, estados homogeneos por factura e inmutabilidad economica.
+La emision generica de facturas de suscripcion queda bloqueada: el siguiente
+corte debe realizar `RESERVED -> BILLED`, emision y avance del periodo de forma
+atomica. La regresion completa supero 75 archivos y 657 pruebas; tambien
+finalizaron correctamente la migracion desde cero, Prisma Validate, TypeScript,
+ESLint y el build optimizado de Next.js 15.5.22.
+
+El segundo corte local del 6 de agosto de 2026 anade la migracion 103 y la
+confirmacion interna de renovaciones. La emision reutiliza el nucleo de
+Facturacion dentro de la transaccion `Serializable` propietaria de
+Suscripciones. Factura, asiento, preparacion VeriFactu, reservas `BILLED`,
+periodos, versiones, auditoria e idempotencia confirman juntos. Los triggers
+diferidos impiden emitir sin ledger o avanzar una suscripcion sin evidencia
+facturada, asiento contabilizado y, cuando aplica, registro fiscal con outbox.
+La evidencia de auditoria e idempotencia y el asiento con sus lineas quedan
+ademas protegidos contra mutacion una vez facturada la renovacion.
+La regresion completa supero 75 archivos y 662 pruebas; tambien finalizaron
+correctamente la migracion desde cero, Prisma Validate, TypeScript, ESLint, el
+build optimizado de Next.js 15.5.22 y `npm audit --audit-level=high` sin
+vulnerabilidades.
+
+El tercer corte local del 6 de agosto de 2026 anade las migraciones 104 a 106 y
+expone el runner manual supervisado. La UI y los contratos HTTP permiten
+consultar hasta 25 grupos elegibles, reservar con las versiones observadas,
+confirmar solo con permisos segregados de renovacion y emision, o liberar con
+motivo. La empresa y fecha de negocio se derivan en servidor; las mutaciones
+incorporan CSRF, origen, cuerpos acotados, idempotencia y rate limit persistente.
+La liberacion conserva el borrador y sus detalles como evidencia inmutable y
+se serializa contra la confirmacion.
+
+El cuarto corte local del 6 de agosto de 2026 anade la migracion 107 y la
+gestion explicita de exclusiones manuales. Cada exclusion abre un expediente
+durable por suscripcion y periodo, proyecta `RENEWAL_PENDING`, conserva motivo
+y evidencia de actor sin filtrarlos a auditoria, y exige seleccion posterior
+mediante el identificador exacto del expediente. Facturar o cancelar cierra el
+expediente en la misma transaccion; liberar una reserva lo mantiene abierto.
+Un permiso separado segrega la exclusion del operador que solo ejecuta
+renovaciones, y constraints diferidas mantienen bilateralmente estado y
+evidencia.
+
+El quinto corte local del 6 de agosto de 2026 anade las migraciones 108 y 109.
+Un ledger append-only agrupa cada preparacion o confirmacion y enlaza sus
+miembros con suscripciones, expedientes, reservas y factura sin conservar
+datos fiscales ni claves idempotentes en claro. Los bloqueos estables por
+cliente inactivo o ejercicio cerrado materializan todo el grupo como pendiente
+en una transaccion compensatoria que revalida versiones, periodos, bajas y
+reservas; los errores de seguridad, seleccion o concurrencia no tienen efecto
+contractual. Los fallos contables y VeriFactu de confirmacion conservan el
+borrador y las reservas reintentables y solo incorporan evidencia al ledger.
+
+El sexto corte local incorpora una cola independiente y paginada de expedientes
+de renovacion abiertos. Distingue casos listos, bloqueados y ya reservados,
+sella el cursor contra los filtros, aplica redaccion por permiso, desactiva la
+cache compartida y audita cada pagina sin motivos libres ni texto de busqueda.
+
+El septimo corte local anade las migraciones 110, 111 y 112 y la condonacion
+administrativa individual de un periodo pendiente. Un permiso exclusivo del
+administrador, evidencia de motivo y versiones, idempotencia, rate limit y
+constraints bilaterales permiten avanzar exactamente un periodo sin factura,
+asiento ni VeriFactu, rechazando reservas y bajas pendientes. El expediente
+terminal conserva ademas subtotal, descuento, base, IVA, total y version de
+calculo como snapshot economico inmutable.
+
+La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
+RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
 
 El build y las pruebas automatizadas forman parte de `verify:release`; deben
@@ -105,12 +200,16 @@ Prioridades pendientes despues de este corte:
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
 4. Completar el ciclo avanzado de proveedor pendiente: rectificacion parcial,
-   anulacion y correccion interna versionada. El credito/reembolso de una
-   rectificativa totalmente pagada ya esta implementado localmente y debe pasar
-   `verify:release`, candidata y UAT aislada antes de desplegarse en staging.
+   anulacion y correccion interna versionada.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
-6. Refinar el backlog por rebanadas posteriores; [el backlog inicial](07-backlog-tecnico-primera-rebanada.md) se conserva como trazabilidad historica de plataforma.
+6. Completar Suscripciones con cambios programados, edicion controlada de la
+   vista previa, ampliar de forma controlada el catalogo de bloqueos
+   automaticos, reactivacion y
+   paginacion navegable entre cortes de grupos. Despues, abordar Atencion al
+   cliente y Presupuestos.
+7. Revisar ADR-0016 y sustituir los restos documentales de escritorio por una
+   decision web explicita antes de implementar notificaciones.
 
 Existe una divergencia contable conocida: la especificacion admite coexistencia
 temporal de ejercicios abiertos, mientras la base vigente mantiene un indice
