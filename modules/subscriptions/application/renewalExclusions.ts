@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { getSessionSecret } from "@/modules/platform/application/environment";
-import { calculateInvoiceLine, calculateInvoiceTotals } from "@/modules/billing/application/calculations";
+import { calculateInvoiceLine, calculateInvoiceTaxSummaries, calculateInvoiceTotals } from "@/modules/billing/application/calculations";
 import {
   currentSubscriptionRenewalCompanyId,
   subscriptionRenewalBusinessDate,
@@ -61,6 +61,7 @@ export type SubscriptionRenewalWaiverValue = {
   version: number;
   waivedAt: string;
   valuation: SubscriptionRenewalWaiverValuation;
+  fiscalReview?: { id: string; status: "PENDING"; version: 1 };
 };
 
 type SubscriptionRenewalWaiverValuation = {
@@ -71,6 +72,15 @@ type SubscriptionRenewalWaiverValuation = {
   total: string;
   currency: "EUR";
   calculationVersion: "invoice-lines-v1";
+  taxBreakdown: SubscriptionRenewalWaiverTaxBreakdown[];
+};
+type SubscriptionRenewalWaiverTaxBreakdown = {
+  taxRateCode: string;
+  taxRateName: string;
+  taxRate: string;
+  theoreticalTaxableBase: string;
+  theoreticalTaxAmount: string;
+  theoreticalTotal: string;
 };
 export type WaiveSubscriptionRenewalResult =
   | { ok: true; status: 200; value: SubscriptionRenewalWaiverValue }
@@ -84,8 +94,14 @@ const waiverValueSchema = z.object({
   valuation: z.object({
     subtotal: z.string().regex(/^\d+\.\d{2}$/), discountTotal: z.string().regex(/^\d+\.\d{2}$/),
     taxableBase: z.string().regex(/^\d+\.\d{2}$/), taxAmount: z.string().regex(/^\d+\.\d{2}$/),
-    total: z.string().regex(/^\d+\.\d{2}$/), currency: z.literal("EUR"), calculationVersion: z.literal("invoice-lines-v1")
-  }).strict()
+    total: z.string().regex(/^\d+\.\d{2}$/), currency: z.literal("EUR"), calculationVersion: z.literal("invoice-lines-v1"),
+    taxBreakdown: z.array(z.object({
+      taxRateCode: z.string().min(1).max(40), taxRateName: z.string().min(1).max(120),
+      taxRate: z.string().regex(/^\d+\.\d{2}$/), theoreticalTaxableBase: z.string().regex(/^\d+\.\d{2}$/),
+      theoreticalTaxAmount: z.string().regex(/^\d+\.\d{2}$/), theoreticalTotal: z.string().regex(/^\d+\.\d{2}$/)
+    }).strict()).default([])
+  }).strict(),
+  fiscalReview: z.object({ id: z.string().uuid(), status: z.literal("PENDING"), version: z.literal(1) }).strict().optional()
 }).strict();
 
 const optionalQueryText = z.preprocess((value) => value === "" ? undefined : value, z.string().trim().min(1).max(120).optional());
@@ -239,7 +255,7 @@ export async function listSubscriptionRenewalExclusions(
           customer: { select: { id: true, code: true, legalName: true, status: true } },
           lines: { orderBy: { position: "asc" }, select: {
             quantity: true, unitPrice: true, discountPercent: true, discountAmount: true,
-            taxRateCodeSnapshot: true, taxRateSnapshot: true
+            taxRateCodeSnapshot: true, taxRateNameSnapshot: true, taxRateSnapshot: true
           } },
           cancellationSchedules: { where: { status: "PENDING" }, select: { id: true, effectiveDate: true } },
           renewalReservations: { where: { status: "RESERVED" }, orderBy: { reservedAt: "asc" }, take: 1, select: { id: true, invoiceId: true, periodStart: true } }
@@ -471,17 +487,23 @@ export async function waiveSubscriptionRenewal(
           if (!replay.success || stored.responseStatus !== 200) return failure(409, "IDEMPOTENCY_REPLAY_INVALID", "La respuesta idempotente almacenada no es valida.");
           return { ok: true as const, status: 200 as const, value: replay.data };
         }
-        await tx.$queryRaw`SELECT "id" FROM "subscriptions" WHERE "id" = ${command.subscriptionId}::uuid AND "companyId" = ${command.companyId}::uuid FOR UPDATE`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'subscription-renewal-waiver-cutoff:' + command.companyId}, 0))`;
+        await tx.$queryRaw`SELECT subscription."id"
+          FROM "subscriptions" subscription
+          JOIN "customers" customer ON customer."id" = subscription."customerId"
+          WHERE subscription."id" = ${command.subscriptionId}::uuid AND subscription."companyId" = ${command.companyId}::uuid
+          FOR UPDATE OF subscription, customer`;
         await tx.$queryRaw`SELECT "id" FROM "subscription_cancellation_schedules" WHERE "subscriptionId" = ${command.subscriptionId}::uuid AND "companyId" = ${command.companyId}::uuid AND "status" = 'PENDING' ORDER BY "id" FOR UPDATE`;
         await tx.$queryRaw`SELECT "id" FROM "subscription_renewal_exclusions" WHERE "id" = ${command.exclusionId}::uuid AND "subscriptionId" = ${command.subscriptionId}::uuid AND "companyId" = ${command.companyId}::uuid FOR UPDATE`;
         await tx.$queryRaw`SELECT "id" FROM "subscription_renewal_reservations" WHERE "subscriptionId" = ${command.subscriptionId}::uuid AND "companyId" = ${command.companyId}::uuid ORDER BY "id" FOR UPDATE`;
         const subscription = await tx.subscription.findFirst({
           where: { id: command.subscriptionId, companyId: command.companyId },
           select: {
-            id: true, status: true, version: true, nextRenewalDate: true,
+            id: true, status: true, version: true, nextRenewalDate: true, customerId: true,
+            customer: { select: { id: true, code: true, legalName: true } },
             lines: { orderBy: { position: "asc" }, select: {
               quantity: true, unitPrice: true, discountPercent: true, discountAmount: true,
-              taxRateCodeSnapshot: true, taxRateSnapshot: true
+              taxRateCodeSnapshot: true, taxRateNameSnapshot: true, taxRateSnapshot: true
             } }
           }
         });
@@ -504,9 +526,24 @@ export async function waiveSubscriptionRenewal(
         if (activeReservations.some((reservation) => reservation.status === "BILLED")) return failure(409, "SUBSCRIPTION_RENEWAL_ALREADY_BILLED", "El periodo ya esta facturado.");
         if (activeReservations.length > 0) return failure(409, "SUBSCRIPTION_RENEWAL_ALREADY_RESERVED", "Libere primero la reserva de facturacion.");
         const valuation = calculateWaiverValuation(subscription.lines);
+        const sequenceRows = await tx.$queryRaw<Array<{ value: bigint }>>`SELECT nextval('subscription_renewal_waiver_sequence') AS "value"`;
+        const waiverSequence = sequenceRows[0]?.value;
+        if (waiverSequence === undefined) throw new Error("SUBSCRIPTION_RENEWAL_WAIVER_SEQUENCE_UNAVAILABLE");
         const clock = await tx.$queryRaw<Array<{ waivedAt: Date }>>`SELECT clock_timestamp() AS "waivedAt"`;
         const waivedAt = clock[0]?.waivedAt;
         if (!waivedAt) throw new Error("SUBSCRIPTION_RENEWAL_DATABASE_CLOCK_UNAVAILABLE");
+        await tx.subscriptionRenewalWaiverSnapshot.create({ data: {
+          exclusionId: exclusion.id, companyId: command.companyId, customerId: subscription.customerId,
+          customerCodeSnapshot: subscription.customer.code,
+          customerLegalNameSnapshot: subscription.customer.legalName,
+          source: "CAPTURED_AT_WAIVER", currency: valuation.currency, capturedAt: waivedAt
+        } });
+        await tx.subscriptionRenewalWaiverTaxSummary.createMany({ data: valuation.taxBreakdown.map((summary) => ({
+          exclusionId: exclusion.id, companyId: command.companyId,
+          taxRateCodeSnapshot: summary.taxRateCode, taxRateNameSnapshot: summary.taxRateName,
+          taxRateSnapshot: summary.taxRate, theoreticalTaxableBase: summary.theoreticalTaxableBase,
+          theoreticalTaxAmount: summary.theoreticalTaxAmount, theoreticalTotal: summary.theoreticalTotal
+        })) });
         await tx.subscriptionRenewalExclusion.update({ where: { id: exclusion.id }, data: {
           status: "RESOLVED", resolvedAt: waivedAt, resolvedById: actor.id, resolution: "WAIVED",
           resolvedInvoiceId: null, resolutionReasonCode: command.reasonCode,
@@ -515,7 +552,16 @@ export async function waiveSubscriptionRenewal(
           waivedSubtotal: valuation.subtotal, waivedDiscountTotal: valuation.discountTotal,
           waivedTaxableBase: valuation.taxableBase, waivedTaxAmount: valuation.taxAmount,
           waivedTotal: valuation.total, waiverCalculationVersion: valuation.calculationVersion,
+          waiverSequence,
           lastErrorCode: null
+        } });
+        const fiscalReview = await tx.subscriptionRenewalWaiverReview.create({ data: {
+          companyId: command.companyId, exclusionId: exclusion.id, source: "CURRENT_WORKFLOW",
+          openedById: actor.id, openedAt: waivedAt
+        }, select: { id: true, status: true, version: true } });
+        await tx.subscriptionRenewalWaiverReviewEvent.create({ data: {
+          companyId: command.companyId, reviewId: fiscalReview.id, type: "OPENED", reviewVersion: 1,
+          actorId: actor.id, occurredAt: waivedAt, correlationId: context.correlationId
         } });
         const updated = await tx.subscription.update({ where: { id: subscription.id }, data: {
           status: "ACTIVE", nextRenewalDate: exclusion.periodEndExclusive, version: { increment: 1 }, updatedById: actor.id
@@ -524,7 +570,8 @@ export async function waiveSubscriptionRenewal(
           exclusionId: exclusion.id, subscriptionId: subscription.id, resolution: "WAIVED",
           waivedPeriod: { start: formatDateOnly(exclusion.periodStart), endExclusive: formatDateOnly(exclusion.periodEndExclusive) },
           status: "ACTIVE", nextRenewalDate: formatDateOnly(updated.nextRenewalDate), version: updated.version,
-          waivedAt: waivedAt.toISOString(), valuation
+          waivedAt: waivedAt.toISOString(), valuation,
+          fiscalReview: { id: fiscalReview.id, status: "PENDING", version: 1 }
         };
         await tx.auditEvent.create({ data: {
           eventType: "SUBSCRIPTION_RENEWAL_PERIOD_WAIVED", actorType: "USER",
@@ -668,21 +715,31 @@ function calculateWaiverValuation(lines: Array<{
   discountPercent: Prisma.Decimal;
   discountAmount: Prisma.Decimal;
   taxRateCodeSnapshot: string;
+  taxRateNameSnapshot: string;
   taxRateSnapshot: Prisma.Decimal;
 }>): SubscriptionRenewalWaiverValuation {
-  const totals = calculateInvoiceTotals(lines.map((line) => ({
+  const calculatedLines = lines.map((line) => ({
     taxRateCode: line.taxRateCodeSnapshot,
     taxRate: line.taxRateSnapshot,
+    taxRateName: line.taxRateNameSnapshot,
     ...calculateInvoiceLine({
       quantity: line.quantity, unitPrice: line.unitPrice,
       discountPercent: line.discountPercent, discountAmount: line.discountAmount,
       taxRate: line.taxRateSnapshot
     })
-  })));
+  }));
+  const totals = calculateInvoiceTotals(calculatedLines);
+  const namesByRate = new Map(calculatedLines.map((line) => [`${line.taxRateCode}:${line.taxRate.toFixed(2)}`, line.taxRateName]));
+  const taxBreakdown = calculateInvoiceTaxSummaries(calculatedLines).map((summary) => ({
+    taxRateCode: summary.taxRateCode,
+    taxRateName: namesByRate.get(`${summary.taxRateCode}:${summary.taxRate.toFixed(2)}`) ?? summary.taxRateCode,
+    taxRate: summary.taxRate.toFixed(2), theoreticalTaxableBase: summary.taxableBase.toFixed(2),
+    theoreticalTaxAmount: summary.taxAmount.toFixed(2), theoreticalTotal: summary.total.toFixed(2)
+  }));
   return {
     subtotal: totals.subtotal.toFixed(2), discountTotal: totals.discountTotal.toFixed(2),
     taxableBase: totals.taxableBase.toFixed(2), taxAmount: totals.taxAmount.toFixed(2),
-    total: totals.total.toFixed(2), currency: "EUR", calculationVersion: "invoice-lines-v1"
+    total: totals.total.toFixed(2), currency: "EUR", calculationVersion: "invoice-lines-v1", taxBreakdown
   };
 }
 

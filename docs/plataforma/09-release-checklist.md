@@ -93,6 +93,15 @@ Antes de migrar:
 - Revisar SQL nuevo en `prisma/migrations/`.
 - Confirmar que no hay migraciones editadas ya aplicadas.
 
+Las migraciones `20260806181000_add_subscription_renewal_waiver_evidence` y
+`20260806182000_add_subscription_renewal_waiver_fiscal_reviews` no son
+compatibles con escritores antiguos en paralelo: al finalizar exigen snapshot,
+desglose y revision a toda nueva condonacion. Para esa release se debe activar
+mantenimiento, detener web y runners que puedan resolver renovaciones, aplicar
+la migracion una sola vez, desplegar el binario nuevo y verificar health antes
+de reabrir trafico. No usar rolling deploy. El backfill toma locks exclusivos y
+aborta completo si no puede reproducir exactamente los totales historicos.
+
 ## 6. Despliegue
 
 Para el VPS Plesk de `gestion.crisoft.es`, aplicar ademas el runbook

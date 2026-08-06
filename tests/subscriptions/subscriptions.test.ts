@@ -3,9 +3,12 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { login } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
+import { hashPassword } from "@/modules/platform/application/passwords";
 import { activateSubscription, cancelScheduledSubscriptionCancellation, cancelSubscription, createSubscription, createSubscriptionSchema, getSubscription, hashSubscriptionRequest, listSubscriptions, resolveScheduledCancellationBeforeRenewal, scheduleSubscriptionCancellation, updateSubscription } from "@/modules/subscriptions/application/subscriptions";
 import { confirmSubscriptionRenewal, createSubscriptionRenewalDraft, hashSubscriptionRenewalConfirmationRequest, hashSubscriptionRenewalDraftRequest, hashSubscriptionRenewalReleaseRequest, listSubscriptionRenewalPreview, releaseSubscriptionRenewal } from "@/modules/subscriptions/application/renewals";
 import { excludeSubscriptionRenewal, hashSubscriptionRenewalExclusionRequest, hashSubscriptionRenewalWaiverRequest, listSubscriptionRenewalExclusions, listSubscriptionRenewalExclusionsSchema, waiveSubscriptionRenewal } from "@/modules/subscriptions/application/renewalExclusions";
+import { listSubscriptionRenewalWaivers } from "@/modules/subscriptions/application/renewalWaiverReports";
+import { decideRenewalWaiverFiscalReview, hashDecideRenewalWaiverFiscalReview, hashStartRenewalWaiverFiscalReview, startRenewalWaiverFiscalReview } from "@/modules/subscriptions/application/renewalWaiverFiscalReviews";
 import { issueInvoice } from "@/modules/billing/application/invoices";
 
 const password = "Cambiar-esta-clave-2026";
@@ -596,15 +599,30 @@ describe("subscriptions application service", () => {
     const exclusionCommand = { companyId, subscriptionId: created.value.id, expectedVersion: 2, periodStart: renewalDate, processDate: renewalDate, reason: "Pendiente de acuerdo comercial" };
     const excluded = await excludeSubscriptionRenewal(exclusionCommand, actor, exclusionContext("waive-open", exclusionCommand)); if (!excluded.ok) throw new Error(excluded.error.code);
     const periodEndExclusive = (await prisma.subscriptionRenewalExclusion.findUniqueOrThrow({ where: { id: excluded.value.exclusionId }, select: { periodEndExclusive: true } })).periodEndExclusive.toISOString().slice(0, 10);
+    await expect(prisma.subscriptionRenewalWaiverSnapshot.create({ data: {
+      exclusionId: excluded.value.exclusionId, companyId, customerId,
+      customerCodeSnapshot: "LEGACY", customerLegalNameSnapshot: "Falso historico",
+      source: "BACKFILLED_CURRENT_MASTER", currency: "EUR", capturedAt: new Date()
+    } })).rejects.toThrow();
     await expect(prisma.subscription.update({ where: { id: created.value.id }, data: { status: "ACTIVE", nextRenewalDate: new Date(`${periodEndExclusive}T00:00:00.000Z`), version: { increment: 1 } } })).rejects.toThrow();
     const command = { companyId, subscriptionId: created.value.id, exclusionId: excluded.value.exclusionId, expectedVersion: 3, reasonCode: "COMMERCIAL_WAIVER" as const, reasonDetail: "Bonificacion excepcional autorizada por direccion" };
     const waiverKey = randomUUID();
     const first = await waiveSubscriptionRenewal(command, actor, waiverContext(waiverKey, command));
     expect(first).toMatchObject({ ok: true, status: 200, value: {
       resolution: "WAIVED", status: "ACTIVE", nextRenewalDate: periodEndExclusive, version: 4,
-      valuation: { subtotal: "49.90", discountTotal: "0.00", taxableBase: "49.90", taxAmount: "10.48", total: "60.38", currency: "EUR", calculationVersion: "invoice-lines-v1" }
+      valuation: { subtotal: "49.90", discountTotal: "0.00", taxableBase: "49.90", taxAmount: "10.48", total: "60.38", currency: "EUR", calculationVersion: "invoice-lines-v1",
+        taxBreakdown: [{ taxRateCode: "IVA_21", taxRate: "21.00", theoreticalTaxableBase: "49.90", theoreticalTaxAmount: "10.48", theoreticalTotal: "60.38" }] }
     } });
     expect(await waiveSubscriptionRenewal(command, actor, waiverContext(waiverKey, command))).toEqual(first);
+    if (!first.ok) throw new Error("WAIVER_EXPECTED");
+    const { taxBreakdown: _taxBreakdown, ...legacyValuation } = first.value.valuation;
+    void _taxBreakdown;
+    await prisma.idempotencyRecord.update({ where: { key: `subscription-renewal-waivers-test:${waiverKey}` }, data: {
+      responseBody: { ...first.value, valuation: legacyValuation }
+    } });
+    expect(await waiveSubscriptionRenewal(command, actor, waiverContext(waiverKey, command))).toMatchObject({
+      ok: true, value: { valuation: { total: "60.38", taxBreakdown: [] } }
+    });
     const reused = { ...command, reasonDetail: "Otra justificacion incompatible con la clave" };
     expect(await waiveSubscriptionRenewal(reused, actor, waiverContext(waiverKey, reused))).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
     expect(await prisma.subscriptionRenewalExclusion.findUniqueOrThrow({ where: { id: excluded.value.exclusionId }, select: {
@@ -618,6 +636,37 @@ describe("subscriptions application service", () => {
     });
     const storedWaiver = await prisma.subscriptionRenewalExclusion.findUniqueOrThrow({ where: { id: excluded.value.exclusionId } });
     expect([storedWaiver.waivedSubtotal, storedWaiver.waivedDiscountTotal, storedWaiver.waivedTaxableBase, storedWaiver.waivedTaxAmount, storedWaiver.waivedTotal].map((amount) => amount?.toFixed(2))).toEqual(["49.90", "0.00", "49.90", "10.48", "60.38"]);
+    expect(storedWaiver.waiverSequence).not.toBeNull(); expect(storedWaiver.waiverSequence! > 0n).toBe(true);
+    const fiscalReview = await prisma.subscriptionRenewalWaiverReview.findUniqueOrThrow({ where: { exclusionId: excluded.value.exclusionId } });
+    expect(fiscalReview).toMatchObject({ status: "PENDING", source: "CURRENT_WORKFLOW", version: 1, openedById: actor.id });
+    const startCommand = { expectedVersion: 1 as const };
+    expect(await startRenewalWaiverFiscalReview(fiscalReview.id, startCommand, actor, fiscalReviewContext("maker-start", fiscalReview.id, startCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_SELF_REVIEW_FORBIDDEN" }
+    });
+    const reviewer = await fiscalReviewer();
+    const invalidTransitionAt = new Date();
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`UPDATE "subscription_renewal_waiver_reviews" SET "status" = 'IN_REVIEW', "version" = 2, "startedById" = ${reviewer.id}::uuid, "startedAt" = ${invalidTransitionAt}, "updatedAt" = ${invalidTransitionAt} WHERE "id" = ${fiscalReview.id}::uuid`;
+      await tx.$executeRaw`UPDATE "subscription_renewal_waiver_reviews" SET "status" = 'CLOSED', "version" = 3, "decision" = 'NO_ADDITIONAL_ACTION', "decisionDetail" = 'Intento de omitir el evento intermedio', "decidedById" = ${reviewer.id}::uuid, "decidedAt" = ${invalidTransitionAt}, "closedById" = ${reviewer.id}::uuid, "closedAt" = ${invalidTransitionAt}, "updatedAt" = ${invalidTransitionAt} WHERE "id" = ${fiscalReview.id}::uuid`;
+      await tx.$executeRaw`INSERT INTO "subscription_renewal_waiver_review_events" ("companyId", "reviewId", "type", "reviewVersion", "actorId", "decision", "occurredAt") VALUES (${companyId}::uuid, ${fiscalReview.id}::uuid, 'DECIDED', 3, ${reviewer.id}::uuid, 'NO_ADDITIONAL_ACTION', ${invalidTransitionAt})`;
+    })).rejects.toThrow(/Every fiscal review version requires one ledger event/);
+    const started = await startRenewalWaiverFiscalReview(fiscalReview.id, startCommand, reviewer, fiscalReviewContext("start", fiscalReview.id, startCommand));
+    expect(started).toMatchObject({ ok: true, value: { status: "IN_REVIEW", version: 2, startedById: reviewer.id } });
+    expect(await startRenewalWaiverFiscalReview(fiscalReview.id, startCommand, reviewer, fiscalReviewContext("start", fiscalReview.id, startCommand))).toEqual(started);
+    const decisionCommand = { expectedVersion: 2 as const, decision: "NO_ADDITIONAL_ACTION" as const, detail: "La evidencia interna es coherente y no requiere actuacion adicional" };
+    const decided = await decideRenewalWaiverFiscalReview(fiscalReview.id, decisionCommand, reviewer, fiscalReviewDecisionContext("decide", fiscalReview.id, decisionCommand));
+    expect(decided).toMatchObject({ ok: true, value: { status: "CLOSED", version: 3, decision: "NO_ADDITIONAL_ACTION", decidedById: reviewer.id } });
+    const reviewEvents = await prisma.subscriptionRenewalWaiverReviewEvent.findMany({ where: { reviewId: fiscalReview.id }, orderBy: { reviewVersion: "asc" } });
+    const storedFiscalReview = await prisma.subscriptionRenewalWaiverReview.findUniqueOrThrow({ where: { id: fiscalReview.id } });
+    expect(reviewEvents).toHaveLength(3);
+    expect(reviewEvents.map((event) => event.occurredAt.toISOString())).toEqual([
+      storedFiscalReview.openedAt.toISOString(), storedFiscalReview.startedAt!.toISOString(), storedFiscalReview.decidedAt!.toISOString()
+    ]);
+    expect(JSON.stringify(await prisma.auditEvent.findMany({ where: { eventType: { startsWith: "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW" } }, select: { payload: true } }))).not.toContain(decisionCommand.detail);
+    await expect(prisma.subscriptionRenewalWaiverReview.update({ where: { id: fiscalReview.id }, data: { decisionDetail: "Alteracion posterior prohibida" } })).rejects.toThrow();
+    const snapshot = await prisma.subscriptionRenewalWaiverSnapshot.findUniqueOrThrow({ where: { exclusionId: excluded.value.exclusionId }, include: { taxSummaries: true } });
+    expect(snapshot).toMatchObject({ customerId, source: "CAPTURED_AT_WAIVER", currency: "EUR", taxSummaries: [{ taxRateCodeSnapshot: "IVA_21" }] });
+    expect(snapshot.taxSummaries.map((summary) => [summary.theoreticalTaxableBase.toFixed(2), summary.theoreticalTaxAmount.toFixed(2), summary.theoreticalTotal.toFixed(2)])).toEqual([["49.90", "10.48", "60.38"]]);
     expect(await prisma.invoice.count({ where: { origin: "SUBSCRIPTION" } })).toBe(0);
     expect(await prisma.subscriptionRenewalReservation.count({ where: { subscriptionId: created.value.id } })).toBe(0);
     const auditWhere = { eventType: "SUBSCRIPTION_RENEWAL_PERIOD_WAIVED", payload: { path: ["correlationId"], equals: `subscription-renewal-waivers-${waiverKey}` } } as const;
@@ -625,6 +674,8 @@ describe("subscriptions application service", () => {
     expect(JSON.stringify(audit.payload)).not.toContain(command.reasonDetail);
     expect(await prisma.auditEvent.count({ where: auditWhere })).toBe(1);
     await expect(prisma.subscriptionRenewalExclusion.update({ where: { id: excluded.value.exclusionId }, data: { resolutionReasonDetail: "Intento de alteracion posterior" } })).rejects.toThrow();
+    await expect(prisma.subscriptionRenewalWaiverSnapshot.update({ where: { exclusionId: excluded.value.exclusionId }, data: { customerLegalNameSnapshot: "Alteracion" } })).rejects.toThrow();
+    await expect(prisma.subscriptionRenewalWaiverTaxSummary.delete({ where: { id: snapshot.taxSummaries[0]!.id } })).rejects.toThrow();
     await expect(prisma.subscriptionRenewalExclusion.delete({ where: { id: excluded.value.exclusionId } })).rejects.toThrow();
   });
 
@@ -660,6 +711,66 @@ describe("subscriptions application service", () => {
     expect(await confirmSubscriptionRenewal(confirmation, actor, confirmationContext("waive-cycle-confirm", confirmation), { verifactuEnabled: false })).toMatchObject({ ok: true, status: 200 });
     expect(await prisma.subscriptionRenewalReservation.findFirstOrThrow({ where: { invoiceId: nextDraft.value.invoiceId }, select: { status: true, periodStart: true } })).toMatchObject({ status: "BILLED", periodStart: new Date(`${processDate}T00:00:00.000Z`) });
     expect(await prisma.subscriptionRenewalExclusion.findUniqueOrThrow({ where: { id: excluded.value.exclusionId }, select: { resolution: true, waivedTotal: true } })).toMatchObject({ resolution: "WAIVED", waivedTotal: expect.objectContaining({}) });
+  });
+
+  it("stores a deterministic theoretical tax breakdown for every waived rate", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const firstItemId = await catalogItem(actor.id);
+    const tax10 = await prisma.catalogTaxRate.findFirstOrThrow({ where: { code: "IVA_10" } });
+    const secondItemId = (await prisma.catalogItem.create({ data: {
+      code: `S${randomUUID().slice(0, 8)}`, kind: "SERVICE", name: `Servicio reducido ${randomUUID()}`,
+      salePrice: "10.00", taxRateId: tax10.id, taxRate: tax10.rate, createdById: actor.id
+    } })).id;
+    const renewalDate = todayDate();
+    const createCommand = payload(customerId, firstItemId, { name: "Condonacion con dos tipos", startDate: renewalDate, lines: [
+      { catalogItemId: firstItemId, quantity: "1.000", discountPercent: "0.00", discountAmount: "0.00" },
+      { catalogItemId: secondItemId, quantity: "1.000", discountPercent: "0.00", discountAmount: "0.00" }
+    ] });
+    const created = await createSubscription(createCommand, actor, context("waive-taxes-create", createCommand)); if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("waive-taxes-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!;
+    const exclusionCommand = { companyId, subscriptionId: created.value.id, expectedVersion: 2, periodStart: renewalDate, processDate: renewalDate, reason: "Revision comercial" };
+    const excluded = await excludeSubscriptionRenewal(exclusionCommand, actor, exclusionContext("waive-taxes-open", exclusionCommand)); if (!excluded.ok) throw new Error(excluded.error.code);
+    const command = { companyId, subscriptionId: created.value.id, exclusionId: excluded.value.exclusionId, expectedVersion: 3, reasonCode: "COMMERCIAL_WAIVER" as const, reasonDetail: "Condonacion autorizada con dos tipos teoricos" };
+    const waived = await waiveSubscriptionRenewal(command, actor, waiverContext("waive-taxes", command)); if (!waived.ok) throw new Error(waived.error.code);
+    expect(waived.value.valuation).toMatchObject({ taxableBase: "59.90", taxAmount: "11.48", total: "71.38", taxBreakdown: [
+      { taxRateCode: "IVA_10", taxRate: "10.00", theoreticalTaxableBase: "10.00", theoreticalTaxAmount: "1.00", theoreticalTotal: "11.00" },
+      { taxRateCode: "IVA_21", taxRate: "21.00", theoreticalTaxableBase: "49.90", theoreticalTaxAmount: "10.48", theoreticalTotal: "60.38" }
+    ] });
+  });
+
+  it("lists waived periods with a filter-bound frozen cursor and redacts sensitive reasons", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id); const processDate = todayDate();
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!;
+    const createWaiver = async (index: number) => {
+      const createCommand = payload(customerId, itemId, { name: `Historial condonado ${index}`, startDate: processDate });
+      const created = await createSubscription(createCommand, actor, context(`waiver-report-create-${index}`, createCommand)); if (!created.ok) throw new Error(created.error.code);
+      const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context(`waiver-report-activate-${index}`, { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+      const exclusionCommand = { companyId, subscriptionId: created.value.id, expectedVersion: 2, periodStart: processDate, processDate, reason: `Apertura privada ${index}` };
+      const excluded = await excludeSubscriptionRenewal(exclusionCommand, actor, exclusionContext(`waiver-report-open-${index}`, exclusionCommand)); if (!excluded.ok) throw new Error(excluded.error.code);
+      const waiver = { companyId, subscriptionId: created.value.id, exclusionId: excluded.value.exclusionId, expectedVersion: 3, reasonCode: index % 2 === 0 ? "COMMERCIAL_WAIVER" as const : "SERVICE_FAILURE" as const, reasonDetail: `Justificacion privada de la condonacion ${index}` };
+      const waived = await waiveSubscriptionRenewal(waiver, actor, waiverContext(`waiver-report-${index}`, waiver)); if (!waived.ok) throw new Error(waived.error.code);
+      return { exclusionId: excluded.value.exclusionId, reasonDetail: waiver.reasonDetail };
+    };
+    const firstCreated = await createWaiver(0); const secondCreated = await createWaiver(1);
+    const firstPage = await listSubscriptionRenewalWaivers({ limit: 1 }, actor, { correlationId: "waiver-report-page-one" });
+    expect(firstPage).toMatchObject({ ok: true, value: { waivers: [{ hasReason: true, reason: secondCreated.reasonDetail }], summary: { count: 2, total: "120.76" }, nextCursor: expect.any(String) } });
+    if (!firstPage.ok || !firstPage.value.nextCursor) throw new Error("WAIVER_REPORT_CURSOR_EXPECTED");
+    const thirdCreated = await createWaiver(2);
+    const secondPage = await listSubscriptionRenewalWaivers({ limit: 1, cursor: firstPage.value.nextCursor }, actor, { correlationId: "waiver-report-page-two" });
+    expect(secondPage).toMatchObject({ ok: true, value: { waivers: [{ id: firstCreated.exclusionId }], summary: { count: 2 }, nextCursor: null } });
+    if (!secondPage.ok) throw new Error(secondPage.error.code);
+    expect(secondPage.value.waivers.map((waiver) => waiver.id)).not.toContain(thirdCreated.exclusionId);
+    const tampered = `${firstPage.value.nextCursor.slice(0, -1)}${firstPage.value.nextCursor.endsWith("A") ? "B" : "A"}`;
+    expect(await listSubscriptionRenewalWaivers({ limit: 1, cursor: tampered }, actor)).toMatchObject({ ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_WAIVER_CURSOR_INVALID" } });
+    expect(await listSubscriptionRenewalWaivers({ limit: 1, cursor: firstPage.value.nextCursor, reasonCode: "OTHER" }, actor)).toMatchObject({ ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_WAIVER_CURSOR_INVALID" } });
+    const restricted = { ...actor, permissions: actor.permissions.filter((permission) => permission !== "Subscriptions.ManageRenewalExclusions") };
+    const redacted = await listSubscriptionRenewalWaivers({ limit: 1 }, restricted, { correlationId: "waiver-report-redacted" });
+    expect(redacted).toMatchObject({ ok: true, value: { waivers: [{ hasReason: true }] } });
+    if (!redacted.ok) throw new Error(redacted.error.code);
+    expect(redacted.value.waivers[0]).not.toHaveProperty("reason");
+    const audits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_RENEWAL_WAIVERS_VIEWED" }, select: { payload: true } });
+    expect(JSON.stringify(audits)).not.toContain("Justificacion privada");
+    expect(JSON.stringify(audits)).not.toContain(firstPage.value.nextCursor);
   });
 
   it("materializes an accepted blocked group as pending atomically and replays the failure", async () => {
@@ -769,8 +880,11 @@ function confirmationContext(key: string, value: Parameters<typeof hashSubscript
 function releaseContext(key: string, value: Parameters<typeof hashSubscriptionRenewalReleaseRequest>[0]) { return { idempotencyKey: `subscription-renewal-releases-test:${key}`, requestHash: hashSubscriptionRenewalReleaseRequest(value), correlationId: `subscription-renewal-releases-${key}` }; }
 function exclusionContext(key: string, value: Parameters<typeof hashSubscriptionRenewalExclusionRequest>[0]) { return { idempotencyKey: `subscription-renewal-exclusions-test:${key}`, requestHash: hashSubscriptionRenewalExclusionRequest(value), correlationId: `subscription-renewal-exclusions-${key}` }; }
 function waiverContext(key: string, value: Parameters<typeof hashSubscriptionRenewalWaiverRequest>[0]) { return { idempotencyKey: `subscription-renewal-waivers-test:${key}`, requestHash: hashSubscriptionRenewalWaiverRequest(value), correlationId: `subscription-renewal-waivers-${key}` }; }
+function fiscalReviewContext(key: string, reviewId: string, value: { expectedVersion: 1 }) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashStartRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
+function fiscalReviewDecisionContext(key: string, reviewId: string, value: Parameters<typeof hashDecideRenewalWaiverFiscalReview>[1]) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashDecideRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
 function updatePayload(subscription: { version: number; customer: { id: string }; name: string; periodicity: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL"; pricingMode: "FIXED" | "PER_LICENSE"; startDate: string; endDate: string | null; notes: string | null; lines: Array<{ catalogItemId: string; quantity: string }> }, overrides: Record<string, unknown> = {}) { return { expectedVersion: subscription.version, customerId: subscription.customer.id, name: subscription.name, periodicity: subscription.periodicity, pricingMode: subscription.pricingMode, startDate: subscription.startDate, endDate: subscription.endDate, notes: subscription.notes, lines: subscription.lines.map((line) => ({ catalogItemId: line.catalogItemId, quantity: line.quantity })), ...overrides }; }
 async function admin() { const result = await login({ userName: "admin", password }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
+async function fiscalReviewer() { const role = await prisma.role.create({ data: { code: "WaiverFiscalReviewer", name: "Revision fiscal de condonaciones", permissions: { create: ["Subscriptions.ViewRenewalWaivers", "Subscriptions.ViewRenewalWaiverFiscalReviews", "Subscriptions.DecideRenewalWaiverFiscalReviews"].map((code) => ({ permission: { connect: { code } } })) } } }); await prisma.user.create({ data: { displayName: "Revisor Fiscal", userName: "waiver-fiscal-reviewer", normalizedUserName: "waiver-fiscal-reviewer", passwordHash: hashPassword("Cambiar-reviewer-2026"), roleId: role.id } }); const result = await login({ userName: "waiver-fiscal-reviewer", password: "Cambiar-reviewer-2026" }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
 async function initialize() { const raw = JSON.stringify(initialization); const result = await initializePlatform(initialization, randomUUID(), hashRequestBody(raw)); if (!result.ok) throw new Error(result.error.code); const installation = await prisma.installation.findFirstOrThrow(); await prisma.accountingFiscalYear.create({ data: { companyId: installation.companyId!, year: 2026, startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"), planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId! } }); }
 async function customer(createdById: string) { const suffix = randomUUID().replaceAll("-", "").slice(0, 12); return (await prisma.customer.create({ data: { code: `C${suffix.slice(0, 8)}`, type: "COMPANY", legalName: "Cliente Suscripciones SL", taxId: `VAT-${suffix}`, normalizedTaxId: `VAT${suffix}`, fiscalTreatment: "DOMESTIC", fiscalAddressLine: "Calle Test 1", fiscalPostalCode: "28001", fiscalCity: "Madrid", fiscalCountry: "ES", createdById } })).id; }
 async function catalogItem(createdById: string) { const tax = await prisma.catalogTaxRate.findFirstOrThrow({ where: { code: "IVA_21" } }); return (await prisma.catalogItem.create({ data: { code: `S${randomUUID().slice(0, 8)}`, kind: "SERVICE", name: `Servicio recurrente ${randomUUID()}`, salePrice: "49.90", taxRateId: tax.id, taxRate: tax.rate, createdById } })).id; }

@@ -522,6 +522,10 @@ La activacion administrativa sin facturar se implementa como condonacion
 irreversible de un unico periodo, con permiso dedicado, justificacion y avance
 canonico. Conserva una valoracion economica inmutable del periodo para control
 de ingresos condonados, aunque no genera factura, asiento ni VeriFactu. Queda
+abierta en la misma transaccion una revision fiscal posterior. Un segundo
+usuario debe asumirla y clasificarla como cerrada sin accion, escalada o con
+actuacion pendiente; la revision no aprueba retroactivamente ni modifica la
+condonacion. Queda
 fuera la clasificacion de nuevos bloqueos automaticos distintos
 de los dos codigos estables anteriores.
 

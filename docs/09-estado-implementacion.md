@@ -149,6 +149,30 @@ asiento ni VeriFactu, rechazando reservas y bajas pendientes. El expediente
 terminal conserva ademas subtotal, descuento, base, IVA, total y version de
 calculo como snapshot economico inmutable.
 
+El octavo corte local anade la migracion 113 y un informe paginado de periodos
+condonados, con resumen economico de todo el filtro y cursor firmado congelado
+por secuencia monotónica coordinada con la escritura. Permisos separados protegen consulta y exportacion; el CSV exige
+POST con origen y CSRF, rango anual, rate limit, limites de filas y bytes,
+neutralizacion de formulas y auditoria previa a la descarga. La pantalla y el
+archivo advierten que son control interno y no documentacion fiscal o contable.
+
+El noveno corte local anade la migracion 114 y completa la evidencia economica
+de cada condonacion con un snapshot operativo del cliente y un desglose teorico
+por codigo y porcentaje impositivo. No se copian NIF, domicilio, contacto ni
+datos bancarios. La procedencia distingue captura contemporanea y maestro
+actual recuperado para historicos; constraints diferidos comprueban presencia,
+empresa, cliente, inmutabilidad y suma exacta contra los totales terminales. El
+informe y el CSV consumen esta evidencia persistida sin crear factura, asiento,
+libro de IVA ni registro VeriFactu.
+
+El decimo corte local anade la migracion 115 y una revision fiscal posterior
+para cada condonacion. Se abre atomicamente, requiere un revisor distinto del
+usuario que condono, conserva un ledger por version y permite clasificar el
+caso como cerrado sin accion, escalado o con actuacion pendiente. Los permisos,
+idempotencia, CSRF, rate limit y auditoria son independientes. La clasificacion
+no altera la condonacion ni crea efectos de Facturacion, Contabilidad o
+VeriFactu; el cierre acreditado de actuaciones queda para el siguiente corte.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

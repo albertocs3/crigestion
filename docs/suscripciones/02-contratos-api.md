@@ -32,6 +32,10 @@ linea para que cambios posteriores del catalogo no alteren el contrato creado.
 | `Subscriptions.ConfirmRenewals` | Confirmar una reserva de renovacion. |
 | `Subscriptions.ManageRenewalExclusions` | Excluir renovaciones y consultar sus motivos. |
 | `Subscriptions.WaiveRenewals` | Condonar individualmente un periodo pendiente sin facturarlo. |
+| `Subscriptions.ViewRenewalWaivers` | Consultar el historial y los importes teoricos de periodos condonados. |
+| `Subscriptions.ExportRenewalWaivers` | Exportar el informe interno de periodos condonados. |
+| `Subscriptions.ViewRenewalWaiverFiscalReviews` | Consultar estado, revisor y conclusion de la revision fiscal posterior. |
+| `Subscriptions.DecideRenewalWaiverFiscalReviews` | Asumir y clasificar revisiones fiscales de condonaciones ajenas. |
 | `Billing.Issue` | Requisito adicional para emitir la factura durante la confirmacion. |
 
 ## 3. `GET /api/subscriptions`
@@ -373,6 +377,9 @@ cierra el expediente como `WAIVED`, conserva motivo, actor, instante y versiones
 anterior/posterior, cambia a `ACTIVE` y avanza un solo periodo. Tambien fija un
 snapshot economico en EUR (`subtotal`, descuento, base imponible, IVA y total)
 calculado desde las lineas contractuales con la version `invoice-lines-v1`.
+Guarda ademas la identidad operativa del cliente (codigo y razon social, sin
+NIF ni domicilio) y un desglose teorico inmutable por codigo y porcentaje de
+IVA. Ambos nacen en la misma transaccion y nunca se aceptan desde la API.
 La respuesta devuelve esa valoracion para que la confirmacion operativa muestre
 el importe exacto que se esta condonando.
 
@@ -380,7 +387,96 @@ PostgreSQL exige bilateralmente que la condonacion y el avance coincidan y que
 no exista factura activa para ese periodo. La auditoria
 `SUBSCRIPTION_RENEWAL_PERIOD_WAIVED` conserva codigo, total, moneda, version de
 calculo e identificadores seguros, pero nunca copia el motivo libre ni la clave
-idempotente. La evidencia terminal y su valoracion son inmutables.
+idempotente. Triggers diferidos exigen al menos un tipo y que sus bases, cuotas
+y totales sumen exactamente la cabecera. La evidencia terminal, el snapshot de
+cliente y los desgloses son inmutables.
+
+### `GET /api/subscriptions/renewal-waivers`
+
+Permiso requerido: `Subscriptions.ViewRenewalWaivers`. Devuelve solo expedientes
+`RESOLVED/WAIVED` de la empresa instalada, ordenados por `resolvedAt DESC, id
+DESC`, con cursor HMAC ligado a filtros y a una secuencia de corte monotónica.
+El resumen de
+conteo, subtotal, descuento, base, IVA y total corresponde a todo el filtro y
+se calcula sobre el snapshot persistido, nunca sobre las lineas actuales.
+
+Admite `reasonCode`, `customerId`, `search` sobre número o nombre contractual,
+`periodFrom`, `periodTo`,
+`waivedFrom` y `waivedTo`, ademas de `limit` 1-100 y cursor. Rechaza parametros
+desconocidos, repetidos, rangos inversos y cursores manipulados o reutilizados
+con otros filtros. Para nuevas condonaciones, codigo y nombre proceden del
+snapshot capturado al resolver. Un historico recuperado durante migracion se
+marca expresamente `BACKFILLED_CURRENT_MASTER` y nunca se presenta como dato
+capturado en la fecha original. El detalle libre solo se selecciona
+y devuelve si el actor posee tambien `Subscriptions.ManageRenewalExclusions`.
+Cada pagina se audita como `SUBSCRIPTION_RENEWAL_WAIVERS_VIEWED`, sin texto de
+busqueda, cursor ni motivos libres, y usa cache `private, no-store`.
+La búsqueda exige además un rango de condonación máximo de 366 días para acotar
+el coste; los límites diarios se interpretan en `Europe/Madrid`.
+
+### `POST /api/subscriptions/renewal-waivers/export`
+
+Permiso requerido: `Subscriptions.ExportRenewalWaivers`. Aunque genera un
+archivo de lectura, se usa `POST` para exigir origen permitido y CSRF ante una
+exfiltracion masiva. Recibe los mismos filtros en JSON estricto, con
+`waivedFrom` y `waivedTo` obligatorios y un rango maximo de 366 dias.
+
+Genera CSV UTF-8 con BOM, separador punto y coma, fechas ISO y decimales con
+punto. Conserva una fila por condonacion y serializa el desglose teorico en una
+columna no ambigua para no duplicar totales. No incluye motivos libres ni
+identificadores fiscales y neutraliza formulas de hoja de calculo antes del
+escape CSV. El limite sincrono es 5.000
+filas y 5 MiB; si se supera devuelve
+`SUBSCRIPTION_RENEWAL_WAIVER_EXPORT_TOO_LARGE` sin truncar. Aplica cinco
+exportaciones cada quince minutos por empresa y usuario, con `Retry-After: 900`.
+La generacion y auditoria `SUBSCRIPTION_RENEWAL_WAIVERS_EXPORTED` se confirman
+antes de entregar el archivo; la auditoria conserva filas, bytes y filtros
+seguros, nunca el contenido. El CSV se identifica expresamente como informe
+interno no fiscal y sus importes como valoraciones teoricas.
+
+### Revision fiscal posterior
+
+Cada nueva condonacion crea atomicamente una revision `PENDING` y un evento
+append-only `OPENED`. La migracion 115 abre tambien una revision pendiente para
+cada condonacion historica completa, marcada como
+`BACKFILLED_EXISTING_WAIVER`; no inventa conclusiones ni revisores.
+
+La revision no aprueba, revierte ni reabre la condonacion. Tampoco crea factura,
+asiento, libro de IVA, outbox o registro VeriFactu. Un segundo usuario con
+`Subscriptions.DecideRenewalWaiverFiscalReviews` debe asumirla y decidirla. La
+persona que condono el periodo no puede iniciar ni resolver su propia revision,
+incluso si es administradora.
+
+#### `POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/start`
+
+Exige Origin, CSRF, JSON estricto, `Idempotency-Key`, mantenimiento inactivo y
+el permiso de decision. Recibe `{ "expectedVersion": 1 }` y realiza
+`PENDING -> IN_REVIEW`, fijando revisor, hora PostgreSQL, version 2, auditoria y
+evento `STARTED` en la misma transaccion serializable.
+
+#### `POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/decide`
+
+Solo puede decidir el usuario que asumio la revision. Recibe version 2, detalle
+de 10-500 caracteres y una conclusion estable:
+
+- `NO_ADDITIONAL_ACTION`: cierra la revision sin vencimiento.
+- `MANUAL_ACCOUNTING_ACTION_REQUIRED`.
+- `BILLING_REGULARIZATION_REQUIRED`.
+- `EXTERNAL_FISCAL_ACTION_REQUIRED`.
+- `EXTERNAL_ADVICE_REQUIRED`.
+
+Las cuatro ultimas exigen `actionDueDate`; las tres actuaciones pasan a
+`ACTION_REQUIRED` y el asesoramiento a `ESCALATED`. Permanecen abiertas hasta
+un flujo posterior de acreditacion. El detalle libre se guarda en la revision,
+pero no aparece en el informe general, CSV, ledger ni auditoria. Cada actor
+dispone de 20 mutaciones por 15 minutos y recibe `Retry-After: 900` al superar
+el limite.
+
+El historial solo selecciona y devuelve la revision si el actor posee
+`Subscriptions.ViewRenewalWaiverFiscalReviews`. Muestra estado, actores,
+conclusion y vencimiento, pero no el detalle. PostgreSQL exige una revision por
+condonacion, un evento por version, maker/checker distintos, transiciones
+canonicas e inmutabilidad tras la decision.
 
 ### Implementacion de la reserva
 

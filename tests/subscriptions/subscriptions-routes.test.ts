@@ -14,6 +14,10 @@ import { POST as renewalRelease } from "@/app/api/subscriptions/renewals/[invoic
 import { POST as renewalExclude } from "@/app/api/subscriptions/[subscriptionId]/renewal-exclusions/route";
 import { GET as renewalExclusionsGet } from "@/app/api/subscriptions/renewal-exclusions/route";
 import { POST as renewalWaive } from "@/app/api/subscriptions/[subscriptionId]/renewal-exclusions/[exclusionId]/waive/route";
+import { GET as renewalWaiversGet } from "@/app/api/subscriptions/renewal-waivers/route";
+import { POST as renewalWaiversExport } from "@/app/api/subscriptions/renewal-waivers/export/route";
+import { POST as renewalWaiverFiscalReviewStart } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/start/route";
+import { POST as renewalWaiverFiscalReviewDecide } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/decide/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -161,6 +165,7 @@ describe("subscription HTTP contracts", () => {
 
   it("protects and replays an administrative renewal waiver", async () => {
     await login(); const adminToken = cookieMock.values.get(sessionCookieName)!; const csrf = await csrfToken(); const references = await createReferences();
+    await prisma.customer.update({ where: { id: references.customerId }, data: { legalName: "=HYPERLINK(\"https://example.test\")" } });
     const created = await (await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, todayDate()), { csrf }))).json() as { id: string; version: number };
     await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: created.version }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) });
     const exclusionBody = { expectedVersion: 2, periodStart: todayDate(), processDate: todayDate(), reason: "Pendiente de autorizacion administrativa" };
@@ -180,6 +185,55 @@ describe("subscription HTTP contracts", () => {
     expect(first.status).toBe(200); const firstBody = await first.json(); expect(firstBody).toMatchObject({ exclusionId: exclusion.exclusionId, subscriptionId: created.id, resolution: "WAIVED", status: "ACTIVE", version: 4 });
     const replay = await renewalWaive(jsonRequest(path, body, { csrf: restoredCsrf, idempotency }), routeContext);
     expect(replay.status).toBe(200); expect(await replay.json()).toEqual(firstBody);
+    const fiscalReviewId = (firstBody as { fiscalReview: { id: string } }).fiscalReview.id;
+    const fiscalContext = { params: Promise.resolve({ reviewId: fiscalReviewId }) };
+    expect((await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }, { csrf: restoredCsrf }), fiscalContext)).status).toBe(409);
+    await createRenewalWaiverFiscalReviewer(); cookieMock.reset(); await login("renewal-waiver-fiscal-reviewer", "Cambiar-fiscal-reviewer-2026"); const reviewerCsrf = await csrfToken();
+    expect((await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }, { csrf: reviewerCsrf, origin: "https://evil.example" }), fiscalContext)).status).toBe(403);
+    expect((await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }), fiscalContext)).status).toBe(403);
+    const startedReview = await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }, { csrf: reviewerCsrf }), fiscalContext);
+    expect(startedReview.status).toBe(200); expect(await startedReview.json()).toMatchObject({ status: "IN_REVIEW", version: 2 });
+    expect((await renewalWaiverFiscalReviewDecide(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/decide`, { expectedVersion: 2, decision: "EXTERNAL_ADVICE_REQUIRED", detail: "Consulta externa necesaria" }, { csrf: reviewerCsrf }), fiscalContext)).status).toBe(422);
+    const decidedReview = await renewalWaiverFiscalReviewDecide(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/decide`, { expectedVersion: 2, decision: "NO_ADDITIONAL_ACTION", detail: "Evidencia coherente sin actuaciones fiscales adicionales" }, { csrf: reviewerCsrf }), fiscalContext);
+    expect(decidedReview.status).toBe(200); expect(await decidedReview.json()).toMatchObject({ status: "CLOSED", version: 3, decision: "NO_ADDITIONAL_ACTION" });
+    cookieMock.values.set(sessionCookieName, adminToken);
+    const history = await renewalWaiversGet(apiRequest("/api/subscriptions/renewal-waivers?limit=1"));
+    expect(history.status).toBe(200); expect(history.headers.get("Cache-Control")).toBe("private, no-store, max-age=0");
+    const historyBody = await history.json() as { waivers: Array<Record<string, unknown>>; summary: { count: number; total: string } };
+    expect(historyBody).toMatchObject({ waivers: [{ id: exclusion.exclusionId, reason: body.reasonDetail, hasReason: true,
+      customer: { legalName: "=HYPERLINK(\"https://example.test\")", labelSource: "CAPTURED_AT_WAIVER" },
+      valuation: { total: "24.20", taxBreakdown: [{ taxRateCode: "IVA_21", theoreticalTaxableBase: "20.00", theoreticalTaxAmount: "4.20", theoreticalTotal: "24.20" }] },
+      fiscalReview: { id: fiscalReviewId, status: "CLOSED", decision: "NO_ADDITIONAL_ACTION" } }], summary: { count: 1, total: "24.20" } });
+    expect((await renewalWaiversGet(apiRequest("/api/subscriptions/renewal-waivers?unknown=true"))).status).toBe(422);
+    expect((await renewalWaiversGet(apiRequest("/api/subscriptions/renewal-waivers?limit=1&limit=2"))).status).toBe(422);
+    await createRenewalWaiverViewer(); cookieMock.reset(); await login("renewal-waiver-viewer", "Cambiar-waiver-viewer-2026");
+    const restrictedHistory = await renewalWaiversGet(apiRequest("/api/subscriptions/renewal-waivers"));
+    expect(restrictedHistory.status).toBe(200); const restrictedHistoryBody = await restrictedHistory.json() as { waivers: Array<Record<string, unknown>> };
+    expect(restrictedHistoryBody.waivers[0]).toMatchObject({ hasReason: true }); expect(restrictedHistoryBody.waivers[0]).not.toHaveProperty("reason"); expect(restrictedHistoryBody.waivers[0]).not.toHaveProperty("fiscalReview");
+    const restrictedCsrf = await csrfToken();
+    expect((await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", { waivedFrom: todayDate(), waivedTo: todayDate() }, { csrf: restrictedCsrf }))).status).toBe(403);
+    cookieMock.values.set(sessionCookieName, adminToken); const exportCsrf = await csrfToken();
+    await prisma.customer.update({ where: { id: references.customerId }, data: { legalName: "Nombre maestro posterior" } });
+    const exportBody = { waivedFrom: todayDate(), waivedTo: todayDate() };
+    expect((await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", {}, { csrf: exportCsrf }))).status).toBe(422);
+    expect((await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", exportBody, { csrf: exportCsrf, origin: "https://evil.example" }))).status).toBe(403);
+    expect((await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", exportBody))).status).toBe(403);
+    const exported = await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", exportBody, { csrf: exportCsrf }));
+    expect(exported.status).toBe(200); expect(exported.headers.get("Content-Type")).toBe("text/csv; charset=utf-8");
+    expect(exported.headers.get("Content-Disposition")).toContain("condonaciones-renovacion-");
+    const csvBytes = new Uint8Array(await exported.arrayBuffer());
+    expect([...csvBytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    const csv = new TextDecoder("utf-8").decode(csvBytes);
+    expect(csv).toContain("INFORME_INTERNO_NO_FISCAL");
+    expect(csv).toContain("'=HYPERLINK"); expect(csv).not.toContain("Nombre maestro posterior");
+    expect(csv).toContain("IVA_21 21.00%: base 20.00, IVA 4.20, total 24.20"); expect(csv).not.toContain(body.reasonDetail);
+    const exportAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_RENEWAL_WAIVERS_EXPORTED" } });
+    expect(JSON.stringify(exportAudit.payload)).not.toContain(body.reasonDetail);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect((await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", exportBody, { csrf: exportCsrf }))).status).toBe(200);
+    }
+    const limited = await renewalWaiversExport(jsonRequest("/api/subscriptions/renewal-waivers/export", exportBody, { csrf: exportCsrf }));
+    expect(limited.status).toBe(429); expect(limited.headers.get("Retry-After")).toBe("900");
   });
 });
 
@@ -195,6 +249,8 @@ async function createViewOnlyUser() { const role = await prisma.role.create({ da
 async function createRenewalConfirmerWithoutBilling() { const role = await prisma.role.create({ data: { code: "RenewalConfirmer", name: "Confirma renovaciones", permissions: { create: { permission: { connect: { code: "Subscriptions.ConfirmRenewals" } } } } } }); await prisma.user.create({ data: { displayName: "Confirmador", userName: "renewal-confirmer", normalizedUserName: "renewal-confirmer", passwordHash: hashPassword("Cambiar-confirmer-2026"), roleId: role.id } }); }
 async function createRenewalRunnerWithoutExclusions() { const role = await prisma.role.create({ data: { code: "RenewalRunner", name: "Ejecuta renovaciones", permissions: { create: { permission: { connect: { code: "Subscriptions.RunRenewals" } } } } } }); await prisma.user.create({ data: { displayName: "Operador", userName: "renewal-runner", normalizedUserName: "renewal-runner", passwordHash: hashPassword("Cambiar-runner-2026"), roleId: role.id } }); }
 async function createRenewalExclusionManagerWithoutRunner() { const role = await prisma.role.create({ data: { code: "RenewalExclusionManager", name: "Gestiona exclusiones", permissions: { create: { permission: { connect: { code: "Subscriptions.ManageRenewalExclusions" } } } } } }); await prisma.user.create({ data: { displayName: "Gestor de exclusiones", userName: "renewal-exclusion-manager", normalizedUserName: "renewal-exclusion-manager", passwordHash: hashPassword("Cambiar-exclusion-manager-2026"), roleId: role.id } }); }
+async function createRenewalWaiverViewer() { const role = await prisma.role.create({ data: { code: "RenewalWaiverViewer", name: "Consulta condonaciones", permissions: { create: { permission: { connect: { code: "Subscriptions.ViewRenewalWaivers" } } } } } }); await prisma.user.create({ data: { displayName: "Consulta condonaciones", userName: "renewal-waiver-viewer", normalizedUserName: "renewal-waiver-viewer", passwordHash: hashPassword("Cambiar-waiver-viewer-2026"), roleId: role.id } }); }
+async function createRenewalWaiverFiscalReviewer() { const role = await prisma.role.create({ data: { code: "RenewalWaiverFiscalReviewer", name: "Revision fiscal de condonaciones", permissions: { create: ["Subscriptions.ViewRenewalWaivers", "Subscriptions.ViewRenewalWaiverFiscalReviews", "Subscriptions.DecideRenewalWaiverFiscalReviews"].map((code) => ({ permission: { connect: { code } } })) } } }); await prisma.user.create({ data: { displayName: "Revisor fiscal", userName: "renewal-waiver-fiscal-reviewer", normalizedUserName: "renewal-waiver-fiscal-reviewer", passwordHash: hashPassword("Cambiar-fiscal-reviewer-2026"), roleId: role.id } }); }
 async function seedRenewalAccounting(companyId: string, actorId: string, customerCode: string) { const fiscalYear = await prisma.accountingFiscalYear.create({ data: { companyId, year: 2026, startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"), planCode: "PGC_PYMES", planVersion: "2021.1", createdById: actorId } }); await prisma.accountingAccount.createMany({ data: [
   { fiscalYearId: fiscalYear.id, code: `430${customerCode.padStart(6, "0")}`, name: "Cliente renovacion", type: "ASSET", level: 4, isPostable: true, createdById: actorId },
   { fiscalYearId: fiscalYear.id, code: "705000000", name: "Servicios", type: "INCOME", level: 4, isPostable: true, createdById: actorId },

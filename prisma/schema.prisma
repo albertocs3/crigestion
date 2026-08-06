@@ -258,6 +258,38 @@ enum SubscriptionRenewalWaiverReasonCode {
   OTHER
 }
 
+enum SubscriptionRenewalWaiverSnapshotSource {
+  CAPTURED_AT_WAIVER
+  BACKFILLED_CURRENT_MASTER
+}
+
+enum SubscriptionRenewalWaiverReviewStatus {
+  PENDING
+  IN_REVIEW
+  ESCALATED
+  ACTION_REQUIRED
+  CLOSED
+}
+
+enum SubscriptionRenewalWaiverReviewDecision {
+  NO_ADDITIONAL_ACTION
+  MANUAL_ACCOUNTING_ACTION_REQUIRED
+  BILLING_REGULARIZATION_REQUIRED
+  EXTERNAL_FISCAL_ACTION_REQUIRED
+  EXTERNAL_ADVICE_REQUIRED
+}
+
+enum SubscriptionRenewalWaiverReviewEventType {
+  OPENED
+  STARTED
+  DECIDED
+}
+
+enum SubscriptionRenewalWaiverReviewSource {
+  CURRENT_WORKFLOW
+  BACKFILLED_EXISTING_WAIVER
+}
+
 enum SubscriptionRenewalAttemptPhase {
   PREPARE
   CONFIRM
@@ -525,33 +557,36 @@ model Company {
   createdAt              DateTime @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime @updatedAt @db.Timestamptz(3)
 
-  installation                      Installation?
-  accountingFiscalYears             AccountingFiscalYear[]
-  fiscalYearCloseRequests           AccountingFiscalYearCloseRequest[]
-  fiscalYearReopenRequests          AccountingFiscalYearReopenRequest[]
-  bankAccounts                      BankAccount[]
-  bankStatements                    BankStatement[]
-  invoices                          Invoice[]
-  purchaseInvoices                  PurchaseInvoice[]
-  purchaseVatRecords                PurchaseVatRecord[]
-  supplierPayments                  SupplierPayment[]
-  supplierCredits                   SupplierCredit[]
-  supplierCreditRefunds             SupplierCreditRefund[]
-  customerCredits                   CustomerCredit[]
-  customerCreditRefunds             CustomerCreditRefund[]
-  verifactuInstallations            VerifactuSifInstallation[]
-  verifactuFiscalRecords            VerifactuFiscalRecord[]
-  verifactuMtlsCredentials          VerifactuMtlsCredential[]
-  verifactuWorkerRuns               VerifactuWorkerRun[]
-  attachments                       Attachment[]                        @relation("CompanyAttachments")
-  suppliers                         Supplier[]
-  subscriptionSequences             SubscriptionNumberSequence[]
-  subscriptions                     Subscription[]
-  subscriptionCancellationSchedules SubscriptionCancellationSchedule[]
-  subscriptionRenewalReservations   SubscriptionRenewalReservation[]
-  subscriptionRenewalExclusions     SubscriptionRenewalExclusion[]
-  subscriptionRenewalAttempts       SubscriptionRenewalAttempt[]
-  logoAttachment                    Attachment?                         @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
+  installation                          Installation?
+  accountingFiscalYears                 AccountingFiscalYear[]
+  fiscalYearCloseRequests               AccountingFiscalYearCloseRequest[]
+  fiscalYearReopenRequests              AccountingFiscalYearReopenRequest[]
+  bankAccounts                          BankAccount[]
+  bankStatements                        BankStatement[]
+  invoices                              Invoice[]
+  purchaseInvoices                      PurchaseInvoice[]
+  purchaseVatRecords                    PurchaseVatRecord[]
+  supplierPayments                      SupplierPayment[]
+  supplierCredits                       SupplierCredit[]
+  supplierCreditRefunds                 SupplierCreditRefund[]
+  customerCredits                       CustomerCredit[]
+  customerCreditRefunds                 CustomerCreditRefund[]
+  verifactuInstallations                VerifactuSifInstallation[]
+  verifactuFiscalRecords                VerifactuFiscalRecord[]
+  verifactuMtlsCredentials              VerifactuMtlsCredential[]
+  verifactuWorkerRuns                   VerifactuWorkerRun[]
+  attachments                           Attachment[]                           @relation("CompanyAttachments")
+  suppliers                             Supplier[]
+  subscriptionSequences                 SubscriptionNumberSequence[]
+  subscriptions                         Subscription[]
+  subscriptionCancellationSchedules     SubscriptionCancellationSchedule[]
+  subscriptionRenewalReservations       SubscriptionRenewalReservation[]
+  subscriptionRenewalExclusions         SubscriptionRenewalExclusion[]
+  subscriptionRenewalWaiverSnapshots    SubscriptionRenewalWaiverSnapshot[]
+  subscriptionRenewalWaiverReviews      SubscriptionRenewalWaiverReview[]
+  subscriptionRenewalWaiverReviewEvents SubscriptionRenewalWaiverReviewEvent[]
+  subscriptionRenewalAttempts           SubscriptionRenewalAttempt[]
+  logoAttachment                        Attachment?                            @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
 }
@@ -625,17 +660,18 @@ model Customer {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  createdBy                       User                             @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy                       User?                            @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  addresses                       CustomerAddress[]
-  stores                          CustomerStore[]
-  sepaMandates                    CustomerSepaMandate[]
-  remittanceLines                 CustomerRemittanceLine[]
-  invoices                        Invoice[]
-  credits                         CustomerCredit[]
-  creditRefunds                   CustomerCreditRefund[]
-  subscriptions                   Subscription[]
-  subscriptionRenewalReservations SubscriptionRenewalReservation[]
+  createdBy                          User                                @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                          User?                               @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  addresses                          CustomerAddress[]
+  stores                             CustomerStore[]
+  sepaMandates                       CustomerSepaMandate[]
+  remittanceLines                    CustomerRemittanceLine[]
+  invoices                           Invoice[]
+  credits                            CustomerCredit[]
+  creditRefunds                      CustomerCreditRefund[]
+  subscriptions                      Subscription[]
+  subscriptionRenewalReservations    SubscriptionRenewalReservation[]
+  subscriptionRenewalWaiverSnapshots SubscriptionRenewalWaiverSnapshot[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -1019,79 +1055,84 @@ model User {
   createdAt          DateTime   @default(now()) @db.Timestamptz(3)
   updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
 
-  role                                  Role                                 @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  uploadedAttachments                   Attachment[]                         @relation("AttachmentsUploadedBy")
-  sessions                              Session[]
-  requestedBackups                      BackupOperation[]
-  requestedRestores                     RestoreOperation[]
-  enabledMaintenances                   PlatformMaintenanceState[]           @relation("MaintenanceEnabledBy")
-  disabledMaintenances                  PlatformMaintenanceState[]           @relation("MaintenanceDisabledBy")
-  createdCustomers                      Customer[]                           @relation("CustomersCreatedBy")
-  updatedCustomers                      Customer[]                           @relation("CustomersUpdatedBy")
-  createdSuppliers                      Supplier[]                           @relation("SuppliersCreatedBy")
-  updatedSuppliers                      Supplier[]                           @relation("SuppliersUpdatedBy")
-  createdPurchaseInvoices               PurchaseInvoice[]                    @relation("PurchaseInvoicesCreatedBy")
-  updatedPurchaseInvoices               PurchaseInvoice[]                    @relation("PurchaseInvoicesUpdatedBy")
-  registeredPurchaseInvoices            PurchaseInvoice[]                    @relation("PurchaseInvoicesRegisteredBy")
-  createdSupplierPayments               SupplierPayment[]                    @relation("SupplierPaymentsCreatedBy")
-  createdCustomerAddresses              CustomerAddress[]                    @relation("CustomerAddressesCreatedBy")
-  updatedCustomerAddresses              CustomerAddress[]                    @relation("CustomerAddressesUpdatedBy")
-  createdCustomerSepaMandates           CustomerSepaMandate[]                @relation("CustomerSepaMandatesCreatedBy")
-  revokedCustomerSepaMandates           CustomerSepaMandate[]                @relation("CustomerSepaMandatesRevokedBy")
-  createdCustomerStores                 CustomerStore[]                      @relation("CustomerStoresCreatedBy")
-  updatedCustomerStores                 CustomerStore[]                      @relation("CustomerStoresUpdatedBy")
-  createdCatalogItems                   CatalogItem[]                        @relation("CatalogItemsCreatedBy")
-  updatedCatalogItems                   CatalogItem[]                        @relation("CatalogItemsUpdatedBy")
-  createdCatalogStockMovements          CatalogStockMovement[]               @relation("CatalogStockMovementsCreatedBy")
-  createdInvoices                       Invoice[]                            @relation("InvoicesCreatedBy")
-  updatedInvoices                       Invoice[]                            @relation("InvoicesUpdatedBy")
-  issuedInvoices                        Invoice[]                            @relation("InvoicesIssuedBy")
-  createdCustomerPayments               CustomerPayment[]                    @relation("CustomerPaymentsCreatedBy")
-  createdCustomerPaymentReturns         CustomerPaymentReturn[]              @relation("CustomerPaymentReturnsCreatedBy")
-  createdCustomerCredits                CustomerCredit[]                     @relation("CustomerCreditsCreatedBy")
-  createdCreditApplications             CustomerCreditApplication[]          @relation("CustomerCreditApplicationsCreatedBy")
-  requestedCreditRefunds                CustomerCreditRefund[]               @relation("CustomerCreditRefundsRequestedBy")
-  approvedCreditRefunds                 CustomerCreditRefund[]               @relation("CustomerCreditRefundsApprovedBy")
-  postedCreditRefunds                   CustomerCreditRefund[]               @relation("CustomerCreditRefundsPostedBy")
-  cancelledCreditRefunds                CustomerCreditRefund[]               @relation("CustomerCreditRefundsCancelledBy")
-  createdSupplierCredits                SupplierCredit[]                     @relation("SupplierCreditsCreatedBy")
-  createdSupplierCreditApplications     SupplierCreditApplication[]          @relation("SupplierCreditApplicationsCreatedBy")
-  requestedSupplierCreditRefunds        SupplierCreditRefund[]               @relation("SupplierCreditRefundsRequestedBy")
-  approvedSupplierCreditRefunds         SupplierCreditRefund[]               @relation("SupplierCreditRefundsApprovedBy")
-  postedSupplierCreditRefunds           SupplierCreditRefund[]               @relation("SupplierCreditRefundsPostedBy")
-  cancelledSupplierCreditRefunds        SupplierCreditRefund[]               @relation("SupplierCreditRefundsCancelledBy")
-  createdCustomerRemittances            CustomerRemittance[]                 @relation("CustomerRemittancesCreatedBy")
-  updatedCustomerRemittances            CustomerRemittance[]                 @relation("CustomerRemittancesUpdatedBy")
-  createdAccountingAccounts             AccountingAccount[]                  @relation("AccountingAccountsCreatedBy")
-  createdAccountingFiscalYears          AccountingFiscalYear[]               @relation("AccountingFiscalYearsCreatedBy")
-  closedAccountingFiscalYears           AccountingFiscalYear[]               @relation("AccountingFiscalYearsClosedBy")
-  requestedFiscalYearClosures           AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsRequestedBy")
-  approvedFiscalYearClosures            AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsApprovedBy")
-  cancelledFiscalYearClosures           AccountingFiscalYearCloseRequest[]   @relation("AccountingFiscalYearCloseRequestsCancelledBy")
-  requestedFiscalYearReopenings         AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsRequestedBy")
-  approvedFiscalYearReopenings          AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsApprovedBy")
-  cancelledFiscalYearReopenings         AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsCancelledBy")
-  rejectedFiscalYearReopenings          AccountingFiscalYearReopenRequest[]  @relation("AccountingFiscalYearReopenRequestsRejectedBy")
-  createdAccountingEntries              AccountingJournalEntry[]             @relation("AccountingEntriesCreatedBy")
-  updatedAccountingEntries              AccountingJournalEntry[]             @relation("AccountingEntriesUpdatedBy")
-  createdBankAccounts                   BankAccount[]                        @relation("BankAccountsCreatedBy")
-  createdBankMovements                  BankMovement[]                       @relation("BankMovementsCreatedBy")
-  createdBankReconciliations            BankReconciliation[]                 @relation("BankReconciliationsCreatedBy")
-  undoneBankReconciliations             BankReconciliation[]                 @relation("BankReconciliationsUndoneBy")
-  importedBankStatements                BankStatement[]                      @relation("BankStatementsImportedBy")
-  verifactuCredentialTests              VerifactuMtlsCredentialTestAttempt[]
-  createdSubscriptions                  Subscription[]                       @relation("SubscriptionsCreatedBy")
-  updatedSubscriptions                  Subscription[]                       @relation("SubscriptionsUpdatedBy")
-  activatedSubscriptions                Subscription[]                       @relation("SubscriptionsActivatedBy")
-  cancelledSubscriptions                Subscription[]                       @relation("SubscriptionsCancelledBy")
-  requestedSubscriptionCancellations    SubscriptionCancellationSchedule[]   @relation("SubscriptionCancellationsRequestedBy")
-  revokedSubscriptionCancellations      SubscriptionCancellationSchedule[]   @relation("SubscriptionCancellationsRevokedBy")
-  reservedSubscriptionRenewals          SubscriptionRenewalReservation[]     @relation("SubscriptionRenewalsReservedBy")
-  releasedSubscriptionRenewals          SubscriptionRenewalReservation[]     @relation("SubscriptionRenewalsReleasedBy")
-  openedSubscriptionRenewalExclusions   SubscriptionRenewalExclusion[]       @relation("SubscriptionRenewalExclusionsOpenedBy")
-  resolvedSubscriptionRenewalExclusions SubscriptionRenewalExclusion[]       @relation("SubscriptionRenewalExclusionsResolvedBy")
-  subscriptionRenewalAttempts           SubscriptionRenewalAttempt[]         @relation("SubscriptionRenewalAttemptsActor")
-  initialInstallation                   Installation?
+  role                                    Role                                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  uploadedAttachments                     Attachment[]                           @relation("AttachmentsUploadedBy")
+  sessions                                Session[]
+  requestedBackups                        BackupOperation[]
+  requestedRestores                       RestoreOperation[]
+  enabledMaintenances                     PlatformMaintenanceState[]             @relation("MaintenanceEnabledBy")
+  disabledMaintenances                    PlatformMaintenanceState[]             @relation("MaintenanceDisabledBy")
+  createdCustomers                        Customer[]                             @relation("CustomersCreatedBy")
+  updatedCustomers                        Customer[]                             @relation("CustomersUpdatedBy")
+  createdSuppliers                        Supplier[]                             @relation("SuppliersCreatedBy")
+  updatedSuppliers                        Supplier[]                             @relation("SuppliersUpdatedBy")
+  createdPurchaseInvoices                 PurchaseInvoice[]                      @relation("PurchaseInvoicesCreatedBy")
+  updatedPurchaseInvoices                 PurchaseInvoice[]                      @relation("PurchaseInvoicesUpdatedBy")
+  registeredPurchaseInvoices              PurchaseInvoice[]                      @relation("PurchaseInvoicesRegisteredBy")
+  createdSupplierPayments                 SupplierPayment[]                      @relation("SupplierPaymentsCreatedBy")
+  createdCustomerAddresses                CustomerAddress[]                      @relation("CustomerAddressesCreatedBy")
+  updatedCustomerAddresses                CustomerAddress[]                      @relation("CustomerAddressesUpdatedBy")
+  createdCustomerSepaMandates             CustomerSepaMandate[]                  @relation("CustomerSepaMandatesCreatedBy")
+  revokedCustomerSepaMandates             CustomerSepaMandate[]                  @relation("CustomerSepaMandatesRevokedBy")
+  createdCustomerStores                   CustomerStore[]                        @relation("CustomerStoresCreatedBy")
+  updatedCustomerStores                   CustomerStore[]                        @relation("CustomerStoresUpdatedBy")
+  createdCatalogItems                     CatalogItem[]                          @relation("CatalogItemsCreatedBy")
+  updatedCatalogItems                     CatalogItem[]                          @relation("CatalogItemsUpdatedBy")
+  createdCatalogStockMovements            CatalogStockMovement[]                 @relation("CatalogStockMovementsCreatedBy")
+  createdInvoices                         Invoice[]                              @relation("InvoicesCreatedBy")
+  updatedInvoices                         Invoice[]                              @relation("InvoicesUpdatedBy")
+  issuedInvoices                          Invoice[]                              @relation("InvoicesIssuedBy")
+  createdCustomerPayments                 CustomerPayment[]                      @relation("CustomerPaymentsCreatedBy")
+  createdCustomerPaymentReturns           CustomerPaymentReturn[]                @relation("CustomerPaymentReturnsCreatedBy")
+  createdCustomerCredits                  CustomerCredit[]                       @relation("CustomerCreditsCreatedBy")
+  createdCreditApplications               CustomerCreditApplication[]            @relation("CustomerCreditApplicationsCreatedBy")
+  requestedCreditRefunds                  CustomerCreditRefund[]                 @relation("CustomerCreditRefundsRequestedBy")
+  approvedCreditRefunds                   CustomerCreditRefund[]                 @relation("CustomerCreditRefundsApprovedBy")
+  postedCreditRefunds                     CustomerCreditRefund[]                 @relation("CustomerCreditRefundsPostedBy")
+  cancelledCreditRefunds                  CustomerCreditRefund[]                 @relation("CustomerCreditRefundsCancelledBy")
+  createdSupplierCredits                  SupplierCredit[]                       @relation("SupplierCreditsCreatedBy")
+  createdSupplierCreditApplications       SupplierCreditApplication[]            @relation("SupplierCreditApplicationsCreatedBy")
+  requestedSupplierCreditRefunds          SupplierCreditRefund[]                 @relation("SupplierCreditRefundsRequestedBy")
+  approvedSupplierCreditRefunds           SupplierCreditRefund[]                 @relation("SupplierCreditRefundsApprovedBy")
+  postedSupplierCreditRefunds             SupplierCreditRefund[]                 @relation("SupplierCreditRefundsPostedBy")
+  cancelledSupplierCreditRefunds          SupplierCreditRefund[]                 @relation("SupplierCreditRefundsCancelledBy")
+  createdCustomerRemittances              CustomerRemittance[]                   @relation("CustomerRemittancesCreatedBy")
+  updatedCustomerRemittances              CustomerRemittance[]                   @relation("CustomerRemittancesUpdatedBy")
+  createdAccountingAccounts               AccountingAccount[]                    @relation("AccountingAccountsCreatedBy")
+  createdAccountingFiscalYears            AccountingFiscalYear[]                 @relation("AccountingFiscalYearsCreatedBy")
+  closedAccountingFiscalYears             AccountingFiscalYear[]                 @relation("AccountingFiscalYearsClosedBy")
+  requestedFiscalYearClosures             AccountingFiscalYearCloseRequest[]     @relation("AccountingFiscalYearCloseRequestsRequestedBy")
+  approvedFiscalYearClosures              AccountingFiscalYearCloseRequest[]     @relation("AccountingFiscalYearCloseRequestsApprovedBy")
+  cancelledFiscalYearClosures             AccountingFiscalYearCloseRequest[]     @relation("AccountingFiscalYearCloseRequestsCancelledBy")
+  requestedFiscalYearReopenings           AccountingFiscalYearReopenRequest[]    @relation("AccountingFiscalYearReopenRequestsRequestedBy")
+  approvedFiscalYearReopenings            AccountingFiscalYearReopenRequest[]    @relation("AccountingFiscalYearReopenRequestsApprovedBy")
+  cancelledFiscalYearReopenings           AccountingFiscalYearReopenRequest[]    @relation("AccountingFiscalYearReopenRequestsCancelledBy")
+  rejectedFiscalYearReopenings            AccountingFiscalYearReopenRequest[]    @relation("AccountingFiscalYearReopenRequestsRejectedBy")
+  createdAccountingEntries                AccountingJournalEntry[]               @relation("AccountingEntriesCreatedBy")
+  updatedAccountingEntries                AccountingJournalEntry[]               @relation("AccountingEntriesUpdatedBy")
+  createdBankAccounts                     BankAccount[]                          @relation("BankAccountsCreatedBy")
+  createdBankMovements                    BankMovement[]                         @relation("BankMovementsCreatedBy")
+  createdBankReconciliations              BankReconciliation[]                   @relation("BankReconciliationsCreatedBy")
+  undoneBankReconciliations               BankReconciliation[]                   @relation("BankReconciliationsUndoneBy")
+  importedBankStatements                  BankStatement[]                        @relation("BankStatementsImportedBy")
+  verifactuCredentialTests                VerifactuMtlsCredentialTestAttempt[]
+  createdSubscriptions                    Subscription[]                         @relation("SubscriptionsCreatedBy")
+  updatedSubscriptions                    Subscription[]                         @relation("SubscriptionsUpdatedBy")
+  activatedSubscriptions                  Subscription[]                         @relation("SubscriptionsActivatedBy")
+  cancelledSubscriptions                  Subscription[]                         @relation("SubscriptionsCancelledBy")
+  requestedSubscriptionCancellations      SubscriptionCancellationSchedule[]     @relation("SubscriptionCancellationsRequestedBy")
+  revokedSubscriptionCancellations        SubscriptionCancellationSchedule[]     @relation("SubscriptionCancellationsRevokedBy")
+  reservedSubscriptionRenewals            SubscriptionRenewalReservation[]       @relation("SubscriptionRenewalsReservedBy")
+  releasedSubscriptionRenewals            SubscriptionRenewalReservation[]       @relation("SubscriptionRenewalsReleasedBy")
+  openedSubscriptionRenewalExclusions     SubscriptionRenewalExclusion[]         @relation("SubscriptionRenewalExclusionsOpenedBy")
+  resolvedSubscriptionRenewalExclusions   SubscriptionRenewalExclusion[]         @relation("SubscriptionRenewalExclusionsResolvedBy")
+  subscriptionRenewalAttempts             SubscriptionRenewalAttempt[]           @relation("SubscriptionRenewalAttemptsActor")
+  openedSubscriptionRenewalWaiverReviews  SubscriptionRenewalWaiverReview[]      @relation("SubscriptionRenewalWaiverReviewsOpenedBy")
+  startedSubscriptionRenewalWaiverReviews SubscriptionRenewalWaiverReview[]      @relation("SubscriptionRenewalWaiverReviewsStartedBy")
+  decidedSubscriptionRenewalWaiverReviews SubscriptionRenewalWaiverReview[]      @relation("SubscriptionRenewalWaiverReviewsDecidedBy")
+  closedSubscriptionRenewalWaiverReviews  SubscriptionRenewalWaiverReview[]      @relation("SubscriptionRenewalWaiverReviewsClosedBy")
+  subscriptionRenewalWaiverReviewEvents   SubscriptionRenewalWaiverReviewEvent[] @relation("SubscriptionRenewalWaiverReviewEventsActor")
+  initialInstallation                     Installation?
 
   @@map("users")
 }
@@ -1415,6 +1456,7 @@ model SubscriptionRenewalExclusion {
   waivedTaxAmount             Decimal?                                @db.Decimal(14, 2)
   waivedTotal                 Decimal?                                @db.Decimal(14, 2)
   waiverCalculationVersion    String?                                 @db.VarChar(40)
+  waiverSequence              BigInt?                                 @unique
 
   company         Company                            @relation(fields: [companyId], references: [id], onDelete: Restrict)
   subscription    Subscription                       @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
@@ -1422,12 +1464,109 @@ model SubscriptionRenewalExclusion {
   resolvedBy      User?                              @relation("SubscriptionRenewalExclusionsResolvedBy", fields: [resolvedById], references: [id], onDelete: Restrict)
   resolvedInvoice Invoice?                           @relation(fields: [resolvedInvoiceId, companyId], references: [id, companyId], onDelete: Restrict)
   attemptMembers  SubscriptionRenewalAttemptMember[]
+  waiverSnapshot  SubscriptionRenewalWaiverSnapshot?
+  fiscalReview    SubscriptionRenewalWaiverReview?
 
   @@unique([companyId, subscriptionId, periodStart])
+  @@unique([id, companyId])
   @@index([companyId, status, lastAttemptAt, id])
   @@index([companyId, status, periodStart, id])
   @@index([subscriptionId, openedAt, id])
   @@map("subscription_renewal_exclusions")
+}
+
+model SubscriptionRenewalWaiverSnapshot {
+  exclusionId               String                                  @id @db.Uuid
+  companyId                 String                                  @db.Uuid
+  customerId                String                                  @db.Uuid
+  customerCodeSnapshot      String                                  @db.VarChar(20)
+  customerLegalNameSnapshot String                                  @db.VarChar(200)
+  source                    SubscriptionRenewalWaiverSnapshotSource
+  currency                  String                                  @db.Char(3)
+  capturedAt                DateTime                                @db.Timestamptz(3)
+
+  exclusion    SubscriptionRenewalExclusion          @relation(fields: [exclusionId, companyId], references: [id, companyId], onDelete: Restrict)
+  company      Company                               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer     Customer                              @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  taxSummaries SubscriptionRenewalWaiverTaxSummary[]
+
+  @@unique([exclusionId, companyId])
+  @@index([customerId])
+  @@map("subscription_renewal_waiver_snapshots")
+}
+
+model SubscriptionRenewalWaiverTaxSummary {
+  id                     String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  exclusionId            String   @db.Uuid
+  companyId              String   @db.Uuid
+  taxRateCodeSnapshot    String   @db.VarChar(40)
+  taxRateNameSnapshot    String   @db.VarChar(120)
+  taxRateSnapshot        Decimal  @db.Decimal(5, 2)
+  theoreticalTaxableBase Decimal  @db.Decimal(14, 2)
+  theoreticalTaxAmount   Decimal  @db.Decimal(14, 2)
+  theoreticalTotal       Decimal  @db.Decimal(14, 2)
+  createdAt              DateTime @default(now()) @db.Timestamptz(3)
+
+  snapshot SubscriptionRenewalWaiverSnapshot @relation(fields: [exclusionId, companyId], references: [exclusionId, companyId], onDelete: Restrict)
+
+  @@unique([exclusionId, taxRateCodeSnapshot, taxRateSnapshot])
+  @@index([companyId, exclusionId])
+  @@map("subscription_renewal_waiver_tax_summaries")
+}
+
+model SubscriptionRenewalWaiverReview {
+  id             String                                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String                                   @db.Uuid
+  exclusionId    String                                   @unique @db.Uuid
+  status         SubscriptionRenewalWaiverReviewStatus    @default(PENDING)
+  source         SubscriptionRenewalWaiverReviewSource
+  version        Int                                      @default(1)
+  openedById     String                                   @db.Uuid
+  openedAt       DateTime                                 @db.Timestamptz(3)
+  startedById    String?                                  @db.Uuid
+  startedAt      DateTime?                                @db.Timestamptz(3)
+  decision       SubscriptionRenewalWaiverReviewDecision?
+  decisionDetail String?                                  @db.VarChar(500)
+  actionDueDate  DateTime?                                @db.Date
+  decidedById    String?                                  @db.Uuid
+  decidedAt      DateTime?                                @db.Timestamptz(3)
+  closedById     String?                                  @db.Uuid
+  closedAt       DateTime?                                @db.Timestamptz(3)
+  updatedAt      DateTime                                 @updatedAt @db.Timestamptz(3)
+
+  company   Company                                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  exclusion SubscriptionRenewalExclusion           @relation(fields: [exclusionId, companyId], references: [id, companyId], onDelete: Restrict)
+  openedBy  User                                   @relation("SubscriptionRenewalWaiverReviewsOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  startedBy User?                                  @relation("SubscriptionRenewalWaiverReviewsStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
+  decidedBy User?                                  @relation("SubscriptionRenewalWaiverReviewsDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  closedBy  User?                                  @relation("SubscriptionRenewalWaiverReviewsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  events    SubscriptionRenewalWaiverReviewEvent[]
+
+  @@unique([id, companyId])
+  @@unique([exclusionId, companyId])
+  @@index([companyId, status, openedAt, id])
+  @@index([companyId, actionDueDate, id])
+  @@map("subscription_renewal_waiver_reviews")
+}
+
+model SubscriptionRenewalWaiverReviewEvent {
+  id            String                                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId     String                                   @db.Uuid
+  reviewId      String                                   @db.Uuid
+  type          SubscriptionRenewalWaiverReviewEventType
+  reviewVersion Int
+  actorId       String                                   @db.Uuid
+  decision      SubscriptionRenewalWaiverReviewDecision?
+  occurredAt    DateTime                                 @default(now()) @db.Timestamptz(3)
+  correlationId String?                                  @db.VarChar(100)
+
+  company Company                         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  review  SubscriptionRenewalWaiverReview @relation(fields: [reviewId, companyId], references: [id, companyId], onDelete: Restrict)
+  actor   User                            @relation("SubscriptionRenewalWaiverReviewEventsActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([reviewId, reviewVersion])
+  @@index([companyId, occurredAt, id])
+  @@map("subscription_renewal_waiver_review_events")
 }
 
 model SubscriptionRenewalAttempt {
