@@ -110,6 +110,14 @@ añade evidencia append-only. Evitar rolling deploy: una instancia antigua no
 conoce `WAIVER_REGULARIZATION` ni el evento `COMPLETED` si aparecen durante la
 ventana mixta.
 
+Las migraciones `20260806185000_expand_waiver_accounting_reversal_enums` y
+`20260806190000_add_waiver_accounting_reversal_requests` deben desplegarse con
+mantenimiento y sin rolling deploy. La primera amplía enums y la segunda añade
+solicitudes, ledger, permisos, origen contable y triggers diferidos. Antes de
+reabrir tráfico, verificar que una solicitud pendiente no admite un asiento
+persistente y que una aprobación de prueba crea exactamente una inversión
+`POSTED` dentro del ejercicio abierto sin alterar factura ni VeriFactu.
+
 ## 6. Despliegue
 
 Para el VPS Plesk de `gestion.crisoft.es`, aplicar ademas el runbook

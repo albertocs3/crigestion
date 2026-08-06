@@ -11,6 +11,7 @@ import { listSubscriptionRenewalWaivers } from "@/modules/subscriptions/applicat
 import { completeRenewalWaiverFiscalReview, decideRenewalWaiverFiscalReview, hashCompleteRenewalWaiverFiscalReview, hashDecideRenewalWaiverFiscalReview, hashStartRenewalWaiverFiscalReview, startRenewalWaiverFiscalReview } from "@/modules/subscriptions/application/renewalWaiverFiscalReviews";
 import { issueInvoice } from "@/modules/billing/application/invoices";
 import { createManualJournalEntry } from "@/modules/accounting/application/journal";
+import { approveWaiverEvidenceReversal, hashWaiverEvidenceReversalApproval, hashWaiverEvidenceReversalRequest, requestWaiverEvidenceReversal } from "@/modules/accounting/application/waiverEvidenceReversals";
 
 const password = "Cambiar-esta-clave-2026";
 const initialization: InitializeCommand = { company: { legalName: "CriGestion Test SL", taxId: "B12345678", email: "admin@example.test" }, administrator: { displayName: "Administrador", userName: "admin", password } };
@@ -706,6 +707,67 @@ describe("subscriptions application service", () => {
     await expect(prisma.accountingJournalEntry.update({ where: { id: accountingEntry.value.id }, data: { origin: "MANUAL", waiverReviewId: null } })).rejects.toThrow();
     const evidencedLine = await prisma.accountingJournalLine.findFirstOrThrow({ where: { entryId: accountingEntry.value.id } });
     await expect(prisma.accountingJournalLine.update({ where: { id: evidencedLine.id }, data: { debit: "1.00" } })).rejects.toThrow();
+    const reversalCommand = { expectedReviewVersion: 4 as const, reasonCode: "ACCOUNTING_ERROR" as const,
+      reasonDetail: "El asiento acreditado contiene un error contable confirmado", accountingDate: todayDate() };
+    expect(await requestWaiverEvidenceReversal(fiscalReview.id, reversalCommand, actor,
+      waiverReversalRequestContext("maker-request", fiscalReview.id, reversalCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REVERSAL_INDEPENDENCE_REQUIRED" }
+    });
+    const requestedReversal = await requestWaiverEvidenceReversal(fiscalReview.id, reversalCommand, otherReviewer,
+      waiverReversalRequestContext("request", fiscalReview.id, reversalCommand));
+    expect(requestedReversal).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED", version: 1, targetEntryId: accountingEntry.value.id } });
+    if (!requestedReversal.ok) throw new Error("WAIVER_REVERSAL_REQUEST_EXPECTED");
+    expect(await requestWaiverEvidenceReversal(fiscalReview.id, reversalCommand, otherReviewer,
+      waiverReversalRequestContext("request", fiscalReview.id, reversalCommand))).toEqual(requestedReversal);
+    const targetForRogueReversal = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { id: accountingEntry.value.id }, include: { lines: true } });
+    await expect(prisma.$transaction(async (tx) => {
+      const sequence = (await tx.accountingJournalEntry.aggregate({ where: { fiscalYearId: targetForRogueReversal.fiscalYearId }, _max: { sequence: true } }))._max.sequence! + 1;
+      await tx.accountingJournalEntry.create({ data: {
+        fiscalYearId: targetForRogueReversal.fiscalYearId, reversesEntryId: targetForRogueReversal.id,
+        waiverReversalRequestId: requestedReversal.value.id, year: targetForRogueReversal.year, sequence,
+        number: `${targetForRogueReversal.year}/${sequence.toString().padStart(6, "0")}`, accountingDate: new Date(`${todayDate()}T00:00:00.000Z`),
+        concept: `Reversión no aprobada ${targetForRogueReversal.number}`, origin: "WAIVER_REGULARIZATION_REVERSAL",
+        totalDebit: targetForRogueReversal.totalCredit, totalCredit: targetForRogueReversal.totalDebit, createdById: otherReviewer.id,
+        lines: { create: targetForRogueReversal.lines.map((line) => ({ accountId: line.accountId, position: line.position,
+          concept: line.concept, debit: line.credit, credit: line.debit })) }
+      } });
+    })).rejects.toThrow(/non-completed accounting waiver reversal cannot retain an entry/);
+    const approvalCommand = { expectedVersion: 1 as const };
+    expect(await approveWaiverEvidenceReversal(requestedReversal.value.id, approvalCommand, otherReviewer,
+      waiverReversalApprovalContext("requester-approve", requestedReversal.value.id, approvalCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REVERSAL_SELF_APPROVAL_FORBIDDEN" }
+    });
+    expect(await approveWaiverEvidenceReversal(requestedReversal.value.id, approvalCommand, reviewer,
+      waiverReversalApprovalContext("reviewer-approve", requestedReversal.value.id, approvalCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REVERSAL_SELF_APPROVAL_FORBIDDEN" }
+    });
+    const reversalApprover = await accountingReversalApprover();
+    const economicCountsBeforeReversal = await Promise.all([
+      prisma.invoice.count(), prisma.accountingJournalEntry.count(), prisma.verifactuFiscalRecord.count(), prisma.verifactuOutboxMessage.count()
+    ]);
+    const approvedReversal = await approveWaiverEvidenceReversal(requestedReversal.value.id, approvalCommand, reversalApprover,
+      waiverReversalApprovalContext("approve", requestedReversal.value.id, approvalCommand));
+    expect(approvedReversal).toMatchObject({ ok: true, status: 200, value: { status: "COMPLETED", version: 2, approvedById: reversalApprover.id } });
+    expect(await approveWaiverEvidenceReversal(requestedReversal.value.id, approvalCommand, reversalApprover,
+      waiverReversalApprovalContext("approve", requestedReversal.value.id, approvalCommand))).toEqual(approvedReversal);
+    const reversalEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({
+      where: { waiverReversalRequestId: requestedReversal.value.id }, include: { lines: { orderBy: { position: "asc" } } }
+    });
+    const originalLines = await prisma.accountingJournalLine.findMany({ where: { entryId: accountingEntry.value.id }, orderBy: { position: "asc" } });
+    expect(reversalEntry).toMatchObject({ origin: "WAIVER_REGULARIZATION_REVERSAL", status: "POSTED", reversesEntryId: accountingEntry.value.id });
+    expect(reversalEntry.lines.map((line) => [line.position, line.accountId, line.concept, line.debit.toFixed(2), line.credit.toFixed(2)])).toEqual(
+      originalLines.map((line) => [line.position, line.accountId, line.concept, line.credit.toFixed(2), line.debit.toFixed(2)]));
+    expect(await Promise.all([
+      prisma.invoice.count(), prisma.accountingJournalEntry.count(), prisma.verifactuFiscalRecord.count(), prisma.verifactuOutboxMessage.count()
+    ])).toEqual([economicCountsBeforeReversal[0], economicCountsBeforeReversal[1] + 1, economicCountsBeforeReversal[2], economicCountsBeforeReversal[3]]);
+    expect(await prisma.subscriptionRenewalWaiverReview.findUniqueOrThrow({ where: { id: fiscalReview.id }, select: { status: true, version: true } })).toEqual({ status: "CLOSED", version: 4 });
+    const reportAfterReversal = await listSubscriptionRenewalWaivers({ limit: 25 }, actor);
+    expect(reportAfterReversal).toMatchObject({ ok: true, value: { waivers: [{ fiscalReview: {
+      status: "CLOSED", version: 4, accountingEvidenceReversal: { id: requestedReversal.value.id, status: "COMPLETED", version: 2 },
+      accountingEvidenceFollowUpRequired: true
+    } }] } });
+    await expect(prisma.accountingJournalEntry.update({ where: { id: reversalEntry.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
+    await expect(prisma.accountingJournalLine.update({ where: { id: reversalEntry.lines[0]!.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
     const ordinaryEntry = await createManualJournalEntry({ accountingDate: todayDate(), concept: "Asiento ordinario independiente", lines: [
       { accountId: journalAccounts[0]!.id, concept: "Debe ordinario", debit: "1.00", credit: "0.00" },
       { accountId: journalAccounts[1]!.id, concept: "Haber ordinario", debit: "0.00", credit: "1.00" }
@@ -935,10 +997,13 @@ function waiverContext(key: string, value: Parameters<typeof hashSubscriptionRen
 function fiscalReviewContext(key: string, reviewId: string, value: { expectedVersion: 1 }) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashStartRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
 function fiscalReviewDecisionContext(key: string, reviewId: string, value: Parameters<typeof hashDecideRenewalWaiverFiscalReview>[1]) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashDecideRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
 function fiscalReviewCompletionContext(key: string, reviewId: string, value: Parameters<typeof hashCompleteRenewalWaiverFiscalReview>[1]) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashCompleteRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
+function waiverReversalRequestContext(key: string, reviewId: string, value: Parameters<typeof hashWaiverEvidenceReversalRequest>[1]) { return { idempotencyKey: `accounting-waiver-reversal-test:${key}`, requestHash: hashWaiverEvidenceReversalRequest(reviewId, value), correlationId: `accounting-waiver-reversal-${key}` }; }
+function waiverReversalApprovalContext(key: string, requestId: string, value: Parameters<typeof hashWaiverEvidenceReversalApproval>[1]) { return { idempotencyKey: `accounting-waiver-reversal-test:${key}`, requestHash: hashWaiverEvidenceReversalApproval(requestId, value), correlationId: `accounting-waiver-reversal-${key}` }; }
 function updatePayload(subscription: { version: number; customer: { id: string }; name: string; periodicity: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL"; pricingMode: "FIXED" | "PER_LICENSE"; startDate: string; endDate: string | null; notes: string | null; lines: Array<{ catalogItemId: string; quantity: string }> }, overrides: Record<string, unknown> = {}) { return { expectedVersion: subscription.version, customerId: subscription.customer.id, name: subscription.name, periodicity: subscription.periodicity, pricingMode: subscription.pricingMode, startDate: subscription.startDate, endDate: subscription.endDate, notes: subscription.notes, lines: subscription.lines.map((line) => ({ catalogItemId: line.catalogItemId, quantity: line.quantity })), ...overrides }; }
 async function admin() { const result = await login({ userName: "admin", password }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
 async function fiscalReviewer() { const role = await prisma.role.create({ data: { code: "WaiverFiscalReviewer", name: "Revision fiscal de condonaciones", permissions: { create: ["Subscriptions.ViewRenewalWaivers", "Subscriptions.ViewRenewalWaiverFiscalReviews", "Subscriptions.DecideRenewalWaiverFiscalReviews", "Subscriptions.CompleteRenewalWaiverFiscalReviews"].map((code) => ({ permission: { connect: { code } } })) } } }); await prisma.user.create({ data: { displayName: "Revisor Fiscal", userName: "waiver-fiscal-reviewer", normalizedUserName: "waiver-fiscal-reviewer", passwordHash: hashPassword("Cambiar-reviewer-2026"), roleId: role.id } }); const result = await login({ userName: "waiver-fiscal-reviewer", password: "Cambiar-reviewer-2026" }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
 async function fiscalCompletionObserver() { const role = await prisma.role.findUniqueOrThrow({ where: { code: "WaiverFiscalReviewer" } }); await prisma.user.create({ data: { displayName: "Segundo Revisor", userName: "waiver-fiscal-observer", normalizedUserName: "waiver-fiscal-observer", passwordHash: hashPassword("Cambiar-observer-2026"), roleId: role.id } }); const result = await login({ userName: "waiver-fiscal-observer", password: "Cambiar-observer-2026" }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
+async function accountingReversalApprover() { const role = await prisma.role.create({ data: { code: "WaiverAccountingReversalApprover", name: "Aprobacion de reversiones contables", permissions: { create: ["Accounting.ApproveWaiverEvidenceReversals"].map((code) => ({ permission: { connect: { code } } })) } } }); await prisma.user.create({ data: { displayName: "Aprobador Contable", userName: "waiver-accounting-approver", normalizedUserName: "waiver-accounting-approver", passwordHash: hashPassword("Cambiar-approver-2026"), roleId: role.id } }); const result = await login({ userName: "waiver-accounting-approver", password: "Cambiar-approver-2026" }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
 async function initialize() { const raw = JSON.stringify(initialization); const result = await initializePlatform(initialization, randomUUID(), hashRequestBody(raw)); if (!result.ok) throw new Error(result.error.code); const installation = await prisma.installation.findFirstOrThrow(); await prisma.accountingFiscalYear.create({ data: { companyId: installation.companyId!, year: 2026, startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"), planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId! } }); }
 async function customer(createdById: string) { const suffix = randomUUID().replaceAll("-", "").slice(0, 12); return (await prisma.customer.create({ data: { code: `C${suffix.slice(0, 8)}`, type: "COMPANY", legalName: "Cliente Suscripciones SL", taxId: `VAT-${suffix}`, normalizedTaxId: `VAT${suffix}`, fiscalTreatment: "DOMESTIC", fiscalAddressLine: "Calle Test 1", fiscalPostalCode: "28001", fiscalCity: "Madrid", fiscalCountry: "ES", createdById } })).id; }
 async function catalogItem(createdById: string) { const tax = await prisma.catalogTaxRate.findFirstOrThrow({ where: { code: "IVA_21" } }); return (await prisma.catalogItem.create({ data: { code: `S${randomUUID().slice(0, 8)}`, kind: "SERVICE", name: `Servicio recurrente ${randomUUID()}`, salePrice: "49.90", taxRateId: tax.id, taxRate: tax.rate, createdById } })).id; }

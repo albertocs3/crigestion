@@ -19,6 +19,10 @@ import { POST as renewalWaiversExport } from "@/app/api/subscriptions/renewal-wa
 import { POST as renewalWaiverFiscalReviewStart } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/start/route";
 import { POST as renewalWaiverFiscalReviewDecide } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/decide/route";
 import { POST as renewalWaiverFiscalReviewComplete } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/complete/route";
+import { POST as waiverEvidenceReversalRequest } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/accounting-reversals/route";
+import { POST as waiverEvidenceReversalApprove } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/approve/route";
+import { POST as waiverEvidenceReversalReject } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/reject/route";
+import { POST as waiverEvidenceReversalCancel } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/cancel/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -42,6 +46,16 @@ describe("subscription HTTP contracts", () => {
     const csrf = await csrfToken(); expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references), { csrf, idempotency: null }))).status).toBe(400);
     expect((await subscriptionsPost(new Request("http://localhost/api/subscriptions", { method: "POST", headers: { Origin: "http://localhost:3000", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID(), "Content-Type": "text/plain" }, body: "{}" }))).status).toBe(415);
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(422);
+    const reviewId = randomUUID(); const requestId = randomUUID();
+    const reviewContext = { params: Promise.resolve({ reviewId }) }; const reversalContext = { params: Promise.resolve({ requestId }) };
+    const reversalBody = { expectedReviewVersion: 4, reasonCode: "ACCOUNTING_ERROR", reasonDetail: "Corrección contable suficientemente justificada", accountingDate: todayDate() };
+    expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody, { csrf, origin: "https://evil.example" }), reviewContext)).status).toBe(403);
+    expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody), reviewContext)).status).toBe(403);
+    expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody, { csrf, idempotency: null }), reviewContext)).status).toBe(400);
+    expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, { ...reversalBody, unexpected: true }, { csrf }), reviewContext)).status).toBe(422);
+    expect((await waiverEvidenceReversalApprove(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/approve`, { expectedVersion: 1, unexpected: true }, { csrf }), reversalContext)).status).toBe(422);
+    expect((await waiverEvidenceReversalReject(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/reject`, { expectedVersion: 1, rejectionDetail: "corto" }, { csrf }), reversalContext)).status).toBe(422);
+    expect((await waiverEvidenceReversalCancel(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
   });
 
   it("creates, edits, lists, reads, activates and cancels a subscription", async () => {

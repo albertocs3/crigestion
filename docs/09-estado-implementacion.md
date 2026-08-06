@@ -181,6 +181,15 @@ atómicamente la versión 4 y el evento `COMPLETED`. El flujo fiscal no calcula
 ni crea el asiento, no expone el detalle de comprobación y no permite usar una
 factura manual o una referencia externa como prueba sustitutiva.
 
+El duodécimo corte local añade las migraciones 118 y 119 y la corrección
+contable de esa evidencia mediante una solicitud maker-checker independiente.
+La aprobación genera una reversión exacta línea a línea dentro del mismo
+ejercicio abierto, sin editar el asiento, la evidencia ni la revisión `CLOSED
+v4`. Solicitud, aprobación, rechazo y cancelación tienen permisos, CSRF,
+idempotencia, rate limit, auditoría y ledger propios. Tras completarse, el
+informe marca la evidencia histórica como revertida y exige seguimiento; no se
+producen efectos en facturación o VeriFactu.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

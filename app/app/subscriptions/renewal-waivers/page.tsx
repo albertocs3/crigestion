@@ -17,6 +17,8 @@ export default async function SubscriptionRenewalWaiversPage({ searchParams }: P
   const canViewFiscalReviews = authorization.user.permissions.includes("Subscriptions.ViewRenewalWaiverFiscalReviews");
   const canDecideFiscalReviews = authorization.user.permissions.includes("Subscriptions.DecideRenewalWaiverFiscalReviews");
   const canCompleteFiscalReviews = authorization.user.permissions.includes("Subscriptions.CompleteRenewalWaiverFiscalReviews");
+  const canRequestEvidenceReversals = authorization.user.permissions.includes("Accounting.RequestWaiverEvidenceReversals");
+  const canApproveEvidenceReversals = authorization.user.permissions.includes("Accounting.ApproveWaiverEvidenceReversals");
   const parsed = listSubscriptionRenewalWaiversSchema.safeParse({ limit: 25, ...params });
   const result = parsed.success ? await listSubscriptionRenewalWaivers(parsed.data, authorization.user) : null;
   const today = await subscriptionRenewalBusinessDate();
@@ -69,7 +71,9 @@ export default async function SubscriptionRenewalWaiversPage({ searchParams }: P
                 {waiver.fiscalReview.actionDueDate ? <span className="cell-detail">Vence: {waiver.fiscalReview.actionDueDate}</span> : null}
                 {waiver.fiscalReview.evidenceCount > 0 ? <span className="cell-detail">Evidencia acreditada: {waiver.fiscalReview.evidenceCount}</span> : null}
                 {waiver.fiscalReview.completedBy ? <span className="cell-detail">Cerrada por {waiver.fiscalReview.completedBy.displayName}</span> : null}
-                <SubscriptionRenewalWaiverFiscalReviewActions review={waiver.fiscalReview} canDecide={canDecideFiscalReviews} canComplete={canCompleteFiscalReviews} />
+                {waiver.fiscalReview.accountingEvidenceFollowUpRequired ? <span className="message warning">Evidencia histórica revertida; requiere una nueva actuación contable y revisión.</span> : null}
+                <SubscriptionRenewalWaiverFiscalReviewActions review={waiver.fiscalReview} canDecide={canDecideFiscalReviews} canComplete={canCompleteFiscalReviews}
+                  canRequestEvidenceReversal={canRequestEvidenceReversals} canApproveEvidenceReversal={canApproveEvidenceReversals} />
               </div> : <span className="message error">Evidencia de revisión ausente</span>}</td> : null}
             </tr>)}
           </tbody></table></div>

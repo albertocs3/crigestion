@@ -117,8 +117,17 @@ export type SubscriptionRenewalWaiverReportItem = {
     completedBy: { id: string; displayName: string } | null;
     evidenceCount: number;
     hasLinkedAccountingEntry: boolean;
+    accountingEvidenceReversal: {
+      id: string;
+      status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED";
+      version: number;
+      requestedAt: string;
+      isRequestedByActor: boolean;
+    } | null;
+    accountingEvidenceFollowUpRequired: boolean;
     isOwnWaiver: boolean;
     isAssignedToActor: boolean;
+    isCompletedByActor: boolean;
   };
 };
 
@@ -195,7 +204,11 @@ const fiscalReviewSelect = {
   decidedBy: { select: { id: true, displayName: true } },
   closedBy: { select: { id: true, displayName: true } },
   _count: { select: { evidences: true } },
-  accountingEntry: { select: { id: true } }
+  accountingEntry: { select: { id: true } },
+  accountingReversalRequests: {
+    orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
+    select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
+  }
 } satisfies Prisma.SubscriptionRenewalWaiverReviewSelect;
 type FiscalReviewRecord = Prisma.SubscriptionRenewalWaiverReviewGetPayload<{ select: typeof fiscalReviewSelect }>;
 type WaiverRecordWithOptionalEvidence = WaiverRecord & { resolutionReasonDetail?: string | null; fiscalReview?: FiscalReviewRecord | null };
@@ -403,8 +416,17 @@ function mapWaiver(
       completedBy: record.fiscalReview.closedBy,
       evidenceCount: record.fiscalReview._count.evidences,
       hasLinkedAccountingEntry: Boolean(record.fiscalReview.accountingEntry),
+      accountingEvidenceReversal: record.fiscalReview.accountingReversalRequests[0] ? {
+        id: record.fiscalReview.accountingReversalRequests[0].id,
+        status: record.fiscalReview.accountingReversalRequests[0].status,
+        version: record.fiscalReview.accountingReversalRequests[0].version,
+        requestedAt: record.fiscalReview.accountingReversalRequests[0].requestedAt.toISOString(),
+        isRequestedByActor: record.fiscalReview.accountingReversalRequests[0].requestedById === actorId
+      } : null,
+      accountingEvidenceFollowUpRequired: record.fiscalReview.accountingReversalRequests[0]?.status === "COMPLETED",
       isOwnWaiver: record.fiscalReview.openedBy.id === actorId,
-      isAssignedToActor: record.fiscalReview.startedBy?.id === actorId
+      isAssignedToActor: record.fiscalReview.startedBy?.id === actorId,
+      isCompletedByActor: record.fiscalReview.closedBy?.id === actorId
     } } : {})
   };
 }

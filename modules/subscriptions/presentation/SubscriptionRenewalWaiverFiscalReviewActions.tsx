@@ -12,17 +12,30 @@ type Review = {
   hasLinkedAccountingEntry: boolean;
   isOwnWaiver: boolean;
   isAssignedToActor: boolean;
+  isCompletedByActor: boolean;
+  accountingEvidenceReversal: {
+    id: string;
+    status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED";
+    version: number;
+    requestedAt: string;
+    isRequestedByActor: boolean;
+  } | null;
 };
 
-export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide, canComplete }: { review: Review; canDecide: boolean; canComplete: boolean }) {
+export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide, canComplete, canRequestEvidenceReversal, canApproveEvidenceReversal }: {
+  review: Review; canDecide: boolean; canComplete: boolean; canRequestEvidenceReversal: boolean; canApproveEvidenceReversal: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [decision, setDecision] = useState("NO_ADDITIONAL_ACTION");
   async function mutate(action: "start" | "decide" | "complete", body: Record<string, unknown>) {
+    return post(`/api/subscriptions/renewal-waiver-fiscal-reviews/${review.id}/${action}`, body);
+  }
+  async function post(url: string, body: Record<string, unknown>) {
     setBusy(true); setMessage(null);
     try {
       const csrf = await fetchCsrfToken();
-      const response = await fetch(`/api/subscriptions/renewal-waiver-fiscal-reviews/${review.id}/${action}`, {
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf, "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(body)
@@ -32,6 +45,37 @@ export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide
       window.location.reload();
     } catch { setMessage("No se pudo conectar con el servidor."); }
     finally { setBusy(false); }
+  }
+  if (review.status === "CLOSED" && review.decision === "MANUAL_ACCOUNTING_ACTION_REQUIRED" && review.hasLinkedAccountingEntry) {
+    const reversal = review.accountingEvidenceReversal;
+    if (reversal?.status === "COMPLETED") return <span className="cell-detail">La evidencia original permanece histórica y está revertida.</span>;
+    if (reversal?.status === "REQUESTED") return <div className="stack">
+      <span className="cell-detail">Reversión solicitada el {new Date(reversal.requestedAt).toLocaleDateString("es-ES")}.</span>
+      {canRequestEvidenceReversal && reversal.isRequestedByActor ? <button className="button button-secondary" type="button" disabled={busy}
+        onClick={() => void post(`/api/accounting/waiver-evidence-reversals/${reversal.id}/cancel`, { expectedVersion: reversal.version })}>{busy ? "Cancelando..." : "Cancelar solicitud"}</button> : null}
+      {canApproveEvidenceReversal && !reversal.isRequestedByActor && !review.isOwnWaiver && !review.isCompletedByActor ? <button className="button" type="button" disabled={busy}
+        onClick={() => void post(`/api/accounting/waiver-evidence-reversals/${reversal.id}/approve`, { expectedVersion: reversal.version })}>{busy ? "Aprobando..." : "Aprobar reversión exacta"}</button> : null}
+      {canApproveEvidenceReversal && !reversal.isRequestedByActor ? <form className="stack" onSubmit={(event) => {
+        event.preventDefault(); const data = new FormData(event.currentTarget);
+        void post(`/api/accounting/waiver-evidence-reversals/${reversal.id}/reject`, { expectedVersion: reversal.version, rejectionDetail: data.get("rejectionDetail") });
+      }}><label>Motivo del rechazo<textarea name="rejectionDetail" required minLength={10} maxLength={500} rows={2} disabled={busy} /></label>
+        <button className="button button-secondary" type="submit" disabled={busy}>Rechazar solicitud</button></form> : null}
+      {message ? <span role="status" className="cell-detail">{message}</span> : null}
+    </div>;
+    if (canRequestEvidenceReversal && !review.isOwnWaiver && !review.isCompletedByActor) return <form className="stack" onSubmit={(event) => {
+      event.preventDefault(); const data = new FormData(event.currentTarget);
+      void post(`/api/subscriptions/renewal-waiver-fiscal-reviews/${review.id}/accounting-reversals`, {
+        expectedReviewVersion: 4, reasonCode: data.get("reversalReasonCode"), reasonDetail: data.get("reversalReasonDetail"), accountingDate: data.get("reversalAccountingDate")
+      });
+    }}>
+      <strong>Solicitar reversión de la evidencia</strong>
+      <label>Fecha contable<input name="reversalAccountingDate" type="date" required disabled={busy} /></label>
+      <label>Motivo<select name="reversalReasonCode" disabled={busy}><option value="ACCOUNTING_ERROR">Error contable</option><option value="INCORRECT_CLASSIFICATION">Clasificación incorrecta</option><option value="DUPLICATE_REGULARIZATION">Regularización duplicada</option><option value="OTHER">Otro</option></select></label>
+      <label>Fundamento<textarea name="reversalReasonDetail" required minLength={10} maxLength={500} rows={3} disabled={busy} /></label>
+      <button className="button button-secondary" type="submit" disabled={busy}>{busy ? "Solicitando..." : "Solicitar reversión"}</button>
+      <span className="cell-detail">No modifica ni elimina el asiento o la evidencia originales.</span>
+      {message ? <span role="status" className="cell-detail">{message}</span> : null}
+    </form>;
   }
   if (review.isOwnWaiver) return <span className="cell-detail">Requiere un revisor distinto de quien condonó.</span>;
   if (review.status === "PENDING" && canDecide) return <div className="stack">

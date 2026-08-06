@@ -494,10 +494,37 @@ empresa cada 15 minutos.
 
 Las decisiones de facturación, actuación fiscal externa o asesoramiento siguen
 abiertas: no pueden cerrarse enlazando facturas manuales por coincidencia ni
-referencias de texto. Requieren futuros flujos causales propios. Una reversión
-del asiento acreditado queda bloqueada en este corte para impedir evidencia
-obsoleta silenciosa; requerirá un flujo posterior de supersesión auditada. Esta
-protección nunca reabre ni modifica la condonación.
+referencias de texto. Requieren futuros flujos causales propios.
+
+#### Reversión controlada de evidencia contable
+
+Una evidencia `CLOSED v4` puede corregirse sin reescribirla mediante
+`POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/accounting-reversals`.
+Exige `Accounting.RequestWaiverEvidenceReversals`, versión esperada 4, fecha
+contable, código de motivo y detalle de 10-500 caracteres. El solicitante debe
+ser distinto de quien condonó y de quien cerró la revisión.
+
+La solicitud queda `REQUESTED v1`. Otro usuario con
+`Accounting.ApproveWaiverEvidenceReversals` puede aprobarla en
+`POST /api/accounting/waiver-evidence-reversals/{requestId}/approve`, o
+rechazarla con fundamento mediante `/reject`; el solicitante puede retirarla
+mediante `/cancel`. Todos exigen Origin, CSRF, JSON estricto,
+`Idempotency-Key`, mantenimiento inactivo y limitan 10 intentos por 15 minutos.
+
+La aprobación solo es válida si su actor difiere de solicitante, autor de la
+condonación y revisor de cierre. En una única transacción crea un asiento
+`WAIVER_REGULARIZATION_REVERSAL` `POSTED` que refleja línea a línea cuentas,
+conceptos, posiciones y debe/haber del asiento acreditado, completa solicitud y
+ledger y audita referencias seguras. El ejercicio original debe seguir abierto;
+si ya se cerró, debe usarse antes el flujo formal de reapertura. No se admiten
+ajustes cruzados entre ejercicios en este corte.
+
+La revisión continúa `CLOSED v4`, y tanto evidencia como asiento originales
+siguen inmutables. El informe deriva el estado "evidencia histórica revertida;
+seguimiento requerido". La reversión no crea ni modifica facturas, IVA,
+registros u outbox VeriFactu. PostgreSQL impide comprometer un asiento con una
+solicitud pendiente/rechazada/cancelada y exige un único asiento `POSTED` con
+espejo exacto cuando la solicitud está completada.
 
 El historial solo selecciona y devuelve la revision si el actor posee
 `Subscriptions.ViewRenewalWaiverFiscalReviews`. Muestra estado, actores,

@@ -290,6 +290,27 @@ enum SubscriptionRenewalWaiverReviewEvidenceKind {
   ACCOUNTING_JOURNAL_ENTRY
 }
 
+enum AccountingWaiverReversalRequestStatus {
+  REQUESTED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum AccountingWaiverReversalReasonCode {
+  ACCOUNTING_ERROR
+  INCORRECT_CLASSIFICATION
+  DUPLICATE_REGULARIZATION
+  OTHER
+}
+
+enum AccountingWaiverReversalEventType {
+  REQUESTED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
 enum SubscriptionRenewalWaiverReviewSource {
   CURRENT_WORKFLOW
   BACKFILLED_EXISTING_WAIVER
@@ -498,6 +519,7 @@ enum AccountingFiscalYearReopenReasonCode {
 enum AccountingEntryOrigin {
   MANUAL
   WAIVER_REGULARIZATION
+  WAIVER_REGULARIZATION_REVERSAL
   INVOICE
   INVOICE_VOIDING
   PURCHASE_INVOICE
@@ -592,6 +614,8 @@ model Company {
   subscriptionRenewalWaiverReviews        SubscriptionRenewalWaiverReview[]
   subscriptionRenewalWaiverReviewEvents   SubscriptionRenewalWaiverReviewEvent[]
   subscriptionRenewalWaiverReviewEvidence SubscriptionRenewalWaiverReviewEvidence[]
+  accountingWaiverReversalRequests        AccountingWaiverReversalRequest[]
+  accountingWaiverReversalEvents          AccountingWaiverReversalEvent[]
   subscriptionRenewalAttempts             SubscriptionRenewalAttempt[]
   logoAttachment                          Attachment?                               @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
@@ -1140,6 +1164,11 @@ model User {
   closedSubscriptionRenewalWaiverReviews  SubscriptionRenewalWaiverReview[]         @relation("SubscriptionRenewalWaiverReviewsClosedBy")
   subscriptionRenewalWaiverReviewEvents   SubscriptionRenewalWaiverReviewEvent[]    @relation("SubscriptionRenewalWaiverReviewEventsActor")
   subscriptionRenewalWaiverReviewEvidence SubscriptionRenewalWaiverReviewEvidence[] @relation("SubscriptionRenewalWaiverReviewEvidenceAddedBy")
+  accountingWaiverReversalsRequested      AccountingWaiverReversalRequest[]         @relation("AccountingWaiverReversalsRequestedBy")
+  accountingWaiverReversalsApproved       AccountingWaiverReversalRequest[]         @relation("AccountingWaiverReversalsApprovedBy")
+  accountingWaiverReversalsRejected       AccountingWaiverReversalRequest[]         @relation("AccountingWaiverReversalsRejectedBy")
+  accountingWaiverReversalsCancelled      AccountingWaiverReversalRequest[]         @relation("AccountingWaiverReversalsCancelledBy")
+  accountingWaiverReversalEvents          AccountingWaiverReversalEvent[]           @relation("AccountingWaiverReversalEventsActor")
   initialInstallation                     Installation?
 
   @@map("users")
@@ -1543,15 +1572,16 @@ model SubscriptionRenewalWaiverReview {
   completionDetail String?                                  @db.VarChar(500)
   updatedAt        DateTime                                 @updatedAt @db.Timestamptz(3)
 
-  company         Company                                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  exclusion       SubscriptionRenewalExclusion              @relation(fields: [exclusionId, companyId], references: [id, companyId], onDelete: Restrict)
-  openedBy        User                                      @relation("SubscriptionRenewalWaiverReviewsOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
-  startedBy       User?                                     @relation("SubscriptionRenewalWaiverReviewsStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
-  decidedBy       User?                                     @relation("SubscriptionRenewalWaiverReviewsDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
-  closedBy        User?                                     @relation("SubscriptionRenewalWaiverReviewsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
-  events          SubscriptionRenewalWaiverReviewEvent[]
-  evidences       SubscriptionRenewalWaiverReviewEvidence[]
-  accountingEntry AccountingJournalEntry?
+  company                    Company                                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  exclusion                  SubscriptionRenewalExclusion              @relation(fields: [exclusionId, companyId], references: [id, companyId], onDelete: Restrict)
+  openedBy                   User                                      @relation("SubscriptionRenewalWaiverReviewsOpenedBy", fields: [openedById], references: [id], onDelete: Restrict)
+  startedBy                  User?                                     @relation("SubscriptionRenewalWaiverReviewsStartedBy", fields: [startedById], references: [id], onDelete: Restrict)
+  decidedBy                  User?                                     @relation("SubscriptionRenewalWaiverReviewsDecidedBy", fields: [decidedById], references: [id], onDelete: Restrict)
+  closedBy                   User?                                     @relation("SubscriptionRenewalWaiverReviewsClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  events                     SubscriptionRenewalWaiverReviewEvent[]
+  evidences                  SubscriptionRenewalWaiverReviewEvidence[]
+  accountingEntry            AccountingJournalEntry?
+  accountingReversalRequests AccountingWaiverReversalRequest[]
 
   @@unique([id, companyId])
   @@unique([exclusionId, companyId])
@@ -1571,15 +1601,78 @@ model SubscriptionRenewalWaiverReviewEvidence {
   addedAt                  DateTime                                    @default(now()) @db.Timestamptz(3)
   correlationId            String?                                     @db.VarChar(100)
 
-  company                Company                         @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  review                 SubscriptionRenewalWaiverReview @relation(fields: [reviewId, companyId], references: [id, companyId], onDelete: Restrict)
-  accountingJournalEntry AccountingJournalEntry          @relation(fields: [accountingJournalEntryId], references: [id], onDelete: Restrict)
-  addedBy                User                            @relation("SubscriptionRenewalWaiverReviewEvidenceAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+  company                Company                           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  review                 SubscriptionRenewalWaiverReview   @relation(fields: [reviewId, companyId], references: [id, companyId], onDelete: Restrict)
+  accountingJournalEntry AccountingJournalEntry            @relation(fields: [accountingJournalEntryId], references: [id], onDelete: Restrict)
+  addedBy                User                              @relation("SubscriptionRenewalWaiverReviewEvidenceAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+  reversalRequests       AccountingWaiverReversalRequest[]
 
   @@unique([reviewId, kind])
   @@index([reviewId, addedAt, id])
   @@index([companyId, kind, addedAt, id])
   @@map("subscription_renewal_waiver_review_evidence")
+}
+
+model AccountingWaiverReversalRequest {
+  id               String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId        String                                @db.Uuid
+  reviewId         String                                @db.Uuid
+  evidenceId       String                                @db.Uuid
+  targetEntryId    String                                @db.Uuid
+  status           AccountingWaiverReversalRequestStatus @default(REQUESTED)
+  version          Int                                   @default(1)
+  reasonCode       AccountingWaiverReversalReasonCode
+  reasonDetail     String                                @db.VarChar(500)
+  accountingDate   DateTime                              @db.Date
+  requestedById    String                                @db.Uuid
+  requestedAt      DateTime                              @default(now()) @db.Timestamptz(3)
+  approvedById     String?                               @db.Uuid
+  approvedAt       DateTime?                             @db.Timestamptz(3)
+  rejectedById     String?                               @db.Uuid
+  rejectedAt       DateTime?                             @db.Timestamptz(3)
+  rejectionDetail  String?                               @db.VarChar(500)
+  cancelledById    String?                               @db.Uuid
+  cancelledAt      DateTime?                             @db.Timestamptz(3)
+  targetSnapshot   Json
+  reversalSnapshot Json?
+  createdAt        DateTime                              @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime                              @updatedAt @db.Timestamptz(3)
+
+  company       Company                                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  review        SubscriptionRenewalWaiverReview         @relation(fields: [reviewId, companyId], references: [id, companyId], onDelete: Restrict)
+  evidence      SubscriptionRenewalWaiverReviewEvidence @relation(fields: [evidenceId], references: [id], onDelete: Restrict)
+  targetEntry   AccountingJournalEntry                  @relation("AccountingWaiverReversalTarget", fields: [targetEntryId], references: [id], onDelete: Restrict)
+  reversalEntry AccountingJournalEntry?                 @relation("AccountingWaiverReversalResult")
+  requestedBy   User                                    @relation("AccountingWaiverReversalsRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  approvedBy    User?                                   @relation("AccountingWaiverReversalsApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  rejectedBy    User?                                   @relation("AccountingWaiverReversalsRejectedBy", fields: [rejectedById], references: [id], onDelete: Restrict)
+  cancelledBy   User?                                   @relation("AccountingWaiverReversalsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  events        AccountingWaiverReversalEvent[]
+
+  @@index([companyId, status, requestedAt, id])
+  @@index([reviewId, requestedAt, id])
+  @@index([evidenceId, requestedAt, id])
+  @@index([targetEntryId, requestedAt, id])
+  @@map("accounting_waiver_reversal_requests")
+}
+
+model AccountingWaiverReversalEvent {
+  id             String                            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String                            @db.Uuid
+  requestId      String                            @db.Uuid
+  requestVersion Int
+  type           AccountingWaiverReversalEventType
+  actorId        String                            @db.Uuid
+  occurredAt     DateTime                          @default(now()) @db.Timestamptz(3)
+  correlationId  String?                           @db.VarChar(100)
+
+  company Company                         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  request AccountingWaiverReversalRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  actor   User                            @relation("AccountingWaiverReversalEventsActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([requestId, requestVersion])
+  @@index([companyId, occurredAt, id])
+  @@map("accounting_waiver_reversal_events")
 }
 
 model SubscriptionRenewalWaiverReviewEvent {
@@ -2368,6 +2461,7 @@ model AccountingJournalEntry {
   voidsInvoiceId          String?               @unique @db.Uuid
   reversesEntryId         String?               @unique @db.Uuid
   waiverReviewId          String?               @unique @db.Uuid
+  waiverReversalRequestId String?               @unique @db.Uuid
   year                    Int
   sequence                Int
   number                  String                @unique @db.VarChar(20)
@@ -2395,6 +2489,8 @@ model AccountingJournalEntry {
   reversedByEntry                AccountingJournalEntry?                  @relation("AccountingEntryReversal")
   waiverReview                   SubscriptionRenewalWaiverReview?         @relation(fields: [waiverReviewId], references: [id], onDelete: Restrict)
   waiverReviewEvidence           SubscriptionRenewalWaiverReviewEvidence?
+  waiverReversalTargetRequests   AccountingWaiverReversalRequest[]        @relation("AccountingWaiverReversalTarget")
+  waiverReversalRequest          AccountingWaiverReversalRequest?         @relation("AccountingWaiverReversalResult", fields: [waiverReversalRequestId], references: [id], onDelete: Restrict)
   regularizationForCloseRequest  AccountingFiscalYearCloseRequest?        @relation("AccountingCloseRegularizationEntry")
   closingForCloseRequest         AccountingFiscalYearCloseRequest?        @relation("AccountingCloseClosingEntry")
   openingForCloseRequest         AccountingFiscalYearCloseRequest?        @relation("AccountingCloseOpeningEntry")

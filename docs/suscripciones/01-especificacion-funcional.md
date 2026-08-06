@@ -528,7 +528,10 @@ actuacion pendiente; la revision no aprueba retroactivamente ni modifica la
 condonacion. Una actuación contable pendiente solo puede cerrarse por el revisor
 asignado cuando Contabilidad ya ha creado un asiento contabilizado con vínculo
 causal único; la revisión conserva evidencia y no genera apuntes desde importes
-teóricos. Facturación y evidencias externas requieren flujos específicos y no
+teóricos. Un error posterior se corrige mediante solicitud contable
+maker-checker y un asiento de reversión exacto en el mismo ejercicio abierto;
+la evidencia original permanece histórica y el expediente vuelve a requerir
+seguimiento sin reabrir ni reescribir la revisión cerrada. Facturación y evidencias externas requieren flujos específicos y no
 se acreditan mediante coincidencias o texto libre. Queda
 fuera la clasificacion de nuevos bloqueos automaticos distintos
 de los dos codigos estables anteriores.
