@@ -102,6 +102,14 @@ la migracion una sola vez, desplegar el binario nuevo y verificar health antes
 de reabrir trafico. No usar rolling deploy. El backfill toma locks exclusivos y
 aborta completo si no puede reproducir exactamente los totales historicos.
 
+Las migraciones `20260806183000_expand_waiver_review_completion_enums` y
+`20260806184000_add_waiver_review_accounting_completion` deben desplegarse antes
+de habilitar el cierre contable. La primera confirma valores enum en una
+migración separada; la segunda sustituye constraints contables y fiscales y
+añade evidencia append-only. Evitar rolling deploy: una instancia antigua no
+conoce `WAIVER_REGULARIZATION` ni el evento `COMPLETED` si aparecen durante la
+ventana mixta.
+
 ## 6. Despliegue
 
 Para el VPS Plesk de `gestion.crisoft.es`, aplicar ademas el runbook

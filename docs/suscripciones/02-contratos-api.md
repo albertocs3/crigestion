@@ -466,17 +466,45 @@ de 10-500 caracteres y una conclusion estable:
 - `EXTERNAL_ADVICE_REQUIRED`.
 
 Las cuatro ultimas exigen `actionDueDate`; las tres actuaciones pasan a
-`ACTION_REQUIRED` y el asesoramiento a `ESCALATED`. Permanecen abiertas hasta
-un flujo posterior de acreditacion. El detalle libre se guarda en la revision,
+`ACTION_REQUIRED` y el asesoramiento a `ESCALATED`. El detalle libre se guarda en la revision,
 pero no aparece en el informe general, CSV, ledger ni auditoria. Cada actor
 dispone de 20 mutaciones por 15 minutos y recibe `Retry-After: 900` al superar
 el limite.
+
+#### Cierre acreditado de una actuación contable
+
+El primer flujo de acreditación cubre exclusivamente
+`MANUAL_ACCOUNTING_ACTION_REQUIRED`. Desde la revisión se abre Contabilidad con
+el identificador causal; `POST /api/accounting/journal-entries` acepta
+`waiverReviewId` y crea un asiento `WAIVER_REGULARIZATION` único. El caso de uso
+contable determina cuentas, fecha e importe bajo el permiso
+`Accounting.ManageEntries`. La revisión nunca genera ni propone apuntes a
+partir de la valoración teórica.
+
+`POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/complete`
+exige `Subscriptions.CompleteRenewalWaiverFiscalReviews`, Origin, CSRF,
+`Idempotency-Key`, JSON estricto y `{ "expectedVersion": 3, "detail": "..." }`.
+Solo el revisor asignado puede ejecutarlo. Localiza el asiento causal ya
+contabilizado, comprueba empresa, origen, estado `POSTED`, cuadre, importe
+positivo y ausencia de reversión, y confirma atómicamente evidencia append-only,
+`ACTION_REQUIRED v3 -> CLOSED v4`, evento `COMPLETED`, auditoría y replay.
+El detalle de comprobación es confidencial; el informe general solo muestra
+recuento de evidencias y actor de cierre. El límite es 10 intentos por actor y
+empresa cada 15 minutos.
+
+Las decisiones de facturación, actuación fiscal externa o asesoramiento siguen
+abiertas: no pueden cerrarse enlazando facturas manuales por coincidencia ni
+referencias de texto. Requieren futuros flujos causales propios. Una reversión
+del asiento acreditado queda bloqueada en este corte para impedir evidencia
+obsoleta silenciosa; requerirá un flujo posterior de supersesión auditada. Esta
+protección nunca reabre ni modifica la condonación.
 
 El historial solo selecciona y devuelve la revision si el actor posee
 `Subscriptions.ViewRenewalWaiverFiscalReviews`. Muestra estado, actores,
 conclusion y vencimiento, pero no el detalle. PostgreSQL exige una revision por
 condonacion, un evento por version, maker/checker distintos, transiciones
-canonicas e inmutabilidad tras la decision.
+canonicas e inmutabilidad de la clasificación; solo la actuación contable
+admite el cierre acreditado v4 descrito, sin reescribir su decisión.
 
 ### Implementacion de la reserva
 

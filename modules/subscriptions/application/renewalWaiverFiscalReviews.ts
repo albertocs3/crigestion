@@ -29,9 +29,14 @@ export const decideRenewalWaiverFiscalReviewSchema = z.object({
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["actionDueDate"], message: "La actuacion o escalado requiere vencimiento." });
   }
 });
+export const completeRenewalWaiverFiscalReviewSchema = z.object({
+  expectedVersion: z.literal(3),
+  detail: z.string().trim().min(10).max(500)
+}).strict();
 
 export type StartRenewalWaiverFiscalReviewCommand = z.infer<typeof startRenewalWaiverFiscalReviewSchema>;
 export type DecideRenewalWaiverFiscalReviewCommand = z.infer<typeof decideRenewalWaiverFiscalReviewSchema>;
+export type CompleteRenewalWaiverFiscalReviewCommand = z.infer<typeof completeRenewalWaiverFiscalReviewSchema>;
 type ReviewContext = Pick<RequestContext, "correlationId"> & { idempotencyKey: string; requestHash: string };
 
 const reviewValueSchema = z.object({
@@ -57,6 +62,10 @@ export function hashDecideRenewalWaiverFiscalReview(reviewId: string, command: D
   return hashIdempotencyPayload("subscription-renewal-waiver-fiscal-review-decide:v1", { reviewId, ...command });
 }
 
+export function hashCompleteRenewalWaiverFiscalReview(reviewId: string, command: CompleteRenewalWaiverFiscalReviewCommand): string {
+  return hashIdempotencyPayload("subscription-renewal-waiver-fiscal-review-complete:v1", { reviewId, ...command });
+}
+
 export async function startRenewalWaiverFiscalReview(
   reviewId: string,
   command: StartRenewalWaiverFiscalReviewCommand,
@@ -75,16 +84,27 @@ export async function decideRenewalWaiverFiscalReview(
   return mutateReview(reviewId, "decide", command, actor, context);
 }
 
+export async function completeRenewalWaiverFiscalReview(
+  reviewId: string,
+  command: CompleteRenewalWaiverFiscalReviewCommand,
+  actor: SessionUser,
+  context: ReviewContext
+): Promise<RenewalWaiverFiscalReviewResult> {
+  return mutateReview(reviewId, "complete", command, actor, context);
+}
+
 async function mutateReview(
   reviewId: string,
-  action: "start" | "decide",
-  command: StartRenewalWaiverFiscalReviewCommand | DecideRenewalWaiverFiscalReviewCommand,
+  action: "start" | "decide" | "complete",
+  command: StartRenewalWaiverFiscalReviewCommand | DecideRenewalWaiverFiscalReviewCommand | CompleteRenewalWaiverFiscalReviewCommand,
   actor: SessionUser,
   context: ReviewContext
 ): Promise<RenewalWaiverFiscalReviewResult> {
   const expectedHash = action === "start"
     ? hashStartRenewalWaiverFiscalReview(reviewId, command as StartRenewalWaiverFiscalReviewCommand)
-    : hashDecideRenewalWaiverFiscalReview(reviewId, command as DecideRenewalWaiverFiscalReviewCommand);
+    : action === "decide"
+      ? hashDecideRenewalWaiverFiscalReview(reviewId, command as DecideRenewalWaiverFiscalReviewCommand)
+      : hashCompleteRenewalWaiverFiscalReview(reviewId, command as CompleteRenewalWaiverFiscalReviewCommand);
   if (context.requestHash !== expectedHash) return failure(409, "IDEMPOTENCY_REQUEST_HASH_INVALID", "La huella idempotente no corresponde con la peticion.");
   const stored = await prisma.idempotencyRecord.findUnique({ where: { key: context.idempotencyKey } });
   if (stored) return replay(stored, expectedHash);
@@ -104,7 +124,7 @@ async function mutateReview(
           WHERE "id" = ${reviewId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`;
         const review = await tx.subscriptionRenewalWaiverReview.findFirst({
           where: { id: reviewId, companyId },
-          select: { id: true, exclusionId: true, status: true, version: true, openedById: true, openedAt: true, startedById: true }
+          select: { id: true, exclusionId: true, status: true, version: true, openedById: true, openedAt: true, startedById: true, decision: true }
         });
         if (!review) return failure(404, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_NOT_FOUND", "La revision fiscal no existe.");
         if (review.openedById === actor.id) {
@@ -112,9 +132,10 @@ async function mutateReview(
           return failure(409, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_SELF_REVIEW_FORBIDDEN", "La persona que condono el periodo no puede revisarlo fiscalmente.");
         }
         if (review.version !== command.expectedVersion) return failure(409, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_VERSION_CONFLICT", "La revision fiscal ha cambiado desde la consulta.");
-        const clock = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS "now"`;
+        const clock = await tx.$queryRaw<Array<{ now: Date; businessDate: Date }>>`SELECT clock_timestamp() AS "now", (clock_timestamp() AT TIME ZONE 'Europe/Madrid')::date AS "businessDate"`;
         const now = clock[0]?.now;
-        if (!now) throw new Error("DATABASE_CLOCK_UNAVAILABLE");
+        const businessDate = clock[0]?.businessDate;
+        if (!now || !businessDate) throw new Error("DATABASE_CLOCK_UNAVAILABLE");
         let updated;
         if (action === "start") {
           if (review.status !== "PENDING") return failure(409, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_INVALID_TRANSITION", "La revision ya no esta pendiente de asignacion.");
@@ -126,10 +147,13 @@ async function mutateReview(
             occurredAt: now, correlationId: context.correlationId
           } });
           await safeAudit(tx, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_STARTED", actor, companyId, review, context, { reviewVersion: 2 });
-        } else {
+        } else if (action === "decide") {
           const decisionCommand = command as DecideRenewalWaiverFiscalReviewCommand;
           if (review.status !== "IN_REVIEW" || review.startedById !== actor.id) {
             return failure(409, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_NOT_ASSIGNED", "Solo la persona asignada puede decidir esta revision.");
+          }
+          if (decisionCommand.actionDueDate && parseDateOnly(decisionCommand.actionDueDate) < businessDate) {
+            return failure(422, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_ACTION_DUE_DATE_INVALID", "El vencimiento no puede ser anterior a la fecha de decision.");
           }
           const status = decisionCommand.decision === "NO_ADDITIONAL_ACTION" ? "CLOSED"
             : decisionCommand.decision === "EXTERNAL_ADVICE_REQUIRED" ? "ESCALATED" : "ACTION_REQUIRED";
@@ -145,6 +169,44 @@ async function mutateReview(
           } });
           await safeAudit(tx, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_DECIDED", actor, companyId, review, context, {
             reviewVersion: 3, decision: decisionCommand.decision, status, hasActionDueDate: Boolean(decisionCommand.actionDueDate)
+          });
+        } else {
+          const completionCommand = command as CompleteRenewalWaiverFiscalReviewCommand;
+          if (review.status !== "ACTION_REQUIRED" || review.decision !== "MANUAL_ACCOUNTING_ACTION_REQUIRED" || review.startedById !== actor.id) {
+            await safeAudit(tx, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_COMPLETION_DENIED", actor, companyId, review, context, {
+              denialReason: review.startedById !== actor.id ? "NOT_ASSIGNED" : "INVALID_STATE"
+            });
+            return failure(409, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_NOT_COMPLETABLE", "La revision no admite este cierre contable o no esta asignada al usuario.");
+          }
+          await tx.$queryRaw`SELECT "id" FROM "accounting_journal_entries" WHERE "waiverReviewId" = ${review.id}::uuid FOR UPDATE`;
+          const entry = await tx.accountingJournalEntry.findFirst({ where: {
+            waiverReviewId: review.id,
+            origin: "WAIVER_REGULARIZATION",
+            status: "POSTED",
+            fiscalYear: { companyId },
+            reversedByEntry: null
+          }, select: { id: true, totalDebit: true, totalCredit: true } });
+          if (!entry || entry.totalDebit.lte(0) || !entry.totalDebit.equals(entry.totalCredit)) {
+            return failure(422, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_ACCOUNTING_EVIDENCE_INVALID", "El asiento no es una evidencia contable valida para esta revision.");
+          }
+          await tx.subscriptionRenewalWaiverReviewEvidence.create({ data: {
+            companyId, reviewId: review.id, kind: "ACCOUNTING_JOURNAL_ENTRY",
+            accountingJournalEntryId: entry.id, evidenceSnapshot: {}, addedById: actor.id,
+            correlationId: context.correlationId
+          } });
+          const completionClock = await tx.$queryRaw<Array<{ now: Date }>>`SELECT clock_timestamp() AS "now"`;
+          const completedAt = completionClock[0]?.now;
+          if (!completedAt) throw new Error("DATABASE_CLOCK_UNAVAILABLE");
+          updated = await tx.subscriptionRenewalWaiverReview.update({ where: { id: review.id }, data: {
+            status: "CLOSED", version: { increment: 1 }, completionDetail: completionCommand.detail,
+            closedById: actor.id, closedAt: completedAt
+          }, select: reviewValueSelect });
+          await tx.subscriptionRenewalWaiverReviewEvent.create({ data: {
+            companyId, reviewId: review.id, type: "COMPLETED", reviewVersion: 4, actorId: actor.id,
+            decision: "MANUAL_ACCOUNTING_ACTION_REQUIRED", occurredAt: completedAt, correlationId: context.correlationId
+          } });
+          await safeAudit(tx, "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_COMPLETED", actor, companyId, review, context, {
+            reviewVersion: 4, decision: review.decision, evidenceKind: "ACCOUNTING_JOURNAL_ENTRY", evidenceCount: 1
           });
         }
         const value = mapReview(updated);
@@ -208,21 +270,23 @@ async function safeAudit(
 
 async function consumeReviewRateLimit(companyId: string, actor: SessionUser, action: string, correlationId?: string): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
+    const limit = action === "complete" ? 10 : 20;
+    const cappedCount = limit + 2;
     const key = `subscription-renewal-waiver-fiscal-review:${companyId}:${actor.id}:${action}`;
     const rows = await tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`
       INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
       VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
       ON CONFLICT ("key") DO UPDATE SET
-        "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, 22) END,
+        "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, ${cappedCount}) END,
         "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
         "updatedAt" = clock_timestamp()
       RETURNING "count"
     `);
     const count = rows[0]?.count ?? 0;
-    if (count === 21) await tx.auditEvent.create({ data: { eventType: "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_RATE_LIMITED", actorType: "USER", payload: {
+    if (count === limit + 1) await tx.auditEvent.create({ data: { eventType: "SUBSCRIPTION_RENEWAL_WAIVER_FISCAL_REVIEW_RATE_LIMITED", actorType: "USER", payload: {
       actorUserId: actor.id, companyId, action, ...(correlationId ? { correlationId } : {})
     } } });
-    return count > 20;
+    return count > limit;
   });
 }
 

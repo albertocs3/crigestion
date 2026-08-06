@@ -33,6 +33,7 @@ export const createAccountingAccountSchema = z.object({
 export const createManualJournalEntrySchema = z.object({
   accountingDate: dateOnlySchema,
   concept: z.string().trim().min(2).max(240),
+  waiverReviewId: z.string().uuid().optional(),
   lines: z
     .array(
       z.object({
@@ -89,7 +90,7 @@ export type JournalEntryDto = {
   number: string;
   accountingDate: string;
   concept: string;
-  origin: "MANUAL" | "INVOICE" | "INVOICE_VOIDING" | "CUSTOMER_PAYMENT" | "CUSTOMER_PAYMENT_RETURN" | "CUSTOMER_CREDIT_REFUND" | "PURCHASE_INVOICE" | "PURCHASE_RECTIFICATION" | "SUPPLIER_PAYMENT" | "SUPPLIER_CREDIT_REFUND" | "REGULARIZATION" | "CLOSING" | "OPENING" | "FISCAL_YEAR_CLOSE_REVERSAL";
+  origin: "MANUAL" | "WAIVER_REGULARIZATION" | "INVOICE" | "INVOICE_VOIDING" | "CUSTOMER_PAYMENT" | "CUSTOMER_PAYMENT_RETURN" | "CUSTOMER_CREDIT_REFUND" | "PURCHASE_INVOICE" | "PURCHASE_RECTIFICATION" | "SUPPLIER_PAYMENT" | "SUPPLIER_CREDIT_REFUND" | "REGULARIZATION" | "CLOSING" | "OPENING" | "FISCAL_YEAR_CLOSE_REVERSAL";
   status: "POSTED" | "VOIDED";
   totalDebit: string;
   totalCredit: string;
@@ -139,7 +140,7 @@ export type CreateManualJournalEntryResult =
       ok: false;
       status: 409;
       error: {
-        code: "JOURNAL_ENTRY_NOT_BALANCED" | "ACCOUNT_NOT_POSTABLE";
+        code: "JOURNAL_ENTRY_NOT_BALANCED" | "ACCOUNT_NOT_POSTABLE" | "WAIVER_REVIEW_NOT_ACTIONABLE" | "WAIVER_REVIEW_ENTRY_ALREADY_EXISTS";
         message: string;
       };
     };
@@ -309,6 +310,18 @@ export async function createManualJournalEntry(
       return { kind: "account-not-postable" as const };
     }
 
+    if (command.waiverReviewId) {
+      const reviews = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT review."id" FROM "subscription_renewal_waiver_reviews" review
+        WHERE review."id" = ${command.waiverReviewId}::uuid
+          AND review."status" = 'ACTION_REQUIRED' AND review."version" = 3
+          AND review."decision" = 'MANUAL_ACCOUNTING_ACTION_REQUIRED'
+          AND review."companyId" = (SELECT "companyId" FROM "accounting_fiscal_years" WHERE "id" = ${fiscalYear.id}::uuid)
+        FOR UPDATE
+      `);
+      if (!reviews[0]) return { kind: "waiver-review-not-actionable" as const };
+    }
+
     const accounts = await tx.accountingAccount.findMany({
       where: {
         id: { in: accountIds },
@@ -338,7 +351,8 @@ export async function createManualJournalEntry(
         number,
         accountingDate,
         concept: command.concept,
-        origin: "MANUAL",
+        origin: command.waiverReviewId ? "WAIVER_REGULARIZATION" : "MANUAL",
+        waiverReviewId: command.waiverReviewId,
         totalDebit,
         totalCredit,
         createdById: actor.id,
@@ -367,12 +381,18 @@ export async function createManualJournalEntry(
           totalDebit: totalDebit.toFixed(2),
           totalCredit: totalCredit.toFixed(2),
           lineCount: normalizedLines.length,
+          waiverReviewLinked: Boolean(command.waiverReviewId),
           ...(context.correlationId ? { correlationId: context.correlationId } : {})
         }
       }
     });
 
     return { kind: "created" as const, entry };
+  }).catch((error: unknown) => {
+    if (command.waiverReviewId && isUniqueConstraintError(error)) {
+      return { kind: "waiver-review-entry-already-exists" as const };
+    }
+    throw error;
   });
 
   if (result.kind === "account-not-postable") {
@@ -384,6 +404,14 @@ export async function createManualJournalEntry(
         message: "Todas las lineas deben usar cuentas imputables activas."
       }
     };
+  }
+
+  if (result.kind === "waiver-review-not-actionable") {
+    return { ok: false, status: 409, error: { code: "WAIVER_REVIEW_NOT_ACTIONABLE", message: "La revision fiscal no admite una regularizacion contable." } };
+  }
+
+  if (result.kind === "waiver-review-entry-already-exists") {
+    return { ok: false, status: 409, error: { code: "WAIVER_REVIEW_ENTRY_ALREADY_EXISTS", message: "La revision fiscal ya tiene un asiento de regularizacion." } };
   }
 
   return { ok: true, status: 201, value: mapJournalEntry(result.entry) };

@@ -43,6 +43,7 @@ async function main() {
     ["Subscriptions.ExportRenewalWaivers", "Exportar el historial de periodos condonados"],
     ["Subscriptions.ViewRenewalWaiverFiscalReviews", "Consultar revisiones fiscales de periodos condonados"],
     ["Subscriptions.DecideRenewalWaiverFiscalReviews", "Iniciar y decidir revisiones fiscales de periodos condonados"],
+    ["Subscriptions.CompleteRenewalWaiverFiscalReviews", "Completar revisiones fiscales de periodos condonados"],
     ["Treasury.ManagePayments", "Registrar cobros de clientes"],
     ["Treasury.ManageSupplierPayments", "Registrar pagos de proveedores"],
     ["Treasury.ViewSupplierPayments", "Consultar vencimientos y pagos de proveedores"],

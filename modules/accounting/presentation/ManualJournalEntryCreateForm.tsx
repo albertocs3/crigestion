@@ -13,10 +13,12 @@ type SubmissionState =
 
 type ManualJournalEntryCreateFormProps = {
   accounts: AccountingAccountDto[];
+  waiverReviewId?: string;
 };
 
 export function ManualJournalEntryCreateForm({
-  accounts
+  accounts,
+  waiverReviewId
 }: ManualJournalEntryCreateFormProps) {
   const router = useRouter();
   const [state, setState] = useState<SubmissionState>({ status: "idle" });
@@ -49,6 +51,7 @@ export function ManualJournalEntryCreateForm({
       body: JSON.stringify({
         accountingDate: String(formData.get("accountingDate") ?? ""),
         concept,
+        ...(waiverReviewId ? { waiverReviewId } : {}),
         lines: [
           {
             accountId: String(formData.get("debitAccountId") ?? ""),
@@ -68,7 +71,7 @@ export function ManualJournalEntryCreateForm({
 
     if (response.ok) {
       form.reset();
-      setState({ status: "success", message: "Asiento creado." });
+      setState({ status: "success", message: waiverReviewId ? "Asiento de regularización vinculado. Ya puede acreditar el cierre desde la revisión fiscal." : "Asiento creado." });
       router.refresh();
       return;
     }
@@ -86,7 +89,8 @@ export function ManualJournalEntryCreateForm({
   return (
     <form className="form-grid" onSubmit={handleSubmit}>
       <fieldset disabled={disabled || !hasEnoughAccounts}>
-        <legend>Nuevo asiento manual</legend>
+        <legend>{waiverReviewId ? "Asiento de regularización de condonación" : "Nuevo asiento manual"}</legend>
+        {waiverReviewId ? <p className="message warning">El asiento quedará vinculado de forma única a la revisión fiscal. Su importe y cuentas deben responder al criterio contable profesional; la valoración teórica de la condonación no genera apuntes automáticamente.</p> : null}
         <div className="form-three-columns">
           <label>
             Fecha contable

@@ -771,6 +771,7 @@ describe("accounting journal application service", () => {
         number: "2026/000001",
         accountingDate: "2026-07-10",
         concept: "Ingreso manual de prueba",
+        origin: "MANUAL",
         totalDebit: "121.00",
         totalCredit: "121.00",
         lines: [
@@ -795,6 +796,7 @@ describe("accounting journal application service", () => {
     });
     expect(listed.entries).toHaveLength(1);
     expect(listed.entries[0]?.number).toBe("2026/000001");
+    expect(await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { id: entry.ok ? entry.value.id : randomUUID() }, select: { waiverReviewId: true } })).toEqual({ waiverReviewId: null });
     expect(accountAudit.payload).toMatchObject({
       actorUserId: actor.id,
       code: "572000001",

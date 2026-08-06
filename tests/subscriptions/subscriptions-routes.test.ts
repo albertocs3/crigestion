@@ -18,6 +18,7 @@ import { GET as renewalWaiversGet } from "@/app/api/subscriptions/renewal-waiver
 import { POST as renewalWaiversExport } from "@/app/api/subscriptions/renewal-waivers/export/route";
 import { POST as renewalWaiverFiscalReviewStart } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/start/route";
 import { POST as renewalWaiverFiscalReviewDecide } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/decide/route";
+import { POST as renewalWaiverFiscalReviewComplete } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/complete/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -193,6 +194,13 @@ describe("subscription HTTP contracts", () => {
     expect((await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }), fiscalContext)).status).toBe(403);
     const startedReview = await renewalWaiverFiscalReviewStart(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/start`, { expectedVersion: 1 }, { csrf: reviewerCsrf }), fiscalContext);
     expect(startedReview.status).toBe(200); expect(await startedReview.json()).toMatchObject({ status: "IN_REVIEW", version: 2 });
+    const completionUrl = `/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/complete`;
+    const hostileCompletion = await renewalWaiverFiscalReviewComplete(jsonRequest(completionUrl, { expectedVersion: 3, detail: "Cierre contable acreditado" }, { csrf: reviewerCsrf, origin: "https://evil.example" }), fiscalContext);
+    expect(hostileCompletion.status).toBe(403); expect(await hostileCompletion.json()).toMatchObject({ code: "ORIGIN_NOT_ALLOWED" });
+    const csrfLessCompletion = await renewalWaiverFiscalReviewComplete(jsonRequest(completionUrl, { expectedVersion: 3, detail: "Cierre contable acreditado" }), fiscalContext);
+    expect(csrfLessCompletion.status).toBe(403); expect(await csrfLessCompletion.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const unauthorizedCompletion = await renewalWaiverFiscalReviewComplete(jsonRequest(completionUrl, { expectedVersion: 3, detail: "Cierre contable acreditado" }, { csrf: reviewerCsrf }), fiscalContext);
+    expect(unauthorizedCompletion.status).toBe(403); expect(await unauthorizedCompletion.json()).toMatchObject({ code: "FORBIDDEN" });
     expect((await renewalWaiverFiscalReviewDecide(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/decide`, { expectedVersion: 2, decision: "EXTERNAL_ADVICE_REQUIRED", detail: "Consulta externa necesaria" }, { csrf: reviewerCsrf }), fiscalContext)).status).toBe(422);
     const decidedReview = await renewalWaiverFiscalReviewDecide(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${fiscalReviewId}/decide`, { expectedVersion: 2, decision: "NO_ADDITIONAL_ACTION", detail: "Evidencia coherente sin actuaciones fiscales adicionales" }, { csrf: reviewerCsrf }), fiscalContext);
     expect(decidedReview.status).toBe(200); expect(await decidedReview.json()).toMatchObject({ status: "CLOSED", version: 3, decision: "NO_ADDITIONAL_ACTION" });

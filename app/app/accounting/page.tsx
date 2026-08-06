@@ -24,6 +24,7 @@ type AccountingPageProps = {
     year?: string;
     search?: string;
     entryId?: string;
+    waiverReviewId?: string;
   }>;
 };
 
@@ -196,7 +197,7 @@ export default async function AccountingPage({
         {canEditSelectedFiscalYear ? (
           <div className="panel stack">
             <AccountingAccountCreateForm />
-            <ManualJournalEntryCreateForm accounts={accounts.accounts} />
+            <ManualJournalEntryCreateForm accounts={accounts.accounts} waiverReviewId={params.waiverReviewId} />
           </div>
         ) : null}
         {canManageEntries && selectedFiscalYear && selectedFiscalYear.status !== "OPEN" ? (

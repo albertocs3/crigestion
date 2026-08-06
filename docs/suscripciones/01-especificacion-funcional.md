@@ -525,7 +525,11 @@ de ingresos condonados, aunque no genera factura, asiento ni VeriFactu. Queda
 abierta en la misma transaccion una revision fiscal posterior. Un segundo
 usuario debe asumirla y clasificarla como cerrada sin accion, escalada o con
 actuacion pendiente; la revision no aprueba retroactivamente ni modifica la
-condonacion. Queda
+condonacion. Una actuación contable pendiente solo puede cerrarse por el revisor
+asignado cuando Contabilidad ya ha creado un asiento contabilizado con vínculo
+causal único; la revisión conserva evidencia y no genera apuntes desde importes
+teóricos. Facturación y evidencias externas requieren flujos específicos y no
+se acreditan mediante coincidencias o texto libre. Queda
 fuera la clasificacion de nuevos bloqueos automaticos distintos
 de los dos codigos estables anteriores.
 

@@ -173,6 +173,14 @@ idempotencia, CSRF, rate limit y auditoria son independientes. La clasificacion
 no altera la condonacion ni crea efectos de Facturacion, Contabilidad o
 VeriFactu; el cierre acreditado de actuaciones queda para el siguiente corte.
 
+El undecimo corte local añade las migraciones 116 y 117. Separa la expansión de
+enums de la estructura y permite cerrar únicamente actuaciones contables con
+evidencia causal: un asiento `WAIVER_REGULARIZATION` contabilizado, único y
+vinculado a la revisión. El revisor asignado acredita la evidencia y produce
+atómicamente la versión 4 y el evento `COMPLETED`. El flujo fiscal no calcula
+ni crea el asiento, no expone el detalle de comprobación y no permite usar una
+factura manual o una referencia externa como prueba sustitutiva.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

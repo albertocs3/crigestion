@@ -114,6 +114,9 @@ export type SubscriptionRenewalWaiverReportItem = {
     decidedBy: { id: string; displayName: string } | null;
     decidedAt: string | null;
     closedAt: string | null;
+    completedBy: { id: string; displayName: string } | null;
+    evidenceCount: number;
+    hasLinkedAccountingEntry: boolean;
     isOwnWaiver: boolean;
     isAssignedToActor: boolean;
   };
@@ -189,7 +192,10 @@ const fiscalReviewSelect = {
   actionDueDate: true, decidedAt: true, closedAt: true,
   openedBy: { select: { id: true, displayName: true } },
   startedBy: { select: { id: true, displayName: true } },
-  decidedBy: { select: { id: true, displayName: true } }
+  decidedBy: { select: { id: true, displayName: true } },
+  closedBy: { select: { id: true, displayName: true } },
+  _count: { select: { evidences: true } },
+  accountingEntry: { select: { id: true } }
 } satisfies Prisma.SubscriptionRenewalWaiverReviewSelect;
 type FiscalReviewRecord = Prisma.SubscriptionRenewalWaiverReviewGetPayload<{ select: typeof fiscalReviewSelect }>;
 type WaiverRecordWithOptionalEvidence = WaiverRecord & { resolutionReasonDetail?: string | null; fiscalReview?: FiscalReviewRecord | null };
@@ -394,6 +400,9 @@ function mapWaiver(
       actionDueDate: record.fiscalReview.actionDueDate ? formatDateOnly(record.fiscalReview.actionDueDate) : null,
       decidedBy: record.fiscalReview.decidedBy, decidedAt: record.fiscalReview.decidedAt?.toISOString() ?? null,
       closedAt: record.fiscalReview.closedAt?.toISOString() ?? null,
+      completedBy: record.fiscalReview.closedBy,
+      evidenceCount: record.fiscalReview._count.evidences,
+      hasLinkedAccountingEntry: Boolean(record.fiscalReview.accountingEntry),
       isOwnWaiver: record.fiscalReview.openedBy.id === actorId,
       isAssignedToActor: record.fiscalReview.startedBy?.id === actorId
     } } : {})
