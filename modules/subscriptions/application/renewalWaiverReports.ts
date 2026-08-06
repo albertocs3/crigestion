@@ -205,9 +205,14 @@ const fiscalReviewSelect = {
   closedBy: { select: { id: true, displayName: true } },
   _count: { select: { evidences: true } },
   accountingEntry: { select: { id: true } },
-  accountingReversalRequests: {
-    orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
-    select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
+  evidences: {
+    where: { kind: "ACCOUNTING_JOURNAL_ENTRY" as const },
+    orderBy: [{ sequence: "desc" as const }, { id: "desc" as const }],
+    take: 1,
+    select: { reversalRequests: {
+      orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
+      select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
+    } }
   }
 } satisfies Prisma.SubscriptionRenewalWaiverReviewSelect;
 type FiscalReviewRecord = Prisma.SubscriptionRenewalWaiverReviewGetPayload<{ select: typeof fiscalReviewSelect }>;
@@ -376,6 +381,7 @@ function mapWaiver(
     || record.waivedTaxableBase === null || record.waivedTaxAmount === null || record.waivedTotal === null
     || !record.waiverCalculationVersion || !record.resolvedAgainstVersion || !record.resolvedSubscriptionVersion
     || !record.waiverSnapshot || record.waiverSnapshot.currency !== "EUR" || record.waiverSnapshot.taxSummaries.length === 0) throw new Error("SUBSCRIPTION_RENEWAL_WAIVER_REPORT_EVIDENCE_INCOMPLETE");
+  const currentEvidenceReversal = record.fiscalReview?.evidences[0]?.reversalRequests[0] ?? null;
   return {
     id: record.id,
     subscription: { id: record.subscription.id, number: record.subscription.number, name: record.subscription.name },
@@ -416,14 +422,14 @@ function mapWaiver(
       completedBy: record.fiscalReview.closedBy,
       evidenceCount: record.fiscalReview._count.evidences,
       hasLinkedAccountingEntry: Boolean(record.fiscalReview.accountingEntry),
-      accountingEvidenceReversal: record.fiscalReview.accountingReversalRequests[0] ? {
-        id: record.fiscalReview.accountingReversalRequests[0].id,
-        status: record.fiscalReview.accountingReversalRequests[0].status,
-        version: record.fiscalReview.accountingReversalRequests[0].version,
-        requestedAt: record.fiscalReview.accountingReversalRequests[0].requestedAt.toISOString(),
-        isRequestedByActor: record.fiscalReview.accountingReversalRequests[0].requestedById === actorId
+      accountingEvidenceReversal: currentEvidenceReversal ? {
+        id: currentEvidenceReversal.id,
+        status: currentEvidenceReversal.status,
+        version: currentEvidenceReversal.version,
+        requestedAt: currentEvidenceReversal.requestedAt.toISOString(),
+        isRequestedByActor: currentEvidenceReversal.requestedById === actorId
       } : null,
-      accountingEvidenceFollowUpRequired: record.fiscalReview.accountingReversalRequests[0]?.status === "COMPLETED",
+      accountingEvidenceFollowUpRequired: currentEvidenceReversal?.status === "COMPLETED",
       isOwnWaiver: record.fiscalReview.openedBy.id === actorId,
       isAssignedToActor: record.fiscalReview.startedBy?.id === actorId,
       isCompletedByActor: record.fiscalReview.closedBy?.id === actorId
@@ -531,7 +537,8 @@ function decodeCursor(value: string, filterHash: string): z.infer<typeof cursorS
     const expected = signCursor(payload);
     const submittedBytes = Buffer.from(signature, "base64url");
     const expectedBytes = Buffer.from(expected, "base64url");
-    if (submittedBytes.length !== expectedBytes.length || !timingSafeEqual(submittedBytes, expectedBytes)) return null;
+    if (submittedBytes.toString("base64url") !== signature
+      || submittedBytes.length !== expectedBytes.length || !timingSafeEqual(submittedBytes, expectedBytes)) return null;
     const parsed = cursorSchema.safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
     return parsed.success && parsed.data.filterHash === filterHash ? parsed.data : null;
   } catch {

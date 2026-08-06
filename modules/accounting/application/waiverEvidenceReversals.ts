@@ -94,7 +94,8 @@ export async function requestWaiverEvidenceReversal(
         where: { id: reviewId, companyId },
         select: {
           id: true, status: true, version: true, decision: true, openedById: true, closedById: true,
-          evidences: { where: { kind: "ACCOUNTING_JOURNAL_ENTRY" }, take: 1, select: {
+          evidences: { where: { kind: "ACCOUNTING_JOURNAL_ENTRY" },
+            orderBy: [{ sequence: "desc" }, { id: "desc" }], take: 1, select: {
             id: true, accountingJournalEntryId: true, accountingJournalEntry: { select: {
               accountingDate: true, fiscalYear: { select: { status: true, startDate: true, endDate: true } }
             } }
