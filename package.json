@@ -11,7 +11,7 @@
     "audit": "npm audit --audit-level=high",
     "test": "vitest run",
     "test:db:prepare": "node --conditions=react-server --import tsx scripts/prepare-vitest-database.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "node --conditions=react-server ./node_modules/@playwright/test/cli.js test",
     "typecheck": "tsc --noEmit",
     "verify:release": "npm run typecheck && npm test && npm run lint && npm run build && npm run audit",
     "prisma:generate": "prisma generate",

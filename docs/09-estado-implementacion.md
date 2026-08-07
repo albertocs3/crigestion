@@ -198,7 +198,9 @@ append-only. Reintentos serializables, idempotencia, rate limits, auditoría de
 denegaciones y constraints PostgreSQL protegen la causalidad y la concurrencia.
 La bandeja de Contabilidad muestra únicamente propuestas pendientes con un DTO
 reducido y cursor HMAC ligado a usuario y empresa; el motivo libre, el concepto
-y las líneas solo se entregan en el detalle protegido y auditado.
+y las líneas solo se entregan en el detalle protegido y auditado. Playwright
+cubre la bandeja y las dos decisiones terminales: la aprobación crea asiento y
+evidencia, mientras el rechazo no produce efectos contables.
 
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el

@@ -1,5 +1,32 @@
 import { expect, test } from "@playwright/test";
 import { prisma } from "@/lib/prisma";
+import type { SessionUser } from "@/modules/platform/application/auth";
+import { hashPassword } from "@/modules/platform/application/passwords";
+import { createManualJournalEntry } from "@/modules/accounting/application/journal";
+import {
+  approveWaiverEvidenceReversal,
+  hashWaiverEvidenceReversalApproval,
+  hashWaiverEvidenceReversalRequest,
+  requestWaiverEvidenceReversal
+} from "@/modules/accounting/application/waiverEvidenceReversals";
+import {
+  hashWaiverEvidenceReplacementRequest,
+  requestWaiverEvidenceReplacement
+} from "@/modules/accounting/application/waiverEvidenceReplacements";
+import {
+  excludeSubscriptionRenewal,
+  hashSubscriptionRenewalExclusionRequest,
+  hashSubscriptionRenewalWaiverRequest,
+  waiveSubscriptionRenewal
+} from "@/modules/subscriptions/application/renewalExclusions";
+import {
+  completeRenewalWaiverFiscalReview,
+  decideRenewalWaiverFiscalReview,
+  hashCompleteRenewalWaiverFiscalReview,
+  hashDecideRenewalWaiverFiscalReview,
+  hashStartRenewalWaiverFiscalReview,
+  startRenewalWaiverFiscalReview
+} from "@/modules/subscriptions/application/renewalWaiverFiscalReviews";
 import { assertDisposableTestDatabase } from "@/tests/helpers/disposableTestDatabase";
 
 const companyName = "CriGestion E2E SL";
@@ -12,6 +39,8 @@ const limitedUserName = "auditor-e2e";
 const limitedPassword = "Cambiar-auditor-2026";
 const billingViewerUserName = "facturacion-e2e";
 const billingViewerPassword = "Cambiar-facturacion-2026";
+const waiverApproverUserName = "waiver-approver-e2e";
+const waiverApproverPassword = "Cambiar-waiver-2026";
 const restoreReason = "Restauracion operativa E2E sin datos sensibles";
 const maintenanceReason = "Ventana de mantenimiento E2E controlada";
 
@@ -688,6 +717,50 @@ test("creates accounting accounts and a manual journal entry from the UI", async
   expect(entryAuditCount).toBe(1);
 });
 
+test("reviews waiver replacement proposals from the accounting inbox", async ({ page }) => {
+  await initializeAndLoginAdmin(page, "e2e-waiver-replacement-inbox");
+  await initializeAccountingForAdmin(page);
+  const fixture = await createWaiverReplacementInboxFixture();
+
+  await page.context().clearCookies();
+  await page.goto("/login");
+  await page.getByLabel("Usuario").fill(waiverApproverUserName);
+  await page.getByLabel("Contrasena").fill(waiverApproverPassword);
+  await page.getByRole("button", { name: "Entrar" }).click();
+  await expect(page).toHaveURL(/\/app$/);
+
+  await page.goto("/app/accounting");
+  await expect(page.getByRole("heading", { name: "Propuestas de sustitución pendientes" })).toBeVisible();
+  const approvalRow = page.getByRole("row").filter({ hasText: "Importe corregido" });
+  await expect(approvalRow).toContainText("Preparada");
+  await approvalRow.getByRole("link", { name: "Revisar" }).click();
+
+  await expect(page.getByRole("heading", { name: "Revisión de sustitución contable" })).toBeVisible();
+  await expect(page.getByText("Propuesta de sustitución")).toBeVisible();
+  await expect(page.getByText("Fundamento privado aprobación E2E")).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "Debe corregido approval" })).toContainText("61,00");
+  await page.getByRole("button", { name: "Aprobar y contabilizar" }).click();
+  await expect(page.getByText("Aprobada", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Aprobar y contabilizar" })).toHaveCount(0);
+
+  await page.goto("/app/accounting");
+  await expect(page.getByRole("row").filter({ hasText: "Importe corregido" })).toHaveCount(0);
+  const rejectionRow = page.getByRole("row").filter({ hasText: "Fecha corregida" });
+  await rejectionRow.getByRole("link", { name: "Revisar" }).click();
+  await page.getByLabel("Motivo del rechazo").fill("La fecha propuesta no coincide con la documentación revisada.");
+  await page.getByRole("button", { name: "Rechazar propuesta" }).click();
+  await expect(page.getByText("Rechazada", { exact: true })).toBeVisible();
+
+  await page.goto("/app/accounting");
+  await expect(page.getByText("No hay propuestas pendientes.")).toBeVisible();
+  expect(await prisma.accountingWaiverEvidenceReplacementRequest.findUniqueOrThrow({
+    where: { id: fixture.approvalRequestId }, select: { status: true, replacementEntry: { select: { origin: true, status: true } } }
+  })).toEqual({ status: "COMPLETED", replacementEntry: { origin: "WAIVER_REGULARIZATION_REPLACEMENT", status: "POSTED" } });
+  expect(await prisma.accountingWaiverEvidenceReplacementRequest.findUniqueOrThrow({
+    where: { id: fixture.rejectionRequestId }, select: { status: true, replacementEntry: { select: { id: true } } }
+  })).toEqual({ status: "REJECTED", replacementEntry: null });
+});
+
 test("creates a customer remittance draft from the UI", async ({ page }) => {
   await initializeAndLoginAdmin(page, "e2e-remittance-ui-setup");
   await initializeAccountingForAdmin(page);
@@ -1226,9 +1299,165 @@ async function createVerifiedBackupForAdmin() {
   });
 }
 
+async function createWaiverReplacementInboxFixture(): Promise<{ approvalRequestId: string; rejectionRequestId: string }> {
+  const adminRecord = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: userName }, select: {
+    id: true, displayName: true, userName: true, roleId: true,
+    role: { select: { code: true, name: true, permissions: { select: { permission: { select: { code: true } } } } } }
+  } });
+  const adminActor: SessionUser = {
+    id: adminRecord.id, displayName: adminRecord.displayName, userName: adminRecord.userName,
+    role: { code: adminRecord.role.code, name: adminRecord.role.name },
+    permissions: adminRecord.role.permissions.map(({ permission }) => permission.code)
+  };
+  const reviewer = await createFixtureActor("Revisor fiscal E2E", "waiver-reviewer-e2e", adminRecord.roleId);
+  const reversalRequester = await createFixtureActor("Solicitante reversión E2E", "waiver-reversal-requester-e2e", adminRecord.roleId);
+  const replacementRequester = await createFixtureActor("Proponente contable E2E", "waiver-replacement-requester-e2e", adminRecord.roleId);
+  const approverRole = await prisma.role.create({ data: {
+    code: "WaiverReplacementApproverE2E", name: "Aprobación de sustituciones E2E",
+    permissions: { create: ["Accounting.View", "Accounting.ApproveWaiverEvidenceReplacements"].map((code) => ({ permission: { connect: { code } } })) }
+  } });
+  await prisma.user.create({ data: {
+    displayName: "Aprobador de sustituciones E2E", userName: waiverApproverUserName,
+    normalizedUserName: waiverApproverUserName, passwordHash: hashPassword(waiverApproverPassword), roleId: approverRole.id
+  } });
+  const fiscalYear = await prisma.accountingFiscalYear.findFirstOrThrow({ where: { year: 2026, status: "OPEN" } });
+  const accounts = await prisma.accountingAccount.findMany({
+    where: { fiscalYearId: fiscalYear.id, code: { in: ["705000000", "477000000"] }, status: "ACTIVE", isPostable: true },
+    orderBy: { code: "asc" }
+  });
+  if (accounts.length !== 2) throw new Error("WAIVER_REPLACEMENT_E2E_ACCOUNTS_MISSING");
+  const approvalRequestId = await createWaiverReplacementProposal({
+    prefix: "approval", sequence: 1, reasonCode: "CORRECTED_AMOUNT", amount: "61.00", companyId: fiscalYear.companyId,
+    accounts, adminActor, reviewer, reversalRequester, replacementRequester
+  });
+  const rejectionRequestId = await createWaiverReplacementProposal({
+    prefix: "rejection", sequence: 2, reasonCode: "CORRECTED_DATE", amount: "62.00", companyId: fiscalYear.companyId,
+    accounts, adminActor, reviewer, reversalRequester, replacementRequester
+  });
+  return { approvalRequestId, rejectionRequestId };
+}
+
+async function createWaiverReplacementProposal(options: {
+  prefix: "approval" | "rejection";
+  sequence: number;
+  reasonCode: "CORRECTED_AMOUNT" | "CORRECTED_DATE";
+  amount: string;
+  companyId: string;
+  accounts: Array<{ id: string }>;
+  adminActor: SessionUser;
+  reviewer: SessionUser;
+  reversalRequester: SessionUser;
+  replacementRequester: SessionUser;
+}): Promise<string> {
+  const date = "2026-08-07";
+  const taxRate = await prisma.catalogTaxRate.findFirstOrThrow({ where: { code: "IVA_21" } });
+  const customer = await prisma.customer.create({ data: {
+    code: `WE${options.sequence.toString().padStart(6, "0")}`, type: "COMPANY",
+    legalName: `Cliente condonación ${options.prefix} E2E SL`, taxId: `B7654321${options.sequence}`,
+    normalizedTaxId: `B7654321${options.sequence}`, fiscalTreatment: "DOMESTIC",
+    fiscalAddressLine: "Calle Pruebas 1", fiscalPostalCode: "28001", fiscalCity: "Madrid", fiscalCountry: "ES",
+    defaultPaymentMethod: "BANK_TRANSFER", paymentTermsType: "IMMEDIATE", createdById: options.adminActor.id
+  } });
+  const item = await prisma.catalogItem.create({ data: {
+    code: `WR${options.sequence.toString().padStart(6, "0")}`, kind: "SERVICE",
+    name: `Servicio condonación ${options.prefix} E2E`, salePrice: "49.90", taxRateId: taxRate.id,
+    taxRate: taxRate.rate, createdById: options.adminActor.id
+  } });
+  const subscription = await prisma.subscription.create({ data: {
+    companyId: options.companyId, year: 2026, numberSequence: options.sequence,
+    number: `SUS-2026-${options.sequence.toString().padStart(5, "0")}`, customerId: customer.id,
+    name: `Suscripción condonación ${options.prefix} E2E`, status: "DRAFT", periodicity: "MONTHLY",
+    pricingMode: "FIXED", paymentMethod: "BANK_TRANSFER", startDate: new Date(`${date}T00:00:00.000Z`),
+    nextRenewalDate: new Date(`${date}T00:00:00.000Z`), version: 1, createdById: options.adminActor.id,
+    lines: { create: {
+      position: 1, catalogItemId: item.id, catalogItemCodeSnapshot: item.code, catalogItemKindSnapshot: item.kind,
+      description: item.name, quantity: "1.000", unitPrice: "49.90", taxRateId: taxRate.id,
+      taxRateCodeSnapshot: taxRate.code, taxRateNameSnapshot: taxRate.name, taxRateSnapshot: taxRate.rate
+    } }
+  } });
+  await prisma.subscription.update({ where: { id: subscription.id }, data: {
+    status: "ACTIVE", version: 2, activatedById: options.adminActor.id, activatedAt: new Date(`${date}T08:00:00.000Z`)
+  } });
+  const exclusionCommand = {
+    companyId: options.companyId, subscriptionId: subscription.id, expectedVersion: 2,
+    periodStart: date, processDate: date, reason: `Pendiente para condonación ${options.prefix} E2E`
+  };
+  const excluded = await excludeSubscriptionRenewal(exclusionCommand, options.adminActor,
+    e2eMutationContext(`${options.prefix}:exclude`, hashSubscriptionRenewalExclusionRequest(exclusionCommand)));
+  if (!excluded.ok) throw new Error(excluded.error.code);
+  const waiverCommand = {
+    companyId: options.companyId, subscriptionId: subscription.id, exclusionId: excluded.value.exclusionId,
+    expectedVersion: excluded.value.version, reasonCode: "COMMERCIAL_WAIVER" as const,
+    reasonDetail: `Condonación comercial documentada para ${options.prefix} E2E`
+  };
+  const waived = await waiveSubscriptionRenewal(waiverCommand, options.adminActor,
+    e2eMutationContext(`${options.prefix}:waive`, hashSubscriptionRenewalWaiverRequest(waiverCommand)));
+  if (!waived.ok || !waived.value.fiscalReview) throw new Error(waived.ok ? "WAIVER_REVIEW_MISSING" : waived.error.code);
+  const reviewId = waived.value.fiscalReview.id;
+  const startCommand = { expectedVersion: 1 as const };
+  const started = await startRenewalWaiverFiscalReview(reviewId, startCommand, options.reviewer,
+    e2eMutationContext(`${options.prefix}:review:start`, hashStartRenewalWaiverFiscalReview(reviewId, startCommand)));
+  if (!started.ok) throw new Error(started.error.code);
+  const decisionCommand = {
+    expectedVersion: 2 as const, decision: "MANUAL_ACCOUNTING_ACTION_REQUIRED" as const,
+    detail: `La condonación ${options.prefix} requiere evidencia contable`, actionDueDate: "2026-12-31"
+  };
+  const decided = await decideRenewalWaiverFiscalReview(reviewId, decisionCommand, options.reviewer,
+    e2eMutationContext(`${options.prefix}:review:decide`, hashDecideRenewalWaiverFiscalReview(reviewId, decisionCommand)));
+  if (!decided.ok) throw new Error(decided.error.code);
+  const entry = await createManualJournalEntry({
+    accountingDate: date, concept: `Regularización inicial ${options.prefix} E2E`, waiverReviewId: reviewId,
+    lines: [
+      { accountId: options.accounts[0]!.id, concept: `Debe inicial ${options.prefix}`, debit: "60.38", credit: "0.00" },
+      { accountId: options.accounts[1]!.id, concept: `Haber inicial ${options.prefix}`, debit: "0.00", credit: "60.38" }
+    ]
+  }, options.adminActor);
+  if (!entry.ok) throw new Error(entry.error.code);
+  const completionCommand = { expectedVersion: 3 as const, detail: `Evidencia inicial revisada para ${options.prefix} E2E` };
+  const completed = await completeRenewalWaiverFiscalReview(reviewId, completionCommand, options.reviewer,
+    e2eMutationContext(`${options.prefix}:review:complete`, hashCompleteRenewalWaiverFiscalReview(reviewId, completionCommand)));
+  if (!completed.ok) throw new Error(completed.error.code);
+  const reversalCommand = {
+    expectedReviewVersion: 4 as const, reasonCode: "ACCOUNTING_ERROR" as const,
+    reasonDetail: `La evidencia inicial ${options.prefix} contiene un error confirmado`, accountingDate: date
+  };
+  const reversal = await requestWaiverEvidenceReversal(reviewId, reversalCommand, options.reversalRequester,
+    e2eMutationContext(`${options.prefix}:reversal:request`, hashWaiverEvidenceReversalRequest(reviewId, reversalCommand)));
+  if (!reversal.ok) throw new Error(reversal.error.code);
+  const reversalApproval = { expectedVersion: 1 as const };
+  const reversed = await approveWaiverEvidenceReversal(reversal.value.id, reversalApproval, options.replacementRequester,
+    e2eMutationContext(`${options.prefix}:reversal:approve`, hashWaiverEvidenceReversalApproval(reversal.value.id, reversalApproval)));
+  if (!reversed.ok) throw new Error(reversed.error.code);
+  const replacementCommand = {
+    expectedReviewVersion: 4 as const, reasonCode: options.reasonCode,
+    reasonDetail: `Fundamento privado ${options.prefix === "approval" ? "aprobación" : "rechazo"} E2E`, accountingDate: date,
+    concept: `Sustitución propuesta ${options.prefix} E2E`, lines: [
+      { accountId: options.accounts[0]!.id, concept: `Debe corregido ${options.prefix}`, debit: options.amount, credit: "0.00" },
+      { accountId: options.accounts[1]!.id, concept: `Haber corregido ${options.prefix}`, debit: "0.00", credit: options.amount }
+    ]
+  };
+  const replacement = await requestWaiverEvidenceReplacement(reviewId, replacementCommand, options.replacementRequester,
+    e2eMutationContext(`${options.prefix}:replacement:request`, hashWaiverEvidenceReplacementRequest(reviewId, replacementCommand)));
+  if (!replacement.ok) throw new Error(replacement.error.code);
+  return replacement.value.id;
+}
+
+async function createFixtureActor(displayNameValue: string, normalizedUserName: string, roleId: string): Promise<SessionUser> {
+  const user = await prisma.user.create({ data: {
+    displayName: displayNameValue, userName: normalizedUserName, normalizedUserName,
+    passwordHash: hashPassword(`Cambiar-${normalizedUserName}-2026`), roleId
+  } });
+  return { id: user.id, displayName: user.displayName, userName: user.userName,
+    role: { code: "FixtureE2E", name: "Fixture E2E" }, permissions: [] };
+}
+
+function e2eMutationContext(key: string, requestHash: string) {
+  return { idempotencyKey: `e2e-waiver-replacement:${key}`, requestHash, correlationId: `e2e-waiver-replacement:${key}` };
+}
+
 async function resetPlatformTables(): Promise<void> {
   await assertDisposableTestDatabase();
-  await prisma.$executeRaw`TRUNCATE TABLE "verifactu_mtls_credential_test_attempts", "verifactu_submission_attempts", "verifactu_outbox_messages", "verifactu_fiscal_records", "verifactu_sif_installations", "verifactu_mtls_credential_versions", "verifactu_mtls_credentials" CASCADE`;
+  await prisma.$executeRaw`TRUNCATE TABLE "subscriptions", "verifactu_mtls_credential_test_attempts", "verifactu_submission_attempts", "verifactu_outbox_messages", "verifactu_fiscal_records", "verifactu_sif_installations", "verifactu_mtls_credential_versions", "verifactu_mtls_credentials" CASCADE`;
   await prisma.$transaction([
     prisma.invoiceVerifactuRecord.deleteMany(),
     prisma.customerRemittanceLine.deleteMany(),
