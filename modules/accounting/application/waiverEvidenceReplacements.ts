@@ -60,6 +60,11 @@ export type WaiverEvidenceReplacementDetailDto = {
   };
 };
 
+export type WaiverEvidenceReplacementDetailResult =
+  | { ok: true; status: 200; value: WaiverEvidenceReplacementDetailDto }
+  | { ok: false; status: 404; error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND"; message: string } }
+  | { ok: false; status: 429; retryAfterSeconds: number; error: { code: "WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED"; message: string } };
+
 export async function prepareWaiverEvidenceReplacement(reviewId: string): Promise<{ reviewId: string; fiscalYear: number } | null> {
   const companyId = await prisma.installation.findFirst({ where: { status: "INITIALIZED" }, select: { companyId: true } }).then((row) => row?.companyId);
   if (!companyId) return null;
@@ -115,9 +120,15 @@ export function hashWaiverEvidenceReplacementCancellation(requestId: string, com
 
 export async function getWaiverEvidenceReplacementDetail(
   requestId: string, actor: SessionUser, context: Pick<RequestContext, "correlationId"> = {}
-): Promise<WaiverEvidenceReplacementDetailDto | null> {
+): Promise<WaiverEvidenceReplacementDetailResult> {
   return prisma.$transaction(async (tx) => {
     const companyId = await currentCompanyId(tx);
+    const rateLimit = await consumeDetailReadRateLimit(tx, companyId, actor, context);
+    if (rateLimit.limited) return {
+      ok: false as const, status: 429 as const,
+      retryAfterSeconds: rateLimit.retryAfterSeconds,
+      error: { code: "WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED" as const, message: "Demasiadas consultas de propuestas; inténtelo de nuevo más tarde." }
+    };
     const record = await tx.accountingWaiverEvidenceReplacementRequest.findFirst({ where: { id: requestId, companyId }, select: {
       id: true, reviewId: true, status: true, version: true, reasonCode: true, reasonDetail: true,
       accountingDate: true, concept: true, requestedAt: true, requestedById: true,
@@ -135,10 +146,13 @@ export async function getWaiverEvidenceReplacementDetail(
         account: { select: { code: true, name: true, status: true, isPostable: true } } } }
     } });
     if (!record?.reversalRequest.reversalEntry) {
-      await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LOOKUP_DENIED", actor, context, {
-        companyId, requestIdHash: opaqueLookupHash("proposal-detail", requestId), denialReason: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE"
-      });
-      return null;
+      if (await shouldAuditDeniedDetailLookup(tx, companyId, actor)) await audit(
+        tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LOOKUP_DENIED", actor, context, {
+          companyId, requestIdHash: opaqueLookupHash("proposal-detail", requestId), denialReason: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE"
+        }
+      );
+      return { ok: false as const, status: 404 as const,
+        error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" as const, message: "No se encontró la solicitud." } };
     }
     const blockers: WaiverEvidenceReplacementDetailDto["eligibility"]["blockers"] = [];
     if (record.status !== "REQUESTED") blockers.push("REQUEST_NOT_PENDING");
@@ -152,7 +166,7 @@ export async function getWaiverEvidenceReplacementDetail(
       companyId, replacementRequestId: record.id, reviewId: record.reviewId,
       status: record.status, version: record.version, lineCount: record.lines.length, canApprove: blockers.length === 0
     });
-    return {
+    return { ok: true as const, status: 200 as const, value: {
       id: record.id, reviewId: record.reviewId, status: record.status, version: record.version,
       reasonCode: record.reasonCode, reasonDetail: record.reasonDetail, accountingDate: formatDateOnly(record.accountingDate),
       concept: record.concept, requestedAt: record.requestedAt.toISOString(),
@@ -170,7 +184,7 @@ export async function getWaiverEvidenceReplacementDetail(
       lines: record.lines.map((line) => ({ position: line.position, concept: line.concept,
         debit: line.debit.toFixed(2), credit: line.credit.toFixed(2), account: { code: line.account.code, name: line.account.name } })),
       eligibility: { canApprove: blockers.length === 0, blockers }
-    };
+    } };
   });
 }
 
@@ -461,6 +475,38 @@ async function consumeRateLimit(
   const count = rows[0]?.count ?? 0;
   if (count === 11) await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED", actor, context, { companyId, action });
   return count > 10;
+}
+async function consumeDetailReadRateLimit(
+  tx: Prisma.TransactionClient, companyId: string, actor: SessionUser, context: Pick<RequestContext, "correlationId">
+): Promise<{ limited: boolean; retryAfterSeconds: number }> {
+  const key = `accounting-waiver-evidence-replacement:detail:${companyId}:${actor.id}`;
+  const rows = await tx.$queryRaw<Array<{ count: number; retryAfterSeconds: number }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '1 minute' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, 32) END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '1 minute' THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = clock_timestamp()
+    RETURNING "count", GREATEST(1, CEIL(EXTRACT(EPOCH FROM ("windowStart" + INTERVAL '1 minute' - clock_timestamp())))::integer) AS "retryAfterSeconds"`);
+  const count = rows[0]?.count ?? 0;
+  if (count === 31) await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED", actor, context, {
+    companyId, action: "detail", limit: 30, windowSeconds: 60
+  });
+  return { limited: count > 30, retryAfterSeconds: rows[0]?.retryAfterSeconds ?? 60 };
+}
+async function shouldAuditDeniedDetailLookup(
+  tx: Prisma.TransactionClient, companyId: string, actor: SessionUser
+): Promise<boolean> {
+  const key = `accounting-waiver-evidence-replacement:lookup-audit:${companyId}:${actor.id}`;
+  const rows = await tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, 2) END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = clock_timestamp()
+    RETURNING "count"`);
+  return rows[0]?.count === 1;
 }
 async function replayMutation(tx: Prisma.TransactionClient, context: MutationContext, expectedStatus: 200 | 201) {
   const stored = await tx.idempotencyRecord.findUnique({ where: { key: context.idempotencyKey } }); if (!stored) return null;

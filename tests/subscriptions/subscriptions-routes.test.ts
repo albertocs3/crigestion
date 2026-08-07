@@ -91,6 +91,38 @@ describe("subscription HTTP contracts", () => {
     expect((await waiverEvidenceReplacementCancel(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
   });
 
+  it("rate-limits sensitive replacement detail reads and suppresses repeated lookup audits", async () => {
+    await login();
+    const companyId = (await prisma.installation.findFirstOrThrow({ where: { status: "INITIALIZED" }, select: { companyId: true } })).companyId;
+    if (!companyId) throw new Error("INITIALIZED_COMPANY_EXPECTED");
+    const attemptedIds: string[] = [];
+    for (let index = 0; index < 30; index += 1) {
+      const requestId = randomUUID(); attemptedIds.push(requestId);
+      const response = await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${requestId}`),
+        { params: Promise.resolve({ requestId }) });
+      expect(response.status).toBe(404);
+    }
+    const limitedId = randomUUID(); attemptedIds.push(limitedId);
+    const limited = await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${limitedId}`),
+      { params: Promise.resolve({ requestId: limitedId }) });
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ code: "WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED" });
+    expect(Number(limited.headers.get("Retry-After"))).toBeGreaterThanOrEqual(1);
+    expect(Number(limited.headers.get("Retry-After"))).toBeLessThanOrEqual(60);
+    expect(limited.headers.get("Cache-Control")).toContain("private, no-store");
+    expect(limited.headers.get("Pragma")).toBe("no-cache");
+    expect(limited.headers.get("Vary")).toBe("Cookie");
+    const lookupAudits = await prisma.auditEvent.findMany({ where: {
+      eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LOOKUP_DENIED",
+      payload: { path: ["companyId"], equals: companyId }
+    }, select: { payload: true } });
+    expect(lookupAudits).toHaveLength(1);
+    const serializedLookupAudit = JSON.stringify(lookupAudits);
+    for (const attemptedId of attemptedIds) expect(serializedLookupAudit).not.toContain(attemptedId);
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED",
+      payload: { path: ["companyId"], equals: companyId } } })).toBe(1);
+  });
+
   it("creates, edits, lists, reads, activates and cancels a subscription", async () => {
     await login(); const csrf = await csrfToken(); const references = await createReferences(); const effectiveDate = futureDate();
     const creation = await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, effectiveDate), { csrf })); expect(creation.status).toBe(201); const created = await creation.json() as { id: string; version: number; status: string };

@@ -798,9 +798,9 @@ describe("subscriptions application service", () => {
       waiverReplacementRequestContext("request", fiscalReview.id, unbalancedReplacementCommand))).toMatchObject({
       ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" }
     });
-    const replacementDetail = await getWaiverEvidenceReplacementDetail(requestedReplacement.value.id, otherReviewer,
+    const replacementDetailResult = await getWaiverEvidenceReplacementDetail(requestedReplacement.value.id, otherReviewer,
       { correlationId: "accounting-waiver-replacement-view" });
-    expect(replacementDetail).toMatchObject({
+    expect(replacementDetailResult).toMatchObject({ ok: true, status: 200, value: {
       id: requestedReplacement.value.id, status: "REQUESTED", version: 1, isRequestedByActor: false,
       requestedBy: { displayName: reversalApprover.displayName },
       sourceEvidence: { sequence: 1, entryNumber: accountingEntry.value.number },
@@ -810,7 +810,9 @@ describe("subscriptions application service", () => {
         { position: 1, concept: "Debe corregido", debit: "61.00", credit: "0.00" },
         { position: 2, concept: "Haber corregido", debit: "0.00", credit: "61.00" }
       ]
-    });
+    } });
+    if (!replacementDetailResult.ok) throw new Error("WAIVER_REPLACEMENT_DETAIL_EXPECTED");
+    const replacementDetail = replacementDetailResult.value;
     const reportWithPendingReplacement = await listSubscriptionRenewalWaivers({ limit: 25 }, otherReviewer);
     expect(reportWithPendingReplacement).toMatchObject({ ok: true, value: { waivers: [{ fiscalReview: {
       accountingEvidenceReplacement: { id: requestedReplacement.value.id, status: "REQUESTED", version: 1, isRequestedByActor: false },
@@ -827,7 +829,6 @@ describe("subscriptions application service", () => {
       waiverReplacementCancellationContext("third-party-cancel", requestedReplacement.value.id, cancellationCommand))).toMatchObject({
       ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_NOT_CANCELLABLE" }
     });
-    if (!replacementDetail) throw new Error("WAIVER_REPLACEMENT_DETAIL_EXPECTED");
     const replacementApproval = { expectedVersion: 1 as const, expectedProposalDigest: replacementDetail.proposalDigest };
     const changedProposalApproval = { expectedVersion: 1 as const, expectedProposalDigest: "0".repeat(64) };
     expect(await approveWaiverEvidenceReplacement(requestedReplacement.value.id, changedProposalApproval, otherReviewer,

@@ -351,9 +351,9 @@ async function replacementReviewPage(rawRequestId: string) {
   const requestId = uuidSchema.safeParse(rawRequestId);
   if (!requestId.success) return focusedAccountingPage(<p className="message error">El identificador de la propuesta no es válido.</p>);
   const detail = await getWaiverEvidenceReplacementDetail(requestId.data, authorization.user);
-  return focusedAccountingPage(detail
-    ? <WaiverEvidenceReplacementReview detail={detail} />
-    : <p className="message error">No se encontró la propuesta contable solicitada.</p>);
+  return focusedAccountingPage(detail.ok
+    ? <WaiverEvidenceReplacementReview detail={detail.value} />
+    : <p className="message error">{detail.error.message}</p>);
 }
 
 function focusedAccountingPage(content: ReactNode) {

@@ -218,6 +218,11 @@ devuelve `422 WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED`, consume cuota y deja
 una auditoria de denegacion, pero no solicitud, lineas, evento ni replay.
 Los intentos sobre UUID inexistentes o ajenos conservan el mismo `404` opaco y
 la auditoria guarda una huella versionada del UUID, nunca el valor consultado.
+El detalle protegido admite 30 lecturas por minuto y por usuario/empresa. La
+lectura 31 devuelve `429 WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED` con un
+`Retry-After` entre 1 y 60 segundos, sin consultar el recurso. Los lookups 404
+repetidos solo generan una auditoria por usuario/empresa cada 15 minutos para
+limitar el crecimiento del ledger sin perder señal de enumeracion.
 
 Las mutaciones requieren origen permitido, CSRF, JSON e `Idempotency-Key`. Se
 ejecutan en transaccion `Serializable` con hasta tres intentos completos ante

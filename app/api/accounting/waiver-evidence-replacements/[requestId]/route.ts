@@ -22,7 +22,7 @@ export async function GET(request: Request, context: { params: Promise<{ request
   if (!authorization.ok) return jsonResponse(request, authorization.error, { status: authorization.status, headers: privateHeaders });
   const params = paramsSchema.safeParse(await context.params);
   if (!params.success) return jsonResponse(request, validationError(params.error.flatten()), { status: 422, headers: privateHeaders });
-  const detail = await getWaiverEvidenceReplacementDetail(params.data.requestId, authorization.user, { correlationId });
-  if (!detail) return jsonResponse(request, { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND", message: "No se encontró la solicitud." }, { status: 404, headers: privateHeaders });
-  return jsonResponse(request, detail, { status: 200, headers: privateHeaders });
+  const result = await getWaiverEvidenceReplacementDetail(params.data.requestId, authorization.user, { correlationId });
+  return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status,
+    headers: { ...privateHeaders, ...(result.status === 429 ? { "Retry-After": String(result.retryAfterSeconds) } : {}) } });
 }
