@@ -204,6 +204,14 @@ evidencia, mientras el rechazo no produce efectos contables. La regresión E2E
 completa posterior superó sus 13 escenarios en Chromium, incluida la
 importación Norma 43 con la precondición vigente de ejercicio abierto.
 
+El candidato local del 7 de agosto de 2026 superó además la regresión Vitest
+completa: 76 archivos y 684 pruebas ejecutadas de forma serial contra
+PostgreSQL. TypeScript, ESLint, Prisma Validate, el build optimizado de Next.js
+15.5.22 y `npm audit --audit-level=high` finalizaron correctamente, sin
+vulnerabilidades. El wrapper monolítico `verify:release` excede la ventana de
+15 minutos del ejecutor por la duración serial; las mismas fases se completaron
+en lotes sin cambiar configuración, orden interno ni base de pruebas.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
