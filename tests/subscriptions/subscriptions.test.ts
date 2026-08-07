@@ -12,7 +12,7 @@ import { completeRenewalWaiverFiscalReview, decideRenewalWaiverFiscalReview, has
 import { issueInvoice } from "@/modules/billing/application/invoices";
 import { createManualJournalEntry } from "@/modules/accounting/application/journal";
 import { approveWaiverEvidenceReversal, hashWaiverEvidenceReversalApproval, hashWaiverEvidenceReversalRequest, requestWaiverEvidenceReversal } from "@/modules/accounting/application/waiverEvidenceReversals";
-import { approveWaiverEvidenceReplacement, cancelWaiverEvidenceReplacement, hashWaiverEvidenceReplacementApproval, hashWaiverEvidenceReplacementCancellation, hashWaiverEvidenceReplacementRejection, hashWaiverEvidenceReplacementRequest, rejectWaiverEvidenceReplacement, requestWaiverEvidenceReplacement, requestWaiverEvidenceReplacementSchema } from "@/modules/accounting/application/waiverEvidenceReplacements";
+import { approveWaiverEvidenceReplacement, cancelWaiverEvidenceReplacement, getWaiverEvidenceReplacementDetail, hashWaiverEvidenceReplacementApproval, hashWaiverEvidenceReplacementCancellation, hashWaiverEvidenceReplacementRejection, hashWaiverEvidenceReplacementRequest, rejectWaiverEvidenceReplacement, requestWaiverEvidenceReplacement, requestWaiverEvidenceReplacementSchema } from "@/modules/accounting/application/waiverEvidenceReplacements";
 
 const password = "Cambiar-esta-clave-2026";
 const initialization: InitializeCommand = { company: { legalName: "CriGestion Test SL", taxId: "B12345678", email: "admin@example.test" }, administrator: { displayName: "Administrador", userName: "admin", password } };
@@ -783,6 +783,24 @@ describe("subscriptions application service", () => {
     expect(requestedReplacement).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED", version: 1,
       sourceEvidenceId: accountingEvidence.id, reversalRequestId: requestedReversal.value.id } });
     if (!requestedReplacement.ok) throw new Error("WAIVER_REPLACEMENT_REQUEST_EXPECTED");
+    const replacementDetail = await getWaiverEvidenceReplacementDetail(requestedReplacement.value.id, otherReviewer,
+      { correlationId: "accounting-waiver-replacement-view" });
+    expect(replacementDetail).toMatchObject({
+      id: requestedReplacement.value.id, status: "REQUESTED", version: 1, isRequestedByActor: false,
+      requestedBy: { displayName: reversalApprover.displayName },
+      sourceEvidence: { sequence: 1, entryNumber: accountingEntry.value.number },
+      reversal: { entryNumber: reversalEntry.number },
+      eligibility: { canApprove: true, blockers: [] },
+      lines: [
+        { position: 1, concept: "Debe corregido", debit: "61.00", credit: "0.00" },
+        { position: 2, concept: "Haber corregido", debit: "0.00", credit: "61.00" }
+      ]
+    });
+    const reportWithPendingReplacement = await listSubscriptionRenewalWaivers({ limit: 25 }, otherReviewer);
+    expect(reportWithPendingReplacement).toMatchObject({ ok: true, value: { waivers: [{ fiscalReview: {
+      accountingEvidenceReplacement: { id: requestedReplacement.value.id, status: "REQUESTED", version: 1, isRequestedByActor: false },
+      accountingEvidenceFollowUpRequired: true
+    } }] } });
     expect(await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover,
       waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand))).toEqual(requestedReplacement);
     const rejectionCommand = { expectedVersion: 1 as const, rejectionDetail: "El solicitante no puede rechazar su propia propuesta" };

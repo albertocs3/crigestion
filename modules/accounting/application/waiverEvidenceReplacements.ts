@@ -38,6 +38,39 @@ export type WaiverEvidenceReplacementDto = {
   resultingEvidence: { id: string; sequence: number } | null;
 };
 
+export type WaiverEvidenceReplacementDetailDto = {
+  id: string; reviewId: string; status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED"; version: number;
+  reasonCode: RequestWaiverEvidenceReplacementCommand["reasonCode"]; reasonDetail: string;
+  accountingDate: string; concept: string; requestedAt: string;
+  isRequestedByActor: boolean;
+  requestedBy: { displayName: string };
+  sourceEvidence: {
+    sequence: number; entryNumber: string; accountingDate: string; concept: string;
+    lines: Array<{ position: number; concept: string; debit: string; credit: string; account: { code: string; name: string } }>;
+  };
+  reversal: { entryNumber: string; accountingDate: string };
+  lines: Array<{ position: number; concept: string; debit: string; credit: string; account: { code: string; name: string } }>;
+  eligibility: {
+    canApprove: boolean;
+    blockers: Array<"REQUEST_NOT_PENDING" | "REQUESTER_CANNOT_APPROVE" | "WAIVER_MAKER_CANNOT_APPROVE"
+      | "REVIEW_CLOSER_CANNOT_APPROVE" | "FISCAL_YEAR_NOT_OPEN" | "ACCOUNT_NOT_POSTABLE" | "SOURCE_EVIDENCE_SUPERSEDED">;
+  };
+};
+
+export async function prepareWaiverEvidenceReplacement(reviewId: string): Promise<{ reviewId: string; fiscalYear: number } | null> {
+  const companyId = await prisma.installation.findFirst({ where: { status: "INITIALIZED" }, select: { companyId: true } }).then((row) => row?.companyId);
+  if (!companyId) return null;
+  const review = await prisma.subscriptionRenewalWaiverReview.findFirst({ where: {
+    id: reviewId, companyId, status: "CLOSED", version: 4, decision: "MANUAL_ACCOUNTING_ACTION_REQUIRED"
+  }, select: { id: true, evidences: { where: { kind: "ACCOUNTING_JOURNAL_ENTRY" }, orderBy: [{ sequence: "desc" }, { id: "desc" }], take: 1, select: {
+    replacementSourceRequests: { where: { status: { in: ["REQUESTED", "COMPLETED"] } }, take: 1, select: { id: true } },
+    reversalRequests: { where: { status: "COMPLETED", reasonCode: { not: "DUPLICATE_REGULARIZATION" } }, take: 1,
+      orderBy: [{ requestedAt: "desc" }, { id: "desc" }], select: { reversalEntry: { select: { fiscalYear: { select: { year: true, status: true } } } } } }
+  } } } });
+  const evidence = review?.evidences[0]; const fiscal = evidence?.reversalRequests[0]?.reversalEntry?.fiscalYear;
+  return review && evidence?.replacementSourceRequests.length === 0 && fiscal?.status === "OPEN" ? { reviewId: review.id, fiscalYear: fiscal.year } : null;
+}
+
 type MutationContext = Pick<RequestContext, "correlationId"> & { idempotencyKey: string; requestHash: string };
 type FailureCode = "WAIVER_REVIEW_NOT_FOUND" | "WAIVER_EVIDENCE_NOT_REPLACEABLE" | "WAIVER_REPLACEMENT_INDEPENDENCE_REQUIRED"
   | "WAIVER_REPLACEMENT_FISCAL_YEAR_NOT_OPEN" | "WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED"
@@ -73,6 +106,61 @@ export function hashWaiverEvidenceReplacementRejection(requestId: string, comman
 }
 export function hashWaiverEvidenceReplacementCancellation(requestId: string, command: CancelWaiverEvidenceReplacementCommand): string {
   return hashIdempotencyPayload("accounting-waiver-evidence-replacement-cancel:v1", { requestId, ...command });
+}
+
+export async function getWaiverEvidenceReplacementDetail(
+  requestId: string, actor: SessionUser, context: Pick<RequestContext, "correlationId"> = {}
+): Promise<WaiverEvidenceReplacementDetailDto | null> {
+  return prisma.$transaction(async (tx) => {
+    const companyId = await currentCompanyId(tx);
+    const record = await tx.accountingWaiverEvidenceReplacementRequest.findFirst({ where: { id: requestId, companyId }, select: {
+      id: true, reviewId: true, status: true, version: true, reasonCode: true, reasonDetail: true,
+      accountingDate: true, concept: true, requestedAt: true, requestedById: true,
+      requestedBy: { select: { displayName: true } },
+      review: { select: { openedById: true, closedById: true } },
+      fiscalYear: { select: { status: true } },
+      sourceEvidence: { select: { sequence: true, accountingJournalEntry: { select: {
+        number: true, accountingDate: true, concept: true,
+        lines: { orderBy: { position: "asc" }, select: { position: true, concept: true, debit: true, credit: true,
+          account: { select: { code: true, name: true } } } }
+      } },
+        supersededByEvidence: { select: { id: true } } } },
+      reversalRequest: { select: { reversalEntry: { select: { number: true, accountingDate: true } } } },
+      lines: { orderBy: { position: "asc" }, select: { position: true, concept: true, debit: true, credit: true,
+        account: { select: { code: true, name: true, status: true, isPostable: true } } } }
+    } });
+    if (!record?.reversalRequest.reversalEntry) return null;
+    const blockers: WaiverEvidenceReplacementDetailDto["eligibility"]["blockers"] = [];
+    if (record.status !== "REQUESTED") blockers.push("REQUEST_NOT_PENDING");
+    if (record.requestedById === actor.id) blockers.push("REQUESTER_CANNOT_APPROVE");
+    if (record.review.openedById === actor.id) blockers.push("WAIVER_MAKER_CANNOT_APPROVE");
+    if (record.review.closedById === actor.id) blockers.push("REVIEW_CLOSER_CANNOT_APPROVE");
+    if (record.fiscalYear.status !== "OPEN") blockers.push("FISCAL_YEAR_NOT_OPEN");
+    if (record.lines.some((line) => line.account.status !== "ACTIVE" || !line.account.isPostable)) blockers.push("ACCOUNT_NOT_POSTABLE");
+    if (record.sourceEvidence.supersededByEvidence) blockers.push("SOURCE_EVIDENCE_SUPERSEDED");
+    await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_VIEWED", actor, context, {
+      companyId, replacementRequestId: record.id, reviewId: record.reviewId,
+      status: record.status, version: record.version, lineCount: record.lines.length, canApprove: blockers.length === 0
+    });
+    return {
+      id: record.id, reviewId: record.reviewId, status: record.status, version: record.version,
+      reasonCode: record.reasonCode, reasonDetail: record.reasonDetail, accountingDate: formatDateOnly(record.accountingDate),
+      concept: record.concept, requestedAt: record.requestedAt.toISOString(), isRequestedByActor: record.requestedById === actor.id,
+      requestedBy: record.requestedBy,
+      sourceEvidence: {
+        sequence: record.sourceEvidence.sequence, entryNumber: record.sourceEvidence.accountingJournalEntry.number,
+        accountingDate: formatDateOnly(record.sourceEvidence.accountingJournalEntry.accountingDate),
+        concept: record.sourceEvidence.accountingJournalEntry.concept,
+        lines: record.sourceEvidence.accountingJournalEntry.lines.map((line) => ({ position: line.position, concept: line.concept,
+          debit: line.debit.toFixed(2), credit: line.credit.toFixed(2), account: line.account }))
+      },
+      reversal: { entryNumber: record.reversalRequest.reversalEntry.number,
+        accountingDate: formatDateOnly(record.reversalRequest.reversalEntry.accountingDate) },
+      lines: record.lines.map((line) => ({ position: line.position, concept: line.concept,
+        debit: line.debit.toFixed(2), credit: line.credit.toFixed(2), account: { code: line.account.code, name: line.account.name } })),
+      eligibility: { canApprove: blockers.length === 0, blockers }
+    };
+  });
 }
 
 export async function requestWaiverEvidenceReplacement(

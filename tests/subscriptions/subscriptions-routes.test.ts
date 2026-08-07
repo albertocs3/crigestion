@@ -27,6 +27,7 @@ import { POST as waiverEvidenceReplacementRequest } from "@/app/api/subscription
 import { POST as waiverEvidenceReplacementApprove } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/approve/route";
 import { POST as waiverEvidenceReplacementReject } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/reject/route";
 import { POST as waiverEvidenceReplacementCancel } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/cancel/route";
+import { GET as waiverEvidenceReplacementGet } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -44,6 +45,8 @@ describe("subscription HTTP contracts", () => {
   it("requires authentication, CSRF, origin and idempotency", async () => {
     expect((await subscriptionsGet(apiRequest("/api/subscriptions"))).status).toBe(401);
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(401);
+    expect((await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${randomUUID()}`),
+      { params: Promise.resolve({ requestId: randomUUID() }) })).status).toBe(401);
     await login(); const references = await createReferences();
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references), { origin: "https://evil.example" }))).status).toBe(403);
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references)))).status).toBe(403);
@@ -52,6 +55,13 @@ describe("subscription HTTP contracts", () => {
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(422);
     const reviewId = randomUUID(); const requestId = randomUUID();
     const reviewContext = { params: Promise.resolve({ reviewId }) }; const reversalContext = { params: Promise.resolve({ requestId }) };
+    const invalidReplacementDetail = await waiverEvidenceReplacementGet(apiRequest("/api/accounting/waiver-evidence-replacements/no"),
+      { params: Promise.resolve({ requestId: "no" }) });
+    expect(invalidReplacementDetail.status).toBe(422);
+    expect(invalidReplacementDetail.headers.get("cache-control")).toContain("private, no-store");
+    const missingReplacementDetail = await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${requestId}`), reversalContext);
+    expect(missingReplacementDetail.status).toBe(404);
+    expect(missingReplacementDetail.headers.get("vary")).toBe("Cookie");
     const reversalBody = { expectedReviewVersion: 4, reasonCode: "ACCOUNTING_ERROR", reasonDetail: "Corrección contable suficientemente justificada", accountingDate: todayDate() };
     expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody, { csrf, origin: "https://evil.example" }), reviewContext)).status).toBe(403);
     expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody), reviewContext)).status).toBe(403);

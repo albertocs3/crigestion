@@ -1,4 +1,6 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
+import { z } from "zod";
 import {
   listAccountingAccounts,
   listAccountingAccountsSchema,
@@ -13,9 +15,13 @@ import { listFiscalYearLifecycleHistory } from "@/modules/accounting/application
 import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm, AccountingFiscalYearReopenActions } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
 import { AccountingFiscalYearLifecycleHistory } from "@/modules/accounting/presentation/AccountingFiscalYearLifecycleHistory";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
+import { getWaiverEvidenceReplacementDetail, prepareWaiverEvidenceReplacement } from "@/modules/accounting/application/waiverEvidenceReplacements";
+import { WaiverEvidenceReplacementRequestForm } from "@/modules/accounting/presentation/WaiverEvidenceReplacementRequestForm";
+import { WaiverEvidenceReplacementReview } from "@/modules/accounting/presentation/WaiverEvidenceReplacementReview";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 
 export const dynamic = "force-dynamic";
+const uuidSchema = z.string().uuid();
 
 type AccountingPageProps = {
   searchParams: Promise<{
@@ -25,14 +31,18 @@ type AccountingPageProps = {
     search?: string;
     entryId?: string;
     waiverReviewId?: string;
+    waiverReplacementReviewId?: string;
+    waiverReplacementRequestId?: string;
   }>;
 };
 
 export default async function AccountingPage({
   searchParams
 }: AccountingPageProps) {
-  const authorization = await authorizePagePermission("Accounting.View");
   const params = await searchParams;
+  if (params.waiverReplacementReviewId) return replacementRequestPage(params.waiverReplacementReviewId);
+  if (params.waiverReplacementRequestId) return replacementReviewPage(params.waiverReplacementRequestId);
+  const authorization = await authorizePagePermission("Accounting.View");
 
   if (!authorization.ok) {
     return (
@@ -321,6 +331,36 @@ export default async function AccountingPage({
       </section>
     </main>
   );
+}
+
+async function replacementRequestPage(rawReviewId: string) {
+  const authorization = await authorizePagePermission("Accounting.RequestWaiverEvidenceReplacements");
+  if (!authorization.ok) return focusedAccountingPage(<p className="message error">{authorization.message}</p>);
+  const reviewId = uuidSchema.safeParse(rawReviewId);
+  if (!reviewId.success) return focusedAccountingPage(<p className="message error">El identificador de la revisión no es válido.</p>);
+  const preparation = await prepareWaiverEvidenceReplacement(reviewId.data);
+  if (!preparation) return focusedAccountingPage(<p className="message error">La revisión no dispone de una evidencia revertida sustituible en un ejercicio abierto.</p>);
+  const accountsPayload = listAccountingAccountsSchema.parse({ limit: 50, status: "ACTIVE", year: preparation.fiscalYear.toString() });
+  const accounts = await listAccountingAccounts(accountsPayload, authorization.user);
+  return focusedAccountingPage(<WaiverEvidenceReplacementRequestForm reviewId={preparation.reviewId} accounts={accounts.accounts} />);
+}
+
+async function replacementReviewPage(rawRequestId: string) {
+  const authorization = await authorizePagePermission("Accounting.ApproveWaiverEvidenceReplacements");
+  if (!authorization.ok) return focusedAccountingPage(<p className="message error">{authorization.message}</p>);
+  const requestId = uuidSchema.safeParse(rawRequestId);
+  if (!requestId.success) return focusedAccountingPage(<p className="message error">El identificador de la propuesta no es válido.</p>);
+  const detail = await getWaiverEvidenceReplacementDetail(requestId.data, authorization.user);
+  return focusedAccountingPage(detail
+    ? <WaiverEvidenceReplacementReview detail={detail} />
+    : <p className="message error">No se encontró la propuesta contable solicitada.</p>);
+}
+
+function focusedAccountingPage(content: ReactNode) {
+  return <main className="shell">
+    <header className="topbar"><div className="brand">CriGestión</div><Link className="button button-secondary" href="/app/subscriptions/renewal-waivers">Volver a condonaciones</Link></header>
+    <section className="content"><div className="panel stack">{content}</div></section>
+  </main>;
 }
 
 function accountNextPageHref(

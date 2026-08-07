@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { fetchCsrfToken } from "@/modules/platform/presentation/csrf";
 
@@ -20,10 +21,19 @@ type Review = {
     requestedAt: string;
     isRequestedByActor: boolean;
   } | null;
+  accountingEvidenceReplacement: {
+    id: string;
+    status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED";
+    version: number;
+    requestedAt: string;
+    isRequestedByActor: boolean;
+  } | null;
 };
 
-export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide, canComplete, canRequestEvidenceReversal, canApproveEvidenceReversal }: {
+export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide, canComplete, canRequestEvidenceReversal, canApproveEvidenceReversal,
+  canRequestEvidenceReplacement, canApproveEvidenceReplacement }: {
   review: Review; canDecide: boolean; canComplete: boolean; canRequestEvidenceReversal: boolean; canApproveEvidenceReversal: boolean;
+  canRequestEvidenceReplacement: boolean; canApproveEvidenceReplacement: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -48,7 +58,25 @@ export function SubscriptionRenewalWaiverFiscalReviewActions({ review, canDecide
   }
   if (review.status === "CLOSED" && review.decision === "MANUAL_ACCOUNTING_ACTION_REQUIRED" && review.hasLinkedAccountingEntry) {
     const reversal = review.accountingEvidenceReversal;
-    if (reversal?.status === "COMPLETED") return <span className="cell-detail">La evidencia original permanece histórica y está revertida.</span>;
+    if (reversal?.status === "COMPLETED") {
+      const replacement = review.accountingEvidenceReplacement;
+      if (replacement?.status === "REQUESTED") return <div className="stack">
+        <span className="cell-detail">Propuesta contable solicitada el {new Date(replacement.requestedAt).toLocaleDateString("es-ES")}.</span>
+        {canRequestEvidenceReplacement && replacement.isRequestedByActor ? <button className="button button-secondary" type="button" disabled={busy}
+          onClick={() => void post(`/api/accounting/waiver-evidence-replacements/${replacement.id}/cancel`, { expectedVersion: replacement.version })}>{busy ? "Cancelando..." : "Cancelar propuesta"}</button> : null}
+        {canApproveEvidenceReplacement && !replacement.isRequestedByActor && !review.isOwnWaiver && !review.isCompletedByActor
+          ? <Link className="button" href={`/app/accounting?waiverReplacementRequestId=${encodeURIComponent(replacement.id)}`}>Revisar propuesta contable</Link> : null}
+        {replacement.isRequestedByActor ? <span className="cell-detail">La aprobación exige una persona distinta de quien creó la propuesta.</span> : null}
+        {message ? <span role="status" className="cell-detail">{message}</span> : null}
+      </div>;
+      if (canRequestEvidenceReplacement && !review.isOwnWaiver && !review.isCompletedByActor) return <div className="stack">
+        <span className="cell-detail">La evidencia original permanece histórica y está revertida.</span>
+        {replacement?.status === "REJECTED" ? <span className="cell-detail">La propuesta anterior fue rechazada.</span> : null}
+        {replacement?.status === "CANCELLED" ? <span className="cell-detail">La propuesta anterior fue cancelada.</span> : null}
+        <Link className="button button-secondary" href={`/app/accounting?waiverReplacementReviewId=${encodeURIComponent(review.id)}`}>Preparar nueva propuesta contable</Link>
+      </div>;
+      return <span className="cell-detail">La evidencia original permanece histórica y está revertida; se requiere una nueva propuesta contable.</span>;
+    }
     if (reversal?.status === "REQUESTED") return <div className="stack">
       <span className="cell-detail">Reversión solicitada el {new Date(reversal.requestedAt).toLocaleDateString("es-ES")}.</span>
       {canRequestEvidenceReversal && reversal.isRequestedByActor ? <button className="button button-secondary" type="button" disabled={busy}

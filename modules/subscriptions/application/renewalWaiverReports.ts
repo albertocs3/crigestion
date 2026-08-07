@@ -124,6 +124,13 @@ export type SubscriptionRenewalWaiverReportItem = {
       requestedAt: string;
       isRequestedByActor: boolean;
     } | null;
+    accountingEvidenceReplacement: {
+      id: string;
+      status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED";
+      version: number;
+      requestedAt: string;
+      isRequestedByActor: boolean;
+    } | null;
     accountingEvidenceFollowUpRequired: boolean;
     isOwnWaiver: boolean;
     isAssignedToActor: boolean;
@@ -209,10 +216,16 @@ const fiscalReviewSelect = {
     where: { kind: "ACCOUNTING_JOURNAL_ENTRY" as const },
     orderBy: [{ sequence: "desc" as const }, { id: "desc" as const }],
     take: 1,
-    select: { reversalRequests: {
-      orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
-      select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
-    } }
+    select: {
+      reversalRequests: {
+        orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
+        select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
+      },
+      replacementSourceRequests: {
+        orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 1,
+        select: { id: true, status: true, version: true, requestedAt: true, requestedById: true }
+      }
+    }
   }
 } satisfies Prisma.SubscriptionRenewalWaiverReviewSelect;
 type FiscalReviewRecord = Prisma.SubscriptionRenewalWaiverReviewGetPayload<{ select: typeof fiscalReviewSelect }>;
@@ -381,7 +394,9 @@ function mapWaiver(
     || record.waivedTaxableBase === null || record.waivedTaxAmount === null || record.waivedTotal === null
     || !record.waiverCalculationVersion || !record.resolvedAgainstVersion || !record.resolvedSubscriptionVersion
     || !record.waiverSnapshot || record.waiverSnapshot.currency !== "EUR" || record.waiverSnapshot.taxSummaries.length === 0) throw new Error("SUBSCRIPTION_RENEWAL_WAIVER_REPORT_EVIDENCE_INCOMPLETE");
-  const currentEvidenceReversal = record.fiscalReview?.evidences[0]?.reversalRequests[0] ?? null;
+  const currentEvidence = record.fiscalReview?.evidences[0];
+  const currentEvidenceReversal = currentEvidence?.reversalRequests[0] ?? null;
+  const currentEvidenceReplacement = currentEvidence?.replacementSourceRequests[0] ?? null;
   return {
     id: record.id,
     subscription: { id: record.subscription.id, number: record.subscription.number, name: record.subscription.name },
@@ -429,7 +444,15 @@ function mapWaiver(
         requestedAt: currentEvidenceReversal.requestedAt.toISOString(),
         isRequestedByActor: currentEvidenceReversal.requestedById === actorId
       } : null,
-      accountingEvidenceFollowUpRequired: currentEvidenceReversal?.status === "COMPLETED",
+      accountingEvidenceReplacement: currentEvidenceReplacement ? {
+        id: currentEvidenceReplacement.id,
+        status: currentEvidenceReplacement.status,
+        version: currentEvidenceReplacement.version,
+        requestedAt: currentEvidenceReplacement.requestedAt.toISOString(),
+        isRequestedByActor: currentEvidenceReplacement.requestedById === actorId
+      } : null,
+      accountingEvidenceFollowUpRequired: currentEvidenceReversal?.status === "COMPLETED"
+        && currentEvidenceReplacement?.status !== "COMPLETED",
       isOwnWaiver: record.fiscalReview.openedBy.id === actorId,
       isAssignedToActor: record.fiscalReview.startedBy?.id === actorId,
       isCompletedByActor: record.fiscalReview.closedBy?.id === actorId
