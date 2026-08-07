@@ -30,7 +30,7 @@ export type CatalogStockMovementItem = {
   itemId: string;
   itemCode: string;
   itemName: string;
-  type: "ADJUSTMENT" | "PURCHASE_RECEIPT" | "PURCHASE_RETURN";
+  type: "ADJUSTMENT" | "PURCHASE_RECEIPT" | "PURCHASE_RETURN" | "PURCHASE_INTERNAL_REVERSAL";
   quantity: string;
   previousStock: string;
   newStock: string;
@@ -162,7 +162,7 @@ const catalogStockMovementSelect = {
 function mapCatalogStockMovementItem(movement: {
   id: string;
   itemId: string;
-  type: "ADJUSTMENT" | "PURCHASE_RECEIPT" | "PURCHASE_RETURN";
+  type: "ADJUSTMENT" | "PURCHASE_RECEIPT" | "PURCHASE_RETURN" | "PURCHASE_INTERNAL_REVERSAL";
   quantity: Prisma.Decimal;
   previousStock: Prisma.Decimal;
   newStock: Prisma.Decimal;

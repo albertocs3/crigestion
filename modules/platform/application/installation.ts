@@ -52,6 +52,7 @@ const platformPermissions = [
   ["Purchases.ManageDrafts", "Gestionar borradores de compra"],
   ["Purchases.Register", "Registrar facturas de compra"],
   ["Purchases.Rectify", "Registrar facturas rectificativas de compra"],
+  ["Purchases.Correct", "Corregir o anular compras registradas sin actividad financiera"],
   ["Catalog.View", "Consultar catalogo"],
   ["Catalog.Manage", "Gestionar catalogo"],
   ["Billing.View", "Consultar facturas"],

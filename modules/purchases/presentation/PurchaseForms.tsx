@@ -78,4 +78,30 @@ export function PurchaseRectificationForm({ purchaseId, version, originalNumber,
   </form>;
 }
 
+export function PurchaseCorrectionVoidForm({ purchaseId, version, originalNumber, issueDate }: { purchaseId: string; version: number; originalNumber: string; issueDate: string }) {
+  const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" });
+  async function submit(formData: FormData) {
+    if (!window.confirm(`¿Anular internamente la compra ${originalNumber}? Se crearán contraasientos y ajustes inversos de IVA y stock. Esta acción no sustituye una rectificativa del proveedor.`)) return;
+    setState({ kind: "pending" });
+    const result = await mutate(`/api/purchases/${purchaseId}/corrections`, "POST", {
+      mode: "VOID", expectedVersion: version, accountingDate: String(formData.get("accountingDate")),
+      reasonCode: String(formData.get("reasonCode")), reason: String(formData.get("reason") || "").trim() || null,
+      confirmation: "VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY"
+    }, key.get());
+    if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; }
+    key.clear(); setState({ kind: "success", message: "Compra anulada con evidencias inversas." }); router.refresh();
+  }
+  return <form className="stack" action={submit}>
+    <h2>Anulación interna</h2>
+    <p className="muted">Disponible solo sin pagos, compensaciones ni rectificativas. Conserva la factura original y añade evidencias inversas; no registra un documento fiscal del proveedor.</p>
+    <div className="form-grid">
+      <label>Fecha contable<input name="accountingDate" type="date" min={issueDate} required/></label>
+      <label>Motivo<select name="reasonCode" defaultValue="DUPLICATE_DOCUMENT"><option value="DUPLICATE_DOCUMENT">Documento duplicado</option></select></label>
+    </div>
+    <label>Detalle<textarea name="reason" maxLength={500}/></label>
+    <button className="button button-danger" disabled={state.kind === "pending"}>{state.kind === "pending" ? "Anulando…" : "Anular compra"}</button>
+    {state.message ? <p className={`message ${state.kind === "error" ? "error" : "success"}`} role="status">{state.message}</p> : null}
+  </form>;
+}
+
 export function SupplierPaymentForm({ dueDate }: { dueDate: { id: string; supplierId: string; pendingAmount: string; paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT" } }) { const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" }); async function submit(formData: FormData) { setState({ kind: "pending" }); const result = await mutate("/api/treasury/supplier-payments", "POST", { supplierId: dueDate.supplierId, paymentDate: String(formData.get("paymentDate")), paymentMethod: String(formData.get("paymentMethod")), reference: String(formData.get("reference") || "").trim() || null, notes: null, allocations: [{ dueDateId: dueDate.id, amount: String(formData.get("amount")) }] }, key.get()); if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; } key.clear(); setState({ kind: "success", message: "Pago registrado." }); router.refresh(); } return <form className="compact-stack" action={submit}><label>Fecha<input name="paymentDate" type="date" required/></label><label>Importe<input name="amount" defaultValue={dueDate.pendingAmount} inputMode="decimal" required/></label><label>Método<select name="paymentMethod" defaultValue={dueDate.paymentMethod}><option value="BANK_TRANSFER">Transferencia</option><option value="CASH">Efectivo</option><option value="DIRECT_DEBIT">Domiciliación</option></select></label><label>Referencia<input name="reference" maxLength={120} placeholder="Opcional"/></label><button className="button button-small" disabled={state.kind === "pending"}>{state.kind === "pending" ? "Registrando…" : "Pagar"}</button>{state.message ? <small className={state.kind === "error" ? "message error" : "message success"}>{state.message}</small> : null}</form>; }

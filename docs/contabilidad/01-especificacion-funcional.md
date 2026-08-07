@@ -387,9 +387,11 @@ Las compras de inmovilizado quedan fuera de la primera versión.
 
 Una factura registrada puede corregirse mientras el ejercicio esté abierto.
 
-> Estado del primer corte implementado: una compra registrada es inmutable. La
-> correccion, anulacion y conservacion de versiones descritas a continuacion se
-> incorporaran juntas para evitar sobrescrituras parciales del historico.
+> Estado actual: una compra registrada sigue siendo inmutable. La anulación
+> interna de una compra ordinaria completamente impagada ya conserva el
+> documento y añade contraasiento, ajustes inversos de IVA y stock y auditoría
+> dentro de una operación append-only. La sustitución por una nueva versión
+> corregida continúa pendiente y no reutilizará una rectificativa del proveedor.
 
 La corrección:
 

@@ -61,6 +61,14 @@ export const createPurchaseRectificationSchema = z.object({
   reason: z.enum(["RETURN", "OPERATION_CANCELLED"]),
   notes: nullableText(1000).default(null)
 }).strict();
+export const createPurchaseCorrectionSchema = z.object({
+  mode: z.literal("VOID"),
+  expectedVersion: z.number().int().positive(),
+  accountingDate: dateOnly,
+  reasonCode: z.literal("DUPLICATE_DOCUMENT"),
+  reason: nullableText(500).default(null),
+  confirmation: z.literal("VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY")
+}).strict();
 export const listSupplierDueDatesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   supplierId: z.string().uuid().optional(),
@@ -81,7 +89,7 @@ export type MutationContext = { correlationId?: string; idempotencyKey: string; 
 type PurchaseStatus = "DRAFT" | "REGISTERED" | "RECTIFIED" | "VOIDED";
 type PurchasePaymentStatus = "PENDING" | "PARTIALLY_PAID" | "PAID" | "PARTIALLY_SETTLED" | "SETTLED" | "NOT_APPLICABLE";
 type PaymentMethod = "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
-type Failure = { ok: false; status: 404 | 409; error: { code: string; message: string } };
+type Failure = { ok: false; status: 404 | 409 | 503; error: { code: string; message: string } };
 type Success<T> = { ok: true; status: 200 | 201; value: T };
 export type PurchaseResult<T = PurchaseDetail> = Success<T> | Failure;
 
@@ -103,6 +111,7 @@ export type PurchaseDetail = PurchaseListItem & {
 };
 export type SupplierDueDateItem = { id: string; purchaseInvoiceId: string; supplierId: string; supplierCode: string; supplierName: string; supplierInvoiceNumber: string; dueDate: string; amount: string; allocatedAmount: string; creditedAmount: string; pendingAmount: string; paymentMethod: PaymentMethod; status: "PENDING" | "PAID" | "SETTLED" | "CANCELLED" };
 export type SupplierPaymentDto = { id: string; supplierId: string; paymentDate: string; totalAmount: string; paymentMethod: PaymentMethod; reference: string | null; accountingEntry: { id: string; number: string }; allocations: Array<{ dueDateId: string; purchaseInvoiceId: string; amount: string }> };
+export type PurchaseCorrectionDto = { operationId: string; purchaseInvoiceId: string; mode: "VOID"; status: "VOIDED"; paymentStatus: "NOT_APPLICABLE"; reversalEntry: { id: string; number: string }; vatAdjustmentCount: number; stockReversalCount: number };
 
 const detailInclude = {
   lines: { orderBy: { position: "asc" as const } },
@@ -374,6 +383,74 @@ export async function createPurchaseRectification(id: string, command: z.infer<t
   }, () => failure(409, "PURCHASE_RECTIFICATION_CONFLICT", "La compra ya se ha rectificado o el número del proveedor ya existe."));
 }
 
+export async function createPurchaseCorrection(id: string, command: z.infer<typeof createPurchaseCorrectionSchema>, actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto>> {
+  return mutate(actor, context, async (tx) => {
+    const replay = await replayMutation<PurchaseCorrectionDto>(tx, actor, context); if (replay) return replay;
+    const locked = await lockPurchase(tx, id); const companyId = await currentCompanyId(tx);
+    if (!locked || locked.companyId !== companyId) return failure(404, "PURCHASE_NOT_FOUND", "La factura de compra no existe.");
+    if (locked.version !== command.expectedVersion) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de anularla.");
+    if (locked.documentType !== "STANDARD" || locked.status !== "REGISTERED") return failure(409, "PURCHASE_CORRECTION_NOT_ALLOWED", "Solo se puede anular una compra ordinaria registrada.");
+    const accountingDate = parseDate(command.accountingDate);
+    if (!accountingDate || accountingDate < locked.issueDate) return failure(409, "PURCHASE_CORRECTION_DATE_INVALID", "La fecha de anulación no puede ser anterior a la factura.");
+    const source = await tx.purchaseInvoice.findUniqueOrThrow({ where: { id }, include: {
+      accountingEntry: { include: { fiscalYear: true, lines: { orderBy: { position: "asc" } } } },
+      sourceCorrectionOperation: { select: { id: true } }, rectificationInvoices: { select: { id: true }, take: 1 },
+      dueDates: { include: { allocations: { select: { id: true } }, creditApplications: { select: { id: true } } } },
+      vatRecords: { where: { kind: "DOCUMENT" }, orderBy: { id: "asc" } },
+      lines: { orderBy: { position: "asc" }, include: { stockMovement: true } }
+    } });
+    if (accountingDate < source.accountingDate) return failure(409, "PURCHASE_CORRECTION_DATE_INVALID", "La fecha de anulación no puede ser anterior a la fecha contable original.");
+    if (source.sourceCorrectionOperation) return failure(409, "PURCHASE_CORRECTION_ALREADY_COMPLETED", "La compra ya tiene una corrección interna.");
+    if (source.rectificationInvoices.length) return failure(409, "PURCHASE_CORRECTION_HAS_RECTIFICATION", "La compra ya tiene una rectificativa del proveedor.");
+    const hasFinancialActivity = source.paymentStatus !== "PENDING" || source.dueDates.some((due) => due.status !== "PENDING" || due.allocations.length > 0 || due.creditApplications.length > 0);
+    if (hasFinancialActivity) return failure(409, "PURCHASE_CORRECTION_FINANCIAL_ACTIVITY", "La compra tiene actividad financiera y debe regularizarse mediante rectificativa.");
+    const originalEntry = source.accountingEntry;
+    if (!originalEntry || originalEntry.origin !== "PURCHASE_INVOICE" || originalEntry.status !== "POSTED" || !originalEntry.lines.length || !originalEntry.totalDebit.equals(originalEntry.totalCredit)) {
+      return failure(409, "PURCHASE_CORRECTION_ACCOUNTING_INVALID", "El asiento original no permite crear un contraasiento seguro.");
+    }
+    const fiscalYear = await lockFiscalYear(tx, companyId!, accountingDate);
+    if (!fiscalYear || fiscalYear.id !== originalEntry.fiscalYearId) return failure(409, "PURCHASE_CORRECTION_FISCAL_YEAR_NOT_OPEN", "La fecha debe pertenecer al mismo ejercicio abierto que la compra.");
+    const operation = await tx.purchaseCorrectionOperation.create({ data: { companyId: companyId!, sourcePurchaseInvoiceId: id, mode: command.mode, accountingDate, reasonCode: command.reasonCode, reason: command.reason, sourceVersion: command.expectedVersion, createdById: actor.id }, select: { id: true } });
+    const sequence = await nextJournalSequence(tx, fiscalYear.id); const year = accountingDate.getUTCFullYear();
+    const concept = `Contraasiento anulación compra ${source.supplierInvoiceNumber}`.slice(0, 240);
+    const reversalEntry = await tx.accountingJournalEntry.create({ data: {
+      fiscalYearId: fiscalYear.id, purchaseCorrectionOperationId: operation.id, reversesEntryId: originalEntry.id,
+      year, sequence, number: `${year}/${String(sequence).padStart(6, "0")}`, accountingDate, concept,
+      origin: "PURCHASE_CORRECTION_REVERSAL", totalDebit: originalEntry.totalCredit, totalCredit: originalEntry.totalDebit, createdById: actor.id,
+      lines: { create: originalEntry.lines.map((line) => ({ accountId: line.accountId, position: line.position, concept, debit: line.credit, credit: line.debit })) }
+    }, select: { id: true, number: true } });
+    if (source.vatRecords.length) await tx.purchaseVatRecord.createMany({ data: source.vatRecords.map((vat) => ({
+      companyId: vat.companyId, supplierId: vat.supplierId, purchaseInvoiceId: vat.purchaseInvoiceId, taxSummaryId: null,
+      accountingEntryId: reversalEntry.id, correctionOperationId: operation.id, reversesVatRecordId: vat.id, kind: "INTERNAL_CORRECTION_REVERSAL",
+      supplierInvoiceNumberSnapshot: vat.supplierInvoiceNumberSnapshot, supplierCodeSnapshot: vat.supplierCodeSnapshot,
+      supplierLegalNameSnapshot: vat.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: vat.supplierTaxIdLast4Snapshot,
+      supplierTaxIdEncryptedSnapshot: vat.supplierTaxIdEncryptedSnapshot, issueDate: vat.issueDate, accountingDate,
+      taxRateCode: vat.taxRateCode, taxRate: vat.taxRate, taxableBase: vat.taxableBase.negated(), taxAmount: vat.taxAmount.negated(), total: vat.total.negated()
+    })) });
+    const stockLines = source.lines.filter((line) => line.stockMovement).sort((a, b) => a.stockMovement!.itemId.localeCompare(b.stockMovement!.itemId));
+    let negativeStockCount = 0;
+    for (const line of stockLines) {
+      const movement = line.stockMovement!;
+      await tx.$queryRaw`SELECT "id" FROM "catalog_items" WHERE "id" = ${movement.itemId}::uuid FOR UPDATE`;
+      const item = await tx.catalogItem.findUniqueOrThrow({ where: { id: movement.itemId }, select: { stockCurrent: true } });
+      const quantity = movement.quantity.negated(); const next = item.stockCurrent.plus(quantity); if (next.isNegative()) negativeStockCount += 1;
+      await tx.catalogStockMovement.create({ data: { itemId: movement.itemId, purchaseCorrectionOperationId: operation.id, reversesMovementId: movement.id,
+        type: "PURCHASE_INTERNAL_REVERSAL", quantity, previousStock: item.stockCurrent, newStock: next,
+        reason: `Anulación interna compra ${source.supplierInvoiceNumber}`.slice(0, 500), createdById: actor.id } });
+      await tx.catalogItem.update({ where: { id: movement.itemId }, data: { stockCurrent: next, updatedById: actor.id } });
+    }
+    await tx.purchaseDueDate.updateMany({ where: { purchaseInvoiceId: id }, data: { status: "CANCELLED" } });
+    await tx.purchaseInvoice.update({ where: { id }, data: { status: "VOIDED", paymentStatus: "NOT_APPLICABLE", updatedById: actor.id, version: { increment: 1 } } });
+    const value: PurchaseCorrectionDto = { operationId: operation.id, purchaseInvoiceId: id, mode: "VOID", status: "VOIDED", paymentStatus: "NOT_APPLICABLE", reversalEntry, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: stockLines.length };
+    await audit(tx, "PURCHASE_CORRECTION_VOIDED", actor, context, { companyId, purchaseInvoiceId: id, operationId: operation.id, reasonCode: command.reasonCode, reversalAccountingEntryId: reversalEntry.id, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: stockLines.length, negativeStockCount });
+    await persist(tx, actor, context, 201, value); return { ok: true, status: 201, value };
+  }, () => failure(409, "PURCHASE_CORRECTION_CONFLICT", "La compra ha cambiado durante la anulación. Revise su estado y reintente."));
+}
+
+export async function readPurchaseCorrectionReplay(actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto> | null> {
+  return prisma.$transaction((tx) => replayMutation<PurchaseCorrectionDto>(tx, actor, context));
+}
+
 export async function listSupplierDueDates(command: z.infer<typeof listSupplierDueDatesSchema>, actor: SessionUser): Promise<{ dueDates: SupplierDueDateItem[] }> {
   const companyId = await currentCompanyId(prisma);
   const rows = companyId ? await prisma.purchaseDueDate.findMany({ where: { purchaseInvoice: { companyId, status: "REGISTERED", ...(command.supplierId ? { supplierId: command.supplierId } : {}) }, ...(command.status ? { status: command.status } : {}), ...(command.dueBefore ? { dueDate: { lte: parseDate(command.dueBefore)! } } : {}) }, include: { purchaseInvoice: true, allocations: { where: { supplierPayment: { status: "POSTED" } }, select: { amount: true } }, creditApplications: { select: { amount: true } } }, orderBy: [{ dueDate: "asc" }, { id: "asc" }], take: command.limit }) : [];
@@ -412,7 +489,7 @@ export async function registerSupplierPayment(command: z.infer<typeof registerSu
 }
 
 export async function refreshPurchasePaymentStatus(tx: Prisma.TransactionClient, id: string, actorId: string): Promise<void> { const row = await tx.purchaseInvoice.findUniqueOrThrow({ where: { id }, include: { allocations: { where: { supplierPayment: { status: "POSTED" } }, select: { amount: true } }, creditApplications: { select: { amount: true } } } }); const paid = row.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = row.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const settled = paid.plus(credited); const status: PurchasePaymentStatus = settled.isZero() ? "PENDING" : credited.gt(0) ? (settled.gte(row.total) ? "SETTLED" : "PARTIALLY_SETTLED") : (settled.gte(row.total) ? "PAID" : "PARTIALLY_PAID"); await tx.purchaseInvoice.update({ where: { id }, data: { paymentStatus: status, updatedById: actorId } }); }
-async function lockPurchase(tx: Prisma.TransactionClient, id: string): Promise<{ id: string; companyId: string; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date } | null> { const rows = await tx.$queryRaw<Array<{ id: string; companyId: string; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date }>>(Prisma.sql`SELECT "id", "companyId", "status", "version", "total", "issueDate" FROM "purchase_invoices" WHERE "id" = ${id}::uuid FOR UPDATE`); return rows[0] ?? null; }
+async function lockPurchase(tx: Prisma.TransactionClient, id: string): Promise<{ id: string; companyId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date } | null> { const rows = await tx.$queryRaw<Array<{ id: string; companyId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date }>>(Prisma.sql`SELECT "id", "companyId", "documentType", "status", "version", "total", "issueDate" FROM "purchase_invoices" WHERE "id" = ${id}::uuid FOR UPDATE`); return rows[0] ?? null; }
 async function lockFiscalYear(tx: Prisma.TransactionClient, companyId: string, date: Date): Promise<{ id: string } | null> { const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "companyId" = ${companyId}::uuid AND "status" = 'OPEN' AND "startDate" <= ${date} AND "endDate" >= ${date} FOR UPDATE`); return rows.length === 1 ? rows[0]! : null; }
 async function nextJournalSequence(tx: Prisma.TransactionClient, fiscalYearId: string): Promise<number> { const last = await tx.accountingJournalEntry.findFirst({ where: { fiscalYearId }, orderBy: { sequence: "desc" }, select: { sequence: true } }); return (last?.sequence ?? 0) + 1; }
 async function currentCompanyId(client: Prisma.TransactionClient | typeof prisma): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }
@@ -424,9 +501,10 @@ function normalizeInvoiceNumber(value: string): string { return value.trim().toL
 function mapListItem(row: { id: string; supplierInvoiceNumber: string; supplierCodeSnapshot: string; supplierLegalNameSnapshot: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; paymentStatus: PurchasePaymentStatus; issueDate: Date; accountingDate: Date; total: Prisma.Decimal; version: number }): PurchaseListItem { return { id: row.id, supplierInvoiceNumber: row.supplierInvoiceNumber, supplierCode: row.supplierCodeSnapshot, supplierName: row.supplierLegalNameSnapshot, documentType: row.documentType, status: row.status, paymentStatus: row.paymentStatus, issueDate: formatDate(row.issueDate), accountingDate: formatDate(row.accountingDate), total: row.total.toFixed(2), version: row.version }; }
 function mapDetail(row: PurchaseRecord): PurchaseDetail { return { ...mapListItem(row), supplierId: row.supplierId, receivedDate: formatDate(row.receivedDate), operationDate: formatDate(row.operationDate), notes: row.notes, subtotal: row.subtotal.toFixed(2), discountTotal: row.discountTotal.toFixed(2), taxableBase: row.taxableBase.toFixed(2), taxAmount: row.taxAmount.toFixed(2), registeredAt: row.registeredAt?.toISOString() ?? null, accountingEntry: row.accountingEntry, rectificationReason: row.rectificationReason, rectifiesPurchaseInvoice: row.rectifiesPurchaseInvoice, rectificationInvoices: row.rectificationInvoices, lines: row.lines.map((line) => ({ id: line.id, position: line.position, catalogItemId: line.catalogItemId, catalogItemCode: line.catalogItemCodeSnapshot, description: line.description, quantity: line.quantity.toFixed(3), unitPrice: line.unitPrice.toFixed(2), discountPercent: line.discountPercent.toFixed(2), discountAmount: line.discountAmount.toFixed(2), purchaseAccountCode: line.purchaseAccountCode, taxRateId: line.taxRateId, taxRateCode: line.taxRateCodeSnapshot, taxRate: line.taxRateSnapshot.toFixed(2), taxableBase: line.lineTaxableBase.toFixed(2), taxAmount: line.lineTaxAmount.toFixed(2), total: line.lineTotal.toFixed(2) })), dueDates: row.dueDates.map((due) => { const allocated = due.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = due.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: due.id, position: due.position, dueDate: formatDate(due.dueDate), amount: due.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), creditedAmount: credited.toFixed(2), pendingAmount: Prisma.Decimal.max(due.amount.minus(allocated).minus(credited), 0).toFixed(2), paymentMethod: due.paymentMethod, status: due.status }; }) }; }
 function mapDueDate(row: Prisma.PurchaseDueDateGetPayload<{ include: { purchaseInvoice: true; allocations: { select: { amount: true } }; creditApplications: { select: { amount: true } } } }>): SupplierDueDateItem { const allocated = row.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = row.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: row.id, purchaseInvoiceId: row.purchaseInvoiceId, supplierId: row.purchaseInvoice.supplierId, supplierCode: row.purchaseInvoice.supplierCodeSnapshot, supplierName: row.purchaseInvoice.supplierLegalNameSnapshot, supplierInvoiceNumber: row.purchaseInvoice.supplierInvoiceNumber, dueDate: formatDate(row.dueDate), amount: row.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), creditedAmount: credited.toFixed(2), pendingAmount: Prisma.Decimal.max(row.amount.minus(allocated).minus(credited), 0).toFixed(2), paymentMethod: row.paymentMethod, status: row.status }; }
-function failure(status: 404 | 409, code: string, message: string): Failure { return { ok: false, status, error: { code, message } }; }
+function failure(status: 404 | 409 | 503, code: string, message: string): Failure { return { ok: false, status, error: { code, message } }; }
 function scopedKey(actor: SessionUser, context: MutationContext, companyId: string | null): string { return `v2:purchases:${createHash("sha256").update(`${companyId ?? "uninitialized"}:${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
 async function replayMutation<T>(tx: Prisma.TransactionClient, actor: SessionUser, context: MutationContext): Promise<PurchaseResult<T> | null> { const key = scopedKey(actor, context, await currentCompanyId(tx)); await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`; const row = await tx.idempotencyRecord.findUnique({ where: { key } }); if (!row) return null; return row.requestHash === context.requestHash ? { ok: true, status: row.responseStatus as 200 | 201, value: row.responseBody as unknown as T } : failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se uso con otra petición."); }
 async function persist<T>(tx: Prisma.TransactionClient, actor: SessionUser, context: MutationContext, status: number, value: T): Promise<void> { const key = scopedKey(actor, context, await currentCompanyId(tx)); await tx.idempotencyRecord.create({ data: { key, requestHash: context.requestHash, responseStatus: status, responseBody: value as unknown as Prisma.InputJsonValue } }); }
-async function mutate<T>(actor: SessionUser, context: MutationContext, work: (tx: Prisma.TransactionClient) => Promise<PurchaseResult<T>>, uniqueConflict?: () => PurchaseResult<T>): Promise<PurchaseResult<T>> { for (let attempt = 0; attempt < 3; attempt++) { try { return await prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }); } catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034" && attempt < 2) continue; if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") { const key = scopedKey(actor, context, await currentCompanyId(prisma)); const replay = await prisma.idempotencyRecord.findUnique({ where: { key } }); if (replay) return replay.requestHash === context.requestHash ? { ok: true, status: replay.responseStatus as 200 | 201, value: replay.responseBody as unknown as T } : failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se uso con otra petición."); if (uniqueConflict) return uniqueConflict(); } throw error; } } throw new Error("PURCHASE_TRANSACTION_RETRY_EXHAUSTED"); }
+async function mutate<T>(actor: SessionUser, context: MutationContext, work: (tx: Prisma.TransactionClient) => Promise<PurchaseResult<T>>, uniqueConflict?: () => PurchaseResult<T>): Promise<PurchaseResult<T>> { for (let attempt = 0; attempt < 3; attempt++) { try { return await prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }); } catch (error) { if (isSerializationConflict(error)) { if (attempt < 2) continue; return failure(503, "PURCHASE_TRANSACTION_RETRY_EXHAUSTED", "La operación no pudo completarse por concurrencia. Reinténtelo en unos segundos."); } if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") { const key = scopedKey(actor, context, await currentCompanyId(prisma)); const replay = await prisma.idempotencyRecord.findUnique({ where: { key } }); if (replay) return replay.requestHash === context.requestHash ? { ok: true, status: replay.responseStatus as 200 | 201, value: replay.responseBody as unknown as T } : failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se uso con otra petición."); if (uniqueConflict) return uniqueConflict(); } throw error; } } return failure(503, "PURCHASE_TRANSACTION_RETRY_EXHAUSTED", "La operación no pudo completarse por concurrencia. Reinténtelo en unos segundos."); }
+function isSerializationConflict(error: unknown): boolean { if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false; if (error.code === "P2034") return true; if (error.code !== "P2010" || !error.meta || typeof error.meta !== "object") return false; return "code" in error.meta && error.meta.code === "40001"; }
 async function audit(client: Prisma.TransactionClient | typeof prisma, eventType: string, actor: SessionUser, context: Pick<MutationContext, "correlationId">, payload: Record<string, unknown>): Promise<void> { await client.auditEvent.create({ data: { eventType, actorType: "USER", payload: { actorUserId: actor.id, ...payload, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } }); }

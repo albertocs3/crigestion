@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPurchaseRectificationAvailability } from "@/modules/purchases/presentation/rectificationAvailability";
+import { getPurchaseCorrectionAvailability, getPurchaseRectificationAvailability } from "@/modules/purchases/presentation/rectificationAvailability";
 
 const basePurchase = {
   documentType: "STANDARD",
@@ -50,5 +50,15 @@ describe("purchase rectification availability", () => {
       paymentStatus: "SETTLED",
       dueDates: [{ ...basePurchase.dueDates[0], creditedAmount: "36.30", pendingAmount: "0.00", status: "SETTLED" }]
     }).available).toBe(false);
+  });
+});
+
+describe("purchase internal correction availability", () => {
+  it("allows only an unpaid registered standard purchase without settlement activity", () => {
+    expect(getPurchaseCorrectionAvailability(basePurchase)).toEqual({ available: true });
+    expect(getPurchaseCorrectionAvailability({ ...basePurchase, paymentStatus: "PAID", dueDates: [{ ...basePurchase.dueDates[0]!, status: "PAID", allocatedAmount: "36.30", pendingAmount: "0.00" }] })).toEqual({ available: false });
+    expect(getPurchaseCorrectionAvailability({ ...basePurchase, dueDates: [{ ...basePurchase.dueDates[0]!, creditedAmount: "1.00", pendingAmount: "35.30" }] })).toEqual({ available: false });
+    expect(getPurchaseCorrectionAvailability({ ...basePurchase, status: "RECTIFIED", rectificationInvoices: [{}] })).toEqual({ available: false });
+    expect(getPurchaseCorrectionAvailability({ ...basePurchase, status: "VOIDED" })).toEqual({ available: false });
   });
 });

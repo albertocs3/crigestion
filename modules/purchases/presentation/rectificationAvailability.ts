@@ -35,3 +35,10 @@ export function getPurchaseRectificationAvailability(purchase: PurchaseRectifica
     hasSettlementActivity
   };
 }
+
+export function getPurchaseCorrectionAvailability(purchase: PurchaseRectificationState) {
+  const rectification = getPurchaseRectificationAvailability(purchase);
+  return {
+    available: rectification.available && purchase.paymentStatus === "PENDING" && !rectification.hasSettlementActivity
+  };
+}

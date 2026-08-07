@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import { GET as purchasesGet, POST as purchasesPost } from "@/app/api/purchases/route";
 import { POST as purchaseRectificationPost } from "@/app/api/purchases/[purchaseId]/rectifications/route";
+import { POST as purchaseCorrectionPost } from "@/app/api/purchases/[purchaseId]/corrections/route";
 import { GET as supplierDueDatesGet } from "@/app/api/treasury/supplier-due-dates/route";
 import { GET as supplierCreditsGet } from "@/app/api/treasury/supplier-credits/route";
 import { POST as supplierCreditApplicationPost } from "@/app/api/treasury/supplier-credits/[creditId]/applications/route";
@@ -45,6 +46,7 @@ describe("purchase HTTP contracts", () => {
     expect((await supplierDueDatesGet(request("/api/treasury/supplier-due-dates"))).status).toBe(403);
     expect((await purchasesPost(jsonRequest("/api/purchases", {}, { csrf }))).status).toBe(403);
     expect((await purchaseRectificationPost(jsonRequest(`/api/purchases/${randomUUID()}/rectifications`, {}, { csrf }), { params: Promise.resolve({ purchaseId: randomUUID() }) })).status).toBe(403);
+    expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${randomUUID()}/corrections`, {}, { csrf }), { params: Promise.resolve({ purchaseId: randomUUID() }) })).status).toBe(403);
   });
 
   it("creates and lists a masked supplier purchase draft and rejects unknown input", async () => {
@@ -71,6 +73,53 @@ describe("purchase HTTP contracts", () => {
     const replay = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, body, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(replay.status).toBe(201);
     const conflict = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, { ...body, notes: "otro cuerpo" }, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(conflict.status).toBe(409); expect(await conflict.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
     const invalid = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, { ...body, unexpected: true }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(invalid.status).toBe(422);
+  });
+
+  it("voids and replays an unpaid purchase through the protected correction contract", async () => {
+    const supplierId = await createTestSupplier(); const actor = testActor;
+    const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const created = await createPurchase({ supplierId, supplierInvoiceNumber: "HTTP-VOID", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, purchaseContext("http-void-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio", quantity: "1", unitPrice: "100", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, purchaseContext("http-void-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, purchaseContext("http-void-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, purchaseContext("http-void-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken(); const key = randomUUID();
+    const body = { mode: "VOID", expectedVersion: registered.value.version, accountingDate: "2026-07-20", reasonCode: "DUPLICATE_DOCUMENT", reason: "Carga duplicada", confirmation: "VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY" };
+    const routeContext = { params: Promise.resolve({ purchaseId: created.value.id }) };
+    const response = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, body, { csrf, idempotency: key }), routeContext);
+    expect(response.status).toBe(201); expect(await response.json()).toMatchObject({ purchaseInvoiceId: created.value.id, mode: "VOID", status: "VOIDED" });
+    const replay = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, body, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) });
+    expect(replay.status).toBe(201);
+    const conflict = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, { ...body, reason: "otro" }, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) });
+    expect(conflict.status).toBe(409); expect(await conflict.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
+    const conflictFingerprint = createHash("sha256").update(`purchase-correction:${created.value.id}`).digest("hex");
+    const denial = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "PURCHASE_CORRECTION_DENIED", payload: { path: ["targetFingerprint"], equals: conflictFingerprint } } });
+    expect(denial.payload).toMatchObject({ stableCode: "IDEMPOTENCY_KEY_REUSED" });
+    const invalid = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, { ...body, unexpected: true }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) });
+    expect(invalid.status).toBe(422);
+    const replacementReason = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, { ...body, reasonCode: "WRONG_AMOUNT" }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) });
+    expect(replacementReason.status).toBe(422);
+  });
+
+  it("rate limits repeated purchase correction attempts and audits the excess", async () => {
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken();
+    const body = { mode: "VOID", expectedVersion: 1, accountingDate: "2026-07-20", reasonCode: "DUPLICATE_DOCUMENT", reason: null, confirmation: "VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY" };
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const purchaseId = randomUUID();
+      expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${purchaseId}/corrections`, body, { csrf }), { params: Promise.resolve({ purchaseId }) })).status).toBe(404);
+    }
+    const limitedId = randomUUID();
+    const limited = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${limitedId}/corrections`, body, { csrf }), { params: Promise.resolve({ purchaseId: limitedId }) });
+    expect(limited.status).toBe(429); expect(limited.headers.get("Retry-After")).toBe("900");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const excessId = randomUUID();
+      expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${excessId}/corrections`, body, { csrf }), { params: Promise.resolve({ purchaseId: excessId }) })).status).toBe(429);
+    }
+    const targetFingerprint = createHash("sha256").update(`purchase-correction:${limitedId}`).digest("hex");
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["actorUserId"], equals: testActor.id } } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["targetFingerprint"], equals: targetFingerprint } } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["purchaseInvoiceId"], equals: limitedId } } })).toBe(0);
   });
 });
 

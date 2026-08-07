@@ -4,8 +4,7 @@
 
 El primer corte expone cuentas contables, ejercicios y asientos manuales ya
 contabilizados. Incluye el PGC PYMES y la copia del plan al siguiente ejercicio.
-No incluye todavia adjuntos, anulaciones, modificacion de asientos ni
-reaperturas. La emision de facturas ordinarias y rectificativas crea ya su
+No incluye todavia adjuntos ni modificacion directa de asientos. La emision de facturas ordinarias y rectificativas crea ya su
 asiento automatico. Los cobros manuales crean tambien su asiento; las
 devoluciones y cobros de remesas se incorporan en cortes posteriores. El corte
 de compras incorpora ya facturas de proveedor, vencimientos, pagos manuales y
@@ -27,6 +26,7 @@ Permisos:
 | `Purchases.ManageDrafts` | Crear y editar borradores, lineas y vencimientos. |
 | `Purchases.Register` | Registrar definitivamente una compra. |
 | `Purchases.Rectify` | Registrar una rectificacion total de proveedor. |
+| `Purchases.Correct` | Anular internamente una compra impagada con evidencias inversas. |
 | `Treasury.ManageSupplierPayments` | Registrar pagos parciales o totales de proveedor. |
 | `Treasury.ViewSupplierPayments` | Consultar vencimientos y pagos de proveedor. |
 | `Treasury.ViewSupplierCredits` | Consultar saldos a favor con proveedores. |
@@ -73,6 +73,8 @@ Errores funcionales principales: `SUPPLIER_NOT_FOUND`,
   stock.
 - `POST /api/purchases/{purchaseId}/rectifications`: registra una factura
   rectificativa total del proveedor, enlazada a la compra original.
+- `POST /api/purchases/{purchaseId}/corrections`: anula internamente una compra
+  ordinaria impagada sin simular un documento del proveedor.
 - `GET /api/treasury/supplier-due-dates`: lista vencimientos y saldos pagados y
   pendientes.
 - `POST /api/treasury/supplier-payments`: registra un pago con una o varias
@@ -85,10 +87,11 @@ No se devuelven NIF, IBAN ni datos de contacto completos del proveedor.
 
 Las compras registradas permanecen inmutables. La rectificativa es un documento
 nuevo, tambien inmutable, y nunca reescribe lineas, IVA, asiento o stock del
-original. Anulacion/versionado interno, PDF adjunto, gastos sin factura,
+original. La anulación interna conserva igualmente el documento y añade una
+operación append-only con evidencias inversas. El reemplazo versionado, PDF adjunto, gastos sin factura,
 anticipos, devoluciones de pagos y remesas de pago quedan para cortes
 posteriores. El reembolso de un saldo nacido de una rectificativa pagada sí
-forma parte del sublibro de créditos de proveedor descrito en 1.e.
+forma parte del sublibro de créditos de proveedor descrito en 1.f.
 El pago con tarjeta se difiere hasta definir y configurar su subcuenta de
 tesoreria; este corte admite transferencia, domiciliacion y caja.
 
@@ -161,7 +164,49 @@ Errores funcionales principales:
 | `409` | `PURCHASE_FISCAL_YEAR_NOT_OPEN` | La fecha contable no pertenece a un ejercicio abierto. |
 | `409` | `PURCHASE_RECTIFICATION_FISCAL_YEAR_MISMATCH` | El original y la rectificativa no pertenecen al mismo ejercicio abierto. |
 
-## 1.e Creditos y reembolsos de proveedor
+## 1.e Anulación interna de una compra
+
+Permiso requerido: `Purchases.Correct`.
+
+```http
+POST /api/purchases/{purchaseId}/corrections
+```
+
+Requiere origen permitido, cookie de sesión, CSRF, JSON, `Idempotency-Key` y
+una confirmación literal. La cuota es de cinco intentos por usuario cada quince
+minutos; los excesos y las denegaciones funcionales se auditan sin guardar el
+motivo libre ni el identificador de una compra cuya pertenencia no se haya
+validado. Solo se emite un evento de exceso por usuario y ventana.
+
+```json
+{
+  "mode": "VOID",
+  "expectedVersion": 4,
+  "accountingDate": "2026-07-22",
+  "reasonCode": "DUPLICATE_DOCUMENT",
+  "reason": "Carga duplicada",
+  "confirmation": "VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY"
+}
+```
+
+En este corte `VOID` solo admite el motivo terminal `DUPLICATE_DOCUMENT`; los
+errores de proveedor, fecha, importe o impuesto requieren la futura sustitución
+`REPLACE` y se rechazan. Solo admite compras `STANDARD/REGISTERED/PENDING`, sin pagos, aplicaciones de
+crédito ni rectificativa y dentro del mismo ejercicio abierto. Una transacción
+serializable crea `PurchaseCorrectionOperation`, un contraasiento
+`PURCHASE_CORRECTION_REVERSAL`, ajustes negativos de IVA y movimientos
+`PURCHASE_INTERNAL_REVERSAL`; cancela vencimientos y deja la compra
+`VOIDED/NOT_APPLICABLE`. Documento, asiento, IVA y movimientos originales no se
+modifican. Constraints diferidas exigen que todas las evidencias existan antes
+del commit y la operación no admite `UPDATE` ni `DELETE`.
+
+Errores principales: `PURCHASE_NOT_FOUND`, `PURCHASE_VERSION_CONFLICT`,
+`PURCHASE_CORRECTION_NOT_ALLOWED`, `PURCHASE_CORRECTION_FINANCIAL_ACTIVITY`,
+`PURCHASE_CORRECTION_HAS_RECTIFICATION`,
+`PURCHASE_CORRECTION_FISCAL_YEAR_NOT_OPEN`, `RATE_LIMITED` y el `503`
+recuperable `PURCHASE_TRANSACTION_RETRY_EXHAUSTED` con `Retry-After`.
+
+## 1.f Creditos y reembolsos de proveedor
 
 El libro de creditos es append-only y se crea exclusivamente como efecto de una
 rectificacion total de compra pagada. El disponible es el importe original

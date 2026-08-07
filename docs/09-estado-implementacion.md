@@ -221,6 +221,15 @@ El smoke usa el perfil local sobre la base CI para no eludir la identidad
 canónica que el runtime exige cuando `APP_ENV=test`, y termina siempre el
 proceso que inicia.
 
+El decimocuarto corte local añade las migraciones 126 y 127 y la anulación
+interna de compras ordinarias completamente impagadas. Una operación append-only
+agrupa el contraasiento exacto, los ajustes inversos de IVA y los movimientos
+inversos de stock sin simular una rectificativa del proveedor ni reescribir el
+histórico. El endpoint exige permiso específico, CSRF, confirmación explícita,
+idempotencia, versión visible, rate limit y ejercicio abierto; las denegaciones
+se auditan con códigos estables. Las 127 migraciones se aplicaron desde cero y
+las pruebas dirigidas de persistencia y contrato HTTP finalizaron correctamente.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
@@ -271,8 +280,9 @@ Prioridades pendientes despues de este corte:
    inmutable y repetir el drill desde esa copia. El drill local no sustituye
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
-4. Completar el ciclo avanzado de proveedor pendiente: rectificacion parcial,
-   anulacion y correccion interna versionada.
+4. Completar el ciclo avanzado de proveedor pendiente: rectificacion parcial y
+   sustitucion interna versionada. La anulación interna impagada ya está
+   implementada.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Completar Suscripciones con cambios programados, edicion controlada de la
