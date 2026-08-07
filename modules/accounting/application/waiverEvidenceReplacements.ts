@@ -81,9 +81,10 @@ type FailureCode = "WAIVER_REVIEW_NOT_FOUND" | "WAIVER_EVIDENCE_NOT_REPLACEABLE"
   | "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" | "WAIVER_REPLACEMENT_REQUEST_NOT_PENDING"
   | "WAIVER_REPLACEMENT_PROPOSAL_CHANGED"
   | "WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN" | "WAIVER_REPLACEMENT_SELF_REJECTION_FORBIDDEN"
-  | "WAIVER_REPLACEMENT_NOT_CANCELLABLE" | "WAIVER_REPLACEMENT_RATE_LIMITED" | "IDEMPOTENCY_KEY_REUSED";
+  | "WAIVER_REPLACEMENT_NOT_CANCELLABLE" | "WAIVER_REPLACEMENT_RATE_LIMITED" | "IDEMPOTENCY_KEY_REUSED"
+  | "WAIVER_REPLACEMENT_BUSY";
 type Result = { ok: true; status: 200 | 201; value: WaiverEvidenceReplacementDto }
-  | { ok: false; status: 404 | 409 | 429; error: { code: FailureCode; message: string } };
+  | { ok: false; status: 404 | 409 | 429 | 503; error: { code: FailureCode; message: string } };
 
 const requestSelect = {
   id: true, reviewId: true, sourceEvidenceId: true, reversalRequestId: true, status: true, version: true,
@@ -174,7 +175,7 @@ export async function requestWaiverEvidenceReplacement(
   const normalized = normalizeLines(command.lines);
   if (!normalized) return failure(409, "WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED", "La propuesta debe estar cuadrada y contener debe y haber.");
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    const result = await runWaiverReplacementSerializable(async (tx) => {
       const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
       const replay = await replayMutation(tx, context, 201); if (replay) return replay;
       if (await consumeRateLimit(tx, companyId, actor, "request", context)) return { kind: "rate-limited" as const };
@@ -228,7 +229,7 @@ export async function requestWaiverEvidenceReplacement(
         companyId, replacementRequestId: created.id, reviewId, sourceEvidenceId: source.id, reversalRequestId: reversal.id, reasonCode: command.reasonCode
       });
       await storeReplay(tx, context, 201, value); return { kind: "created" as const, value };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    });
     return mapResult(result, 201);
   } catch (error) {
     if (isUniqueConstraintError(error)) return failure(409, "WAIVER_REPLACEMENT_ACTIVE_REQUEST_EXISTS", "Ya existe una sustitución activa o completada para esta evidencia.");
@@ -239,7 +240,7 @@ export async function requestWaiverEvidenceReplacement(
 export async function approveWaiverEvidenceReplacement(
   requestId: string, command: ApproveWaiverEvidenceReplacementCommand, actor: SessionUser, context: MutationContext
 ): Promise<Result> {
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await runWaiverReplacementSerializable(async (tx) => {
     const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
     const replay = await replayMutation(tx, context, 200); if (replay) return replay;
     if (await consumeRateLimit(tx, companyId, actor, "approve", context)) return { kind: "rate-limited" as const };
@@ -306,7 +307,7 @@ export async function approveWaiverEvidenceReplacement(
       sourceEvidenceId: request.sourceEvidence.id, replacementEntryId: entry.id, resultingEvidenceId: evidence.id
     });
     await storeReplay(tx, context, 200, value); return { kind: "completed" as const, value };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  });
   return mapResult(result, 200);
 }
 
@@ -321,7 +322,7 @@ async function finishWithoutEntry(
   requestId: string, expectedVersion: 1, terminal: "REJECTED" | "CANCELLED", actor: SessionUser,
   context: MutationContext, rejectionDetail?: string
 ): Promise<Result> {
-  const result = await prisma.$transaction(async (tx) => {
+  const result = await runWaiverReplacementSerializable(async (tx) => {
     const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
     const replay = await replayMutation(tx, context, 200); if (replay) return replay;
     if (await consumeRateLimit(tx, companyId, actor, terminal.toLowerCase(), context)) return { kind: "rate-limited" as const };
@@ -349,7 +350,7 @@ async function finishWithoutEntry(
       companyId, replacementRequestId: request.id, requestedByUserId: request.requestedById
     });
     await storeReplay(tx, context, 200, value); return { kind: "completed" as const, value };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  });
   return mapResult(result, 200);
 }
 
@@ -378,10 +379,11 @@ function mapResult(result: { kind: string; value?: WaiverEvidenceReplacementDto 
     "self-rejection": ["WAIVER_REPLACEMENT_SELF_REJECTION_FORBIDDEN", "El solicitante no puede rechazar su solicitud."],
     "not-cancellable": ["WAIVER_REPLACEMENT_NOT_CANCELLABLE", "Solo el solicitante puede cancelar una solicitud pendiente."],
     "rate-limited": ["WAIVER_REPLACEMENT_RATE_LIMITED", "Demasiados intentos; inténtelo de nuevo más tarde."],
-    "idempotency-conflict": ["IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se utilizó con otra petición."]
+    "idempotency-conflict": ["IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se utilizó con otra petición."],
+    "transaction-busy": ["WAIVER_REPLACEMENT_BUSY", "La sustitución contable está ocupada; vuelva a intentarlo."]
   };
   const [code, message] = failures[result.kind] ?? ["WAIVER_EVIDENCE_NOT_REPLACEABLE", "La operación no pudo completarse."];
-  return failure(result.kind === "rate-limited" ? 429 : 409, code, message);
+  return failure(result.kind === "rate-limited" ? 429 : result.kind === "transaction-busy" ? 503 : 409, code, message);
 }
 async function currentCompanyId(tx: Prisma.TransactionClient): Promise<string> {
   const installation = await tx.installation.findFirstOrThrow({ where: { status: "INITIALIZED" }, select: { companyId: true } });
@@ -418,6 +420,21 @@ async function audit(tx: Prisma.TransactionClient, eventType: string, actor: Ses
   await tx.auditEvent.create({ data: { eventType, actorType: "USER", payload: { actorUserId: actor.id, ...payload,
     ...(context.correlationId ? { correlationId: context.correlationId } : {}) } as Prisma.InputJsonValue } });
 }
+export async function runWaiverReplacementSerializable<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T | { kind: "transaction-busy" }> {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(work, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (!isSerializableTransactionConflict(error)) throw error;
+      if (attempt === 3) return { kind: "transaction-busy" };
+    }
+  }
+  return { kind: "transaction-busy" };
+}
+function isSerializableTransactionConflict(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && (error.code === "P2034" || (error.code === "P2010" && error.meta?.code === "40001"));
+}
 function isUniqueConstraintError(error: unknown): boolean { return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"; }
 function waiverEvidenceReplacementProposalDigest(record: {
   id: string; version: number; accountingDate: Date; concept: string;
@@ -434,4 +451,4 @@ function formatDateOnly(value: Date): string { return value.toISOString().slice(
 function isValidDateOnly(value: string): boolean {
   const parsed = parseDateOnly(value); return !Number.isNaN(parsed.getTime()) && formatDateOnly(parsed) === value;
 }
-function failure(status: 404 | 409 | 429, code: FailureCode, message: string): Result { return { ok: false, status, error: { code, message } }; }
+function failure(status: 404 | 409 | 429 | 503, code: FailureCode, message: string): Result { return { ok: false, status, error: { code, message } }; }

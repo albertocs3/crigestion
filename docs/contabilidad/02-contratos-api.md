@@ -196,6 +196,28 @@ operativa es `/app/treasury/supplier-credits`.
 | `409` | `PURCHASE_ACCOUNT_NOT_AVAILABLE` | Falta una subcuenta activa en el ejercicio destino. |
 | `409` | `IDEMPOTENCY_KEY_REUSED` | La clave se reutilizo con otro cuerpo. |
 
+## 1.f Sustitucion de evidencia contable de una condonacion
+
+| Ruta | Permiso |
+|---|---|
+| `POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/accounting-replacements` | `Accounting.RequestWaiverEvidenceReplacements` |
+| `GET /api/accounting/waiver-evidence-replacements/{requestId}` | `Accounting.ApproveWaiverEvidenceReplacements` |
+| `POST /api/accounting/waiver-evidence-replacements/{requestId}/approve` | `Accounting.ApproveWaiverEvidenceReplacements` |
+| `POST /api/accounting/waiver-evidence-replacements/{requestId}/reject` | `Accounting.ApproveWaiverEvidenceReplacements` |
+| `POST /api/accounting/waiver-evidence-replacements/{requestId}/cancel` | `Accounting.RequestWaiverEvidenceReplacements` |
+
+La solicitud solo persiste una propuesta sin efectos contables. El detalle
+compara la evidencia revertida con las nuevas lineas y entrega una huella
+canonica; aprobar exige devolver esa misma huella y un actor independiente. La
+aprobacion crea un unico asiento `POSTED` y una evidencia append-only contigua.
+
+Las mutaciones requieren origen permitido, CSRF, JSON e `Idempotency-Key`. Se
+ejecutan en transaccion `Serializable` con hasta tres intentos completos ante
+`P2034` o PostgreSQL `40001`. Cada intento fallido revierte cuota, auditoria,
+eventos y efectos contables. Si la contencion persiste se devuelve `503
+WAIVER_REPLACEMENT_BUSY` con `Retry-After: 1`; el fallo temporal no se almacena
+como replay idempotente.
+
 ## 1.a Ejercicios contables
 
 - `GET /api/accounting/fiscal-years`: requiere `Accounting.View`.

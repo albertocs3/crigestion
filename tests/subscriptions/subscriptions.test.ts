@@ -778,11 +778,15 @@ describe("subscriptions application service", () => {
         { accountId: journalAccounts[0]!.id, concept: "Debe corregido", debit: "61.00", credit: "0.00" },
         { accountId: journalAccounts[1]!.id, concept: "Haber corregido", debit: "0.00", credit: "61.00" }
       ] };
-    const requestedReplacement = await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover,
-      waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand));
+    const replacementRequestContext = waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand);
+    const [requestedReplacement, concurrentRequestReplay] = await Promise.all([
+      requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover, replacementRequestContext),
+      requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover, replacementRequestContext)
+    ]);
     expect(requestedReplacement).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED", version: 1,
       sourceEvidenceId: accountingEvidence.id, reversalRequestId: requestedReversal.value.id } });
     if (!requestedReplacement.ok) throw new Error("WAIVER_REPLACEMENT_REQUEST_EXPECTED");
+    expect(concurrentRequestReplay).toEqual(requestedReplacement);
     const replacementDetail = await getWaiverEvidenceReplacementDetail(requestedReplacement.value.id, otherReviewer,
       { correlationId: "accounting-waiver-replacement-view" });
     expect(replacementDetail).toMatchObject({
@@ -801,8 +805,7 @@ describe("subscriptions application service", () => {
       accountingEvidenceReplacement: { id: requestedReplacement.value.id, status: "REQUESTED", version: 1, isRequestedByActor: false },
       accountingEvidenceFollowUpRequired: true
     } }] } });
-    expect(await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover,
-      waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand))).toEqual(requestedReplacement);
+    expect(await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover, replacementRequestContext)).toEqual(requestedReplacement);
     const rejectionCommand = { expectedVersion: 1 as const, rejectionDetail: "El solicitante no puede rechazar su propia propuesta" };
     expect(await rejectWaiverEvidenceReplacement(requestedReplacement.value.id, rejectionCommand, reversalApprover,
       waiverReplacementRejectionContext("self-reject", requestedReplacement.value.id, rejectionCommand))).toMatchObject({
@@ -824,10 +827,14 @@ describe("subscriptions application service", () => {
       waiverReplacementApprovalContext("self-approve", requestedReplacement.value.id, replacementApproval))).toMatchObject({
       ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN" }
     });
-    const approvedReplacement = await approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, otherReviewer,
-      waiverReplacementApprovalContext("approve", requestedReplacement.value.id, replacementApproval));
+    const replacementApprovalContext = waiverReplacementApprovalContext("approve", requestedReplacement.value.id, replacementApproval);
+    const [approvedReplacement, concurrentApprovalReplay] = await Promise.all([
+      approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, otherReviewer, replacementApprovalContext),
+      approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, otherReviewer, replacementApprovalContext)
+    ]);
     expect(approvedReplacement).toMatchObject({ ok: true, status: 200, value: { status: "COMPLETED", version: 2,
       approvedById: otherReviewer.id, resultingEvidence: { sequence: 2 } } });
+    expect(concurrentApprovalReplay).toEqual(approvedReplacement);
     const replacementEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { waiverReplacementRequestId: requestedReplacement.value.id },
       include: { lines: { orderBy: { position: "asc" } } } });
     expect(replacementEntry).toMatchObject({ origin: "WAIVER_REGULARIZATION_REPLACEMENT", status: "POSTED", totalDebit: expect.anything(), totalCredit: expect.anything() });

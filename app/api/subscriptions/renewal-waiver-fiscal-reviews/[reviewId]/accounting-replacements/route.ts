@@ -25,5 +25,6 @@ export async function POST(request: Request, context: { params: Promise<{ review
   const result = await requestWaiverEvidenceReplacement(params.data.reviewId, payload.data, authorization.user, { correlationId,
     idempotencyKey: idempotencyStorageKey(authorization.user.id, "accounting-waiver-evidence-replacement-request", params.data.reviewId, idempotency.key),
     requestHash: hashWaiverEvidenceReplacementRequest(params.data.reviewId, payload.data) });
-  return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status, ...(result.status === 429 ? { headers: { "Retry-After": "900" } } : {}) });
+  return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status,
+    ...([429, 503].includes(result.status) ? { headers: { "Retry-After": result.status === 429 ? "900" : "1" } } : {}) });
 }
