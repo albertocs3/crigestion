@@ -212,6 +212,15 @@ vulnerabilidades. El wrapper monolítico `verify:release` excede la ventana de
 15 minutos del ejecutor por la duración serial; las mismas fases se completaron
 en lotes sin cambiar configuración, orden interno ni base de pruebas.
 
+La verificación operativa posterior recreó desde cero la base desechable
+`crigestion_ci_test`, aplicó consecutivamente las 125 migraciones y confirmó
+con Prisma que el esquema quedó actualizado. El artefacto optimizado arrancó
+con `next start` mediante `npm run release:smoke-local`; `/api/health` respondió
+HTTP 200 con PostgreSQL disponible, VeriFactu desactivado y worker no requerido.
+El smoke usa el perfil local sobre la base CI para no eludir la identidad
+canónica que el runtime exige cuando `APP_ENV=test`, y termina siempre el
+proceso que inicia.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

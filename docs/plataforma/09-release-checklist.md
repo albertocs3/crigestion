@@ -77,6 +77,18 @@ Si el cambio toca flujos de navegador criticos, ejecutar tambien:
 npm run test:e2e
 ```
 
+Después de generar el build local, comprobar que el artefacto arranca y que su
+health operativo alcanza PostgreSQL:
+
+```powershell
+npm run release:smoke-local
+```
+
+El comando usa por defecto `.env.vitest.local`, escucha temporalmente en
+`127.0.0.1:3200`, exige HTTP 200 con VeriFactu desactivado y cierra el proceso
+al finalizar. Es un smoke local del artefacto, no sustituye la comprobación del
+health en staging o producción con la identidad de base y servicios reales.
+
 ## 5. Migraciones
 
 En produccion, aplicar migraciones como paso controlado y unico:
