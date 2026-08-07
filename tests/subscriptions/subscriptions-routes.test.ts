@@ -28,6 +28,7 @@ import { POST as waiverEvidenceReplacementApprove } from "@/app/api/accounting/w
 import { POST as waiverEvidenceReplacementReject } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/reject/route";
 import { POST as waiverEvidenceReplacementCancel } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/cancel/route";
 import { GET as waiverEvidenceReplacementGet } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/route";
+import { GET as waiverEvidenceReplacementListGet } from "@/app/api/accounting/waiver-evidence-replacements/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -47,6 +48,7 @@ describe("subscription HTTP contracts", () => {
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(401);
     expect((await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${randomUUID()}`),
       { params: Promise.resolve({ requestId: randomUUID() }) })).status).toBe(401);
+    expect((await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements"))).status).toBe(401);
     await login(); const references = await createReferences();
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references), { origin: "https://evil.example" }))).status).toBe(403);
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references)))).status).toBe(403);
@@ -59,6 +61,11 @@ describe("subscription HTTP contracts", () => {
       { params: Promise.resolve({ requestId: "no" }) });
     expect(invalidReplacementDetail.status).toBe(422);
     expect(invalidReplacementDetail.headers.get("cache-control")).toContain("private, no-store");
+    const invalidReplacementList = await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements?limit=1e2"));
+    expect(invalidReplacementList.status).toBe(422);
+    expect(invalidReplacementList.headers.get("cache-control")).toContain("private, no-store");
+    expect((await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements?limit=10&limit=20"))).status).toBe(422);
+    expect((await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements?unknown=1"))).status).toBe(422);
     const lookupCorrelationId = randomUUID();
     const missingReplacementDetail = await waiverEvidenceReplacementGet(new Request(`http://localhost/api/accounting/waiver-evidence-replacements/${requestId}`,
       { headers: { "X-Correlation-ID": lookupCorrelationId } }), reversalContext);
@@ -120,7 +127,21 @@ describe("subscription HTTP contracts", () => {
     const serializedLookupAudit = JSON.stringify(lookupAudits);
     for (const attemptedId of attemptedIds) expect(serializedLookupAudit).not.toContain(attemptedId);
     expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED",
-      payload: { path: ["companyId"], equals: companyId } } })).toBe(1);
+      AND: [{ payload: { path: ["companyId"], equals: companyId } }, { payload: { path: ["action"], equals: "detail" } }] } })).toBe(1);
+    for (let index = 0; index < 30; index += 1) {
+      const response = await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements?limit=10"));
+      expect(response.status).toBe(200);
+    }
+    const limitedList = await waiverEvidenceReplacementListGet(apiRequest("/api/accounting/waiver-evidence-replacements?limit=10"));
+    expect(limitedList.status).toBe(429);
+    expect(await limitedList.json()).toMatchObject({ code: "WAIVER_REPLACEMENT_PROPOSAL_LIST_RATE_LIMITED" });
+    expect(Number(limitedList.headers.get("Retry-After"))).toBeGreaterThanOrEqual(1);
+    expect(Number(limitedList.headers.get("Retry-After"))).toBeLessThanOrEqual(60);
+    expect(limitedList.headers.get("Cache-Control")).toContain("private, no-store");
+    expect(limitedList.headers.get("Pragma")).toBe("no-cache");
+    expect(limitedList.headers.get("Vary")).toBe("Cookie");
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED",
+      AND: [{ payload: { path: ["companyId"], equals: companyId } }, { payload: { path: ["action"], equals: "list" } }] } })).toBe(1);
   });
 
   it("creates, edits, lists, reads, activates and cancels a subscription", async () => {

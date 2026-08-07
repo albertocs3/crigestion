@@ -201,6 +201,7 @@ operativa es `/app/treasury/supplier-credits`.
 | Ruta | Permiso |
 |---|---|
 | `POST /api/subscriptions/renewal-waiver-fiscal-reviews/{reviewId}/accounting-replacements` | `Accounting.RequestWaiverEvidenceReplacements` |
+| `GET /api/accounting/waiver-evidence-replacements` | `Accounting.ApproveWaiverEvidenceReplacements` |
 | `GET /api/accounting/waiver-evidence-replacements/{requestId}` | `Accounting.ApproveWaiverEvidenceReplacements` |
 | `POST /api/accounting/waiver-evidence-replacements/{requestId}/approve` | `Accounting.ApproveWaiverEvidenceReplacements` |
 | `POST /api/accounting/waiver-evidence-replacements/{requestId}/reject` | `Accounting.ApproveWaiverEvidenceReplacements` |
@@ -211,6 +212,13 @@ compara la evidencia revertida con las nuevas lineas y entrega una huella
 canonica; aprobar exige devolver esa misma huella y un actor independiente. La
 aprobacion crea un unico asiento `POSTED` y una evidencia append-only contigua.
 
+La colección devuelve exclusivamente propuestas `REQUESTED` de la empresa
+actual, ordenadas por fecha e identificador descendentes. Admite `limit` entre
+1 y 50 y un cursor HMAC ligado al usuario y la empresa; no expone el motivo
+libre, el concepto ni las líneas. Cada elemento incluye solo metadatos de
+trabajo, recuento de líneas y bloqueos de elegibilidad. La pantalla
+`/app/accounting` consume esta bandeja y enlaza al detalle auditado.
+
 La comprobacion de replay precede a las reglas contables: una clave ya usada
 con otro cuerpo devuelve siempre `409 IDEMPOTENCY_KEY_REUSED`, aunque la nueva
 propuesta este descuadrada. Una clave nueva con debe y haber incoherentes
@@ -218,9 +226,11 @@ devuelve `422 WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED`, consume cuota y deja
 una auditoria de denegacion, pero no solicitud, lineas, evento ni replay.
 Los intentos sobre UUID inexistentes o ajenos conservan el mismo `404` opaco y
 la auditoria guarda una huella versionada del UUID, nunca el valor consultado.
-El detalle protegido admite 30 lecturas por minuto y por usuario/empresa. La
-lectura 31 devuelve `429 WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED` con un
-`Retry-After` entre 1 y 60 segundos, sin consultar el recurso. Los lookups 404
+La bandeja y el detalle protegido disponen de cuotas independientes de 30
+lecturas por minuto y por usuario/empresa. La lectura 31 devuelve `429` con
+`WAIVER_REPLACEMENT_PROPOSAL_LIST_RATE_LIMITED` o
+`WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED` y un `Retry-After` entre 1 y 60
+segundos. En el detalle, el límite se decide sin consultar el recurso. Los lookups 404
 repetidos solo generan una auditoria por usuario/empresa cada 15 minutos para
 limitar el crecimiento del ledger sin perder señal de enumeracion.
 

@@ -190,6 +190,16 @@ idempotencia, rate limit, auditoría y ledger propios. Tras completarse, el
 informe marca la evidencia histórica como revertida y exige seguimiento; no se
 producen efectos en facturación o VeriFactu.
 
+El decimotercer corte local añade las migraciones 120 a 125 y la sustitución
+controlada de una evidencia contable ya revertida. La propuesta queda separada
+de sus efectos, se revisa mediante huella canónica y solo un aprobador
+independiente puede crear el asiento sustitutivo y la siguiente evidencia
+append-only. Reintentos serializables, idempotencia, rate limits, auditoría de
+denegaciones y constraints PostgreSQL protegen la causalidad y la concurrencia.
+La bandeja de Contabilidad muestra únicamente propuestas pendientes con un DTO
+reducido y cursor HMAC ligado a usuario y empresa; el motivo libre, el concepto
+y las líneas solo se entregan en el detalle protegido y auditado.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

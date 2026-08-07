@@ -1,9 +1,11 @@
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
+import { getSessionSecret } from "@/modules/platform/application/environment";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 
 const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
@@ -65,6 +67,44 @@ export type WaiverEvidenceReplacementDetailResult =
   | { ok: false; status: 404; error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND"; message: string } }
   | { ok: false; status: 429; retryAfterSeconds: number; error: { code: "WAIVER_REPLACEMENT_PROPOSAL_RATE_LIMITED"; message: string } };
 
+const canonicalListLimit = z.preprocess(
+  (value) => value === undefined ? 10 : value,
+  z.union([z.number().int().min(1).max(50), z.string().regex(/^(?:[1-9]|[1-4][0-9]|50)$/).transform(Number)])
+);
+const optionalListCursor = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  z.string().regex(/^[A-Za-z0-9_-]{20,500}\.[A-Za-z0-9_-]{40,100}$/).optional()
+);
+
+export const listWaiverEvidenceReplacementProposalsSchema = z.object({
+  limit: canonicalListLimit,
+  cursor: optionalListCursor
+}).strict();
+
+export type ListWaiverEvidenceReplacementProposalsCommand = z.infer<typeof listWaiverEvidenceReplacementProposalsSchema>;
+export type WaiverEvidenceReplacementProposalList = {
+  proposals: Array<{
+    id: string;
+    version: number;
+    requestedAt: string;
+    requestedBy: { displayName: string };
+    reasonCode: RequestWaiverEvidenceReplacementCommand["reasonCode"];
+    accountingDate: string;
+    fiscalYear: number;
+    lineCount: number;
+    eligibility: {
+      canApprove: boolean;
+      blockers: Array<"REQUESTER_CANNOT_APPROVE" | "WAIVER_MAKER_CANNOT_APPROVE" | "REVIEW_CLOSER_CANNOT_APPROVE"
+        | "FISCAL_YEAR_NOT_OPEN" | "ACCOUNT_NOT_POSTABLE" | "SOURCE_EVIDENCE_SUPERSEDED">;
+    };
+  }>;
+  nextCursor: string | null;
+};
+export type WaiverEvidenceReplacementProposalListResult =
+  | { ok: true; status: 200; value: WaiverEvidenceReplacementProposalList }
+  | { ok: false; status: 422; error: { code: "WAIVER_REPLACEMENT_PROPOSAL_CURSOR_INVALID"; message: string } }
+  | { ok: false; status: 429; retryAfterSeconds: number; error: { code: "WAIVER_REPLACEMENT_PROPOSAL_LIST_RATE_LIMITED"; message: string } };
+
 export async function prepareWaiverEvidenceReplacement(reviewId: string): Promise<{ reviewId: string; fiscalYear: number } | null> {
   const companyId = await prisma.installation.findFirst({ where: { status: "INITIALIZED" }, select: { companyId: true } }).then((row) => row?.companyId);
   if (!companyId) return null;
@@ -116,6 +156,71 @@ export function hashWaiverEvidenceReplacementRejection(requestId: string, comman
 }
 export function hashWaiverEvidenceReplacementCancellation(requestId: string, command: CancelWaiverEvidenceReplacementCommand): string {
   return hashIdempotencyPayload("accounting-waiver-evidence-replacement-cancel:v1", { requestId, ...command });
+}
+
+export async function listWaiverEvidenceReplacementProposals(
+  command: ListWaiverEvidenceReplacementProposalsCommand,
+  actor: SessionUser,
+  context: Pick<RequestContext, "correlationId"> = {}
+): Promise<WaiverEvidenceReplacementProposalListResult> {
+  return prisma.$transaction(async (tx) => {
+    const companyId = await currentCompanyId(tx);
+    const cursor = command.cursor ? decodeProposalListCursor(command.cursor, companyId, actor.id) : null;
+    if (command.cursor && !cursor) return {
+      ok: false as const, status: 422 as const,
+      error: { code: "WAIVER_REPLACEMENT_PROPOSAL_CURSOR_INVALID" as const, message: "El cursor de propuestas no es válido." }
+    };
+    const rateLimit = await consumeProposalListRateLimit(tx, companyId, actor, context);
+    if (rateLimit.limited) return {
+      ok: false as const, status: 429 as const, retryAfterSeconds: rateLimit.retryAfterSeconds,
+      error: { code: "WAIVER_REPLACEMENT_PROPOSAL_LIST_RATE_LIMITED" as const, message: "Demasiadas consultas de la bandeja; inténtelo de nuevo más tarde." }
+    };
+    const cursorFilter: Prisma.AccountingWaiverEvidenceReplacementRequestWhereInput | undefined = cursor ? { OR: [
+      { requestedAt: { lt: new Date(cursor.requestedAt) } },
+      { requestedAt: new Date(cursor.requestedAt), id: { lt: cursor.id } }
+    ] } : undefined;
+    const records = await tx.accountingWaiverEvidenceReplacementRequest.findMany({
+      where: { companyId, status: "REQUESTED", ...(cursorFilter ? { AND: [cursorFilter] } : {}) },
+      orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+      take: command.limit + 1,
+      select: {
+        id: true, version: true, requestedAt: true, requestedById: true, reasonCode: true, accountingDate: true,
+        requestedBy: { select: { displayName: true } },
+        review: { select: { openedById: true, closedById: true } },
+        fiscalYear: { select: { year: true, status: true } },
+        sourceEvidence: { select: { supersededByEvidence: { select: { id: true } } } },
+        lines: { where: { OR: [{ account: { status: { not: "ACTIVE" } } }, { account: { isPostable: false } }] }, take: 1, select: { id: true } },
+        _count: { select: { lines: true } }
+      }
+    });
+    const hasNext = records.length > command.limit;
+    const page = hasNext ? records.slice(0, command.limit) : records;
+    const value: WaiverEvidenceReplacementProposalList = {
+      proposals: page.map((record) => {
+        const blockers: WaiverEvidenceReplacementProposalList["proposals"][number]["eligibility"]["blockers"] = [];
+        if (record.requestedById === actor.id) blockers.push("REQUESTER_CANNOT_APPROVE");
+        if (record.review.openedById === actor.id) blockers.push("WAIVER_MAKER_CANNOT_APPROVE");
+        if (record.review.closedById === actor.id) blockers.push("REVIEW_CLOSER_CANNOT_APPROVE");
+        if (record.fiscalYear.status !== "OPEN") blockers.push("FISCAL_YEAR_NOT_OPEN");
+        if (record.lines.length > 0) blockers.push("ACCOUNT_NOT_POSTABLE");
+        if (record.sourceEvidence.supersededByEvidence) blockers.push("SOURCE_EVIDENCE_SUPERSEDED");
+        return {
+          id: record.id, version: record.version, requestedAt: record.requestedAt.toISOString(),
+          requestedBy: record.requestedBy, reasonCode: record.reasonCode,
+          accountingDate: formatDateOnly(record.accountingDate), fiscalYear: record.fiscalYear.year,
+          lineCount: record._count.lines, eligibility: { canApprove: blockers.length === 0, blockers }
+        };
+      }),
+      nextCursor: hasNext && page.length > 0
+        ? encodeProposalListCursor(page.at(-1)!.requestedAt, page.at(-1)!.id, companyId, actor.id)
+        : null
+    };
+    await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LIST_VIEWED", actor, context, {
+      companyId, limit: command.limit, hasCursor: Boolean(command.cursor), resultCount: value.proposals.length,
+      hasNext, replacementRequestIds: value.proposals.map((proposal) => proposal.id)
+    });
+    return { ok: true as const, status: 200 as const, value };
+  });
 }
 
 export async function getWaiverEvidenceReplacementDetail(
@@ -494,6 +599,24 @@ async function consumeDetailReadRateLimit(
   });
   return { limited: count > 30, retryAfterSeconds: rows[0]?.retryAfterSeconds ?? 60 };
 }
+async function consumeProposalListRateLimit(
+  tx: Prisma.TransactionClient, companyId: string, actor: SessionUser, context: Pick<RequestContext, "correlationId">
+): Promise<{ limited: boolean; retryAfterSeconds: number }> {
+  const key = `accounting-waiver-evidence-replacement:list:${companyId}:${actor.id}`;
+  const rows = await tx.$queryRaw<Array<{ count: number; retryAfterSeconds: number }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '1 minute' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, 32) END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '1 minute' THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = clock_timestamp()
+    RETURNING "count", GREATEST(1, CEIL(EXTRACT(EPOCH FROM ("windowStart" + INTERVAL '1 minute' - clock_timestamp())))::integer) AS "retryAfterSeconds"`);
+  const count = rows[0]?.count ?? 0;
+  if (count === 31) await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_RATE_LIMITED", actor, context, {
+    companyId, action: "list", limit: 30, windowSeconds: 60
+  });
+  return { limited: count > 30, retryAfterSeconds: rows[0]?.retryAfterSeconds ?? 60 };
+}
 async function shouldAuditDeniedDetailLookup(
   tx: Prisma.TransactionClient, companyId: string, actor: SessionUser
 ): Promise<boolean> {
@@ -539,6 +662,34 @@ function isSerializableTransactionConflict(error: unknown): boolean {
 function isUniqueConstraintError(error: unknown): boolean { return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"; }
 function opaqueLookupHash(scope: string, id: string): string {
   return hashIdempotencyPayload("accounting-waiver-evidence-replacement-lookup:v1", { scope, id });
+}
+const proposalListCursorSchema = z.object({
+  v: z.literal(1), requestedAt: z.string().datetime(), id: z.string().uuid()
+}).strict();
+function encodeProposalListCursor(requestedAt: Date, id: string, companyId: string, actorId: string): string {
+  const payload = Buffer.from(JSON.stringify({ v: 1, requestedAt: requestedAt.toISOString(), id }), "utf8").toString("base64url");
+  return `${payload}.${signProposalListCursor(payload, companyId, actorId)}`;
+}
+function decodeProposalListCursor(
+  value: string, companyId: string, actorId: string
+): z.infer<typeof proposalListCursorSchema> | null {
+  try {
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expectedSignature = signProposalListCursor(payload, companyId, actorId);
+    const submittedBytes = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(expectedSignature, "base64url");
+    if (submittedBytes.length !== expectedBytes.length || !timingSafeEqual(submittedBytes, expectedBytes)) return null;
+    const parsed = proposalListCursorSchema.safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+function signProposalListCursor(payload: string, companyId: string, actorId: string): string {
+  return createHmac("sha256", getSessionSecret())
+    .update(`accounting-waiver-evidence-replacement-list-cursor:v1:${companyId}:${actorId}:${payload}`)
+    .digest("base64url");
 }
 function waiverEvidenceReplacementProposalDigest(record: {
   id: string; version: number; accountingDate: Date; concept: string;

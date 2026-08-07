@@ -15,7 +15,12 @@ import { listFiscalYearLifecycleHistory } from "@/modules/accounting/application
 import { AccountingFiscalYearCloseActions, AccountingFiscalYearCreateForm, AccountingFiscalYearReopenActions } from "@/modules/accounting/presentation/AccountingFiscalYearActions";
 import { AccountingFiscalYearLifecycleHistory } from "@/modules/accounting/presentation/AccountingFiscalYearLifecycleHistory";
 import { ManualJournalEntryCreateForm } from "@/modules/accounting/presentation/ManualJournalEntryCreateForm";
-import { getWaiverEvidenceReplacementDetail, prepareWaiverEvidenceReplacement } from "@/modules/accounting/application/waiverEvidenceReplacements";
+import {
+  getWaiverEvidenceReplacementDetail,
+  listWaiverEvidenceReplacementProposals,
+  listWaiverEvidenceReplacementProposalsSchema,
+  prepareWaiverEvidenceReplacement
+} from "@/modules/accounting/application/waiverEvidenceReplacements";
 import { WaiverEvidenceReplacementRequestForm } from "@/modules/accounting/presentation/WaiverEvidenceReplacementRequestForm";
 import { WaiverEvidenceReplacementReview } from "@/modules/accounting/presentation/WaiverEvidenceReplacementReview";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
@@ -33,6 +38,7 @@ type AccountingPageProps = {
     waiverReviewId?: string;
     waiverReplacementReviewId?: string;
     waiverReplacementRequestId?: string;
+    waiverReplacementCursor?: string;
   }>;
 };
 
@@ -76,14 +82,22 @@ export default async function AccountingPage({
     year: params.year,
     entryId: params.entryId
   });
-  const [accounts, entries, fiscalYears] = await Promise.all([
+  const replacementListPayload = listWaiverEvidenceReplacementProposalsSchema.safeParse({
+    limit: 10,
+    cursor: params.waiverReplacementCursor
+  });
+  const canApproveWaiverReplacements = authorization.user.permissions.includes("Accounting.ApproveWaiverEvidenceReplacements");
+  const [accounts, entries, fiscalYears, replacementList] = await Promise.all([
     accountsPayload.success
       ? listAccountingAccounts(accountsPayload.data, authorization.user)
       : { accounts: [], nextCursor: null },
     entriesPayload.success
       ? listJournalEntries(entriesPayload.data, authorization.user)
       : { entries: [], nextCursor: null },
-    listAccountingFiscalYears()
+    listAccountingFiscalYears(),
+    canApproveWaiverReplacements && replacementListPayload.success
+      ? listWaiverEvidenceReplacementProposals(replacementListPayload.data, authorization.user)
+      : null
   ]);
   const closeRequests = await listFiscalYearCloseRequests(fiscalYears.map((fiscalYear) => fiscalYear.id));
   const reopenRequests = await listFiscalYearReopenRequests(closeRequests.map((request) => request.id));
@@ -203,6 +217,35 @@ export default async function AccountingPage({
         ) : null}
 
         {fiscalYears.length > 0 ? <AccountingFiscalYearLifecycleHistory items={lifecycleHistory} /> : null}
+
+        {canApproveWaiverReplacements ? (
+          <div className="panel stack">
+            <div>
+              <h2>Propuestas de sustitución pendientes</h2>
+              <p className="muted">Bandeja contable maker-checker. El detalle completo se audita al abrirlo.</p>
+            </div>
+            {!replacementListPayload.success ? <p className="message error">El cursor de propuestas no es válido.</p> : null}
+            {replacementList && !replacementList.ok ? <p className="message error">{replacementList.error.message}</p> : null}
+            {replacementList?.ok ? <>
+              <div className="table-wrap">
+                <table>
+                  <thead><tr><th>Solicitada</th><th>Solicitante</th><th>Ejercicio / fecha</th><th>Motivo</th><th>Estado de revisión</th><th>Acción</th></tr></thead>
+                  <tbody>{replacementList.value.proposals.length === 0 ? <tr><td colSpan={6}>No hay propuestas pendientes.</td></tr>
+                    : replacementList.value.proposals.map((proposal) => <tr key={proposal.id}>
+                      <td>{formatDateTime(proposal.requestedAt)}</td>
+                      <td>{proposal.requestedBy.displayName}</td>
+                      <td><strong>{proposal.fiscalYear}</strong><span className="cell-detail">Fecha {formatDate(proposal.accountingDate)} · {proposal.lineCount} líneas</span></td>
+                      <td>{waiverReplacementReasonLabel(proposal.reasonCode)}</td>
+                      <td>{proposal.eligibility.canApprove ? "Preparada" : "Requiere otro aprobador o subsanar bloqueos"}</td>
+                      <td><Link className="button button-secondary" href={`/app/accounting?waiverReplacementRequestId=${encodeURIComponent(proposal.id)}`}>Revisar</Link></td>
+                    </tr>)}</tbody>
+                </table>
+              </div>
+              {replacementList.value.nextCursor ? <div className="button-row"><Link className="button button-secondary"
+                href={replacementNextPageHref(replacementList.value.nextCursor)}>Siguiente página</Link></div> : null}
+            </> : null}
+          </div>
+        ) : null}
 
         {canEditSelectedFiscalYear ? (
           <div className="panel stack">
@@ -391,6 +434,11 @@ function entryNextPageHref(
   return `/app/accounting?${query.toString()}`;
 }
 
+function replacementNextPageHref(cursor: string): string {
+  const query = new URLSearchParams({ waiverReplacementCursor: cursor });
+  return `/app/accounting?${query.toString()}`;
+}
+
 function exportHref(params: Awaited<AccountingPageProps["searchParams"]>): string {
   const query = new URLSearchParams();
   if (params.year) query.set("year", params.year);
@@ -409,6 +457,17 @@ function formatMoney(value: string): string {
 
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat("es-ES").format(new Date(`${value}T00:00:00.000Z`));
+}
+
+function formatDateTime(value: string): string {
+  return new Intl.DateTimeFormat("es-ES", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+}
+
+function waiverReplacementReasonLabel(reasonCode: "CORRECTED_CLASSIFICATION" | "CORRECTED_AMOUNT" | "CORRECTED_DATE" | "OTHER"): string {
+  if (reasonCode === "CORRECTED_CLASSIFICATION") return "Clasificación corregida";
+  if (reasonCode === "CORRECTED_AMOUNT") return "Importe corregido";
+  if (reasonCode === "CORRECTED_DATE") return "Fecha corregida";
+  return "Otro";
 }
 
 function fiscalYearStatusLabel(status: "OPEN" | "CLOSED" | "REVERSED"): string {
