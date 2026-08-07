@@ -16,7 +16,7 @@ const nullableText = (max: number) => z.string().trim().min(1).max(max).nullable
 
 export const listPurchasesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(25),
-  status: z.enum(["DRAFT", "REGISTERED", "RECTIFIED", "VOIDED"]).optional(),
+  status: z.enum(["DRAFT", "REGISTERED", "RECTIFIED", "VOIDED", "SUPERSEDED"]).optional(),
   paymentStatus: z.enum(["PENDING", "PARTIALLY_PAID", "PAID", "PARTIALLY_SETTLED", "SETTLED", "NOT_APPLICABLE"]).optional(),
   supplierId: z.string().uuid().optional(),
   search: z.string().trim().min(1).max(120).optional()
@@ -86,7 +86,7 @@ export const registerSupplierPaymentSchema = z.object({
 }).strict();
 
 export type MutationContext = { correlationId?: string; idempotencyKey: string; requestHash: string; scope: string };
-type PurchaseStatus = "DRAFT" | "REGISTERED" | "RECTIFIED" | "VOIDED";
+type PurchaseStatus = "DRAFT" | "REGISTERED" | "RECTIFIED" | "VOIDED" | "SUPERSEDED";
 type PurchasePaymentStatus = "PENDING" | "PARTIALLY_PAID" | "PAID" | "PARTIALLY_SETTLED" | "SETTLED" | "NOT_APPLICABLE";
 type PaymentMethod = "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
 type Failure = { ok: false; status: 404 | 409 | 503; error: { code: string; message: string } };
@@ -150,7 +150,9 @@ export async function createPurchase(command: z.infer<typeof createPurchaseSchem
     if (!supplier) return failure(404, "SUPPLIER_NOT_FOUND", "El proveedor activo no existe.");
     const dates = parsePurchaseDates(command); if (!dates.ok) return dates.failure;
     if (!await lockOpenFiscalYearForDatedMutation(tx, companyId, dates.value.accountingDate)) return failure(409, "PURCHASE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha contable.");
-    const row = await tx.purchaseInvoice.create({ data: { companyId, supplierId: supplier.id, supplierCodeSnapshot: supplier.code, supplierAccountingCodeSnapshot: supplier.accountingCode, supplierLegalNameSnapshot: supplier.legalName, supplierTaxIdLast4Snapshot: supplier.taxIdLast4, supplierTaxIdEncryptedSnapshot: supplier.taxIdEncrypted, supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber), ...dates.value, notes: command.notes, createdById: actor.id }, include: detailInclude });
+    const normalizedNumber = normalizeInvoiceNumber(command.supplierInvoiceNumber);
+    const identity = await tx.purchaseSupplierDocumentIdentity.create({ data: { companyId, supplierId: supplier.id, supplierInvoiceNumberNormalized: normalizedNumber }, select: { id: true } });
+    const row = await tx.purchaseInvoice.create({ data: { companyId, supplierId: supplier.id, documentIdentityId: identity.id, supplierCodeSnapshot: supplier.code, supplierAccountingCodeSnapshot: supplier.accountingCode, supplierLegalNameSnapshot: supplier.legalName, supplierTaxIdLast4Snapshot: supplier.taxIdLast4, supplierTaxIdEncryptedSnapshot: supplier.taxIdEncrypted, supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizedNumber, ...dates.value, notes: command.notes, createdById: actor.id }, include: detailInclude });
     const value = mapDetail(row); await audit(tx, "PURCHASE_DRAFT_CREATED", actor, context, { companyId, purchaseInvoiceId: row.id, supplierId: supplier.id }); await persist(tx, actor, context, 201, value);
     return { ok: true, status: 201, value };
   }, () => failure(409, "PURCHASE_NUMBER_ALREADY_USED", "Ese numero de factura ya existe para el proveedor."));
@@ -165,7 +167,9 @@ export async function updatePurchase(id: string, command: z.infer<typeof updateP
     if (locked.version !== command.expectedVersion) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de guardar.");
     const dates = parsePurchaseDates(command); if (!dates.ok) return dates.failure;
     if (!companyId || !await lockOpenFiscalYearForDatedMutation(tx, companyId, dates.value.accountingDate)) return failure(409, "PURCHASE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN", "No hay un ejercicio contable abierto para la fecha contable.");
-    const changed = await tx.purchaseInvoice.updateMany({ where: { id, version: command.expectedVersion, status: "DRAFT" }, data: { supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber), ...dates.value, notes: command.notes, updatedById: actor.id, version: { increment: 1 } } });
+    const normalizedNumber = normalizeInvoiceNumber(command.supplierInvoiceNumber);
+    await tx.purchaseSupplierDocumentIdentity.update({ where: { id: locked.documentIdentityId }, data: { supplierInvoiceNumberNormalized: normalizedNumber } });
+    const changed = await tx.purchaseInvoice.updateMany({ where: { id, version: command.expectedVersion, status: "DRAFT" }, data: { supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizedNumber, ...dates.value, notes: command.notes, updatedById: actor.id, version: { increment: 1 } } });
     if (changed.count !== 1) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de guardar.");
     const value = mapDetail(await findDetail(tx, id)); await audit(tx, "PURCHASE_DRAFT_UPDATED", actor, context, { companyId, purchaseInvoiceId: id }); await persist(tx, actor, context, 200, value); return { ok: true, status: 200, value };
   }, () => failure(409, "PURCHASE_NUMBER_ALREADY_USED", "Ese numero de factura ya existe para el proveedor."));
@@ -305,13 +309,16 @@ export async function createPurchaseRectification(id: string, command: z.infer<t
     const accounts = await tx.accountingAccount.findMany({ where: { fiscalYearId: fiscalYear.id, code: { in: originalCodes }, status: "ACTIVE", isPostable: true }, select: { id: true, code: true } });
     if (accounts.length !== originalCodes.length) return failure(409, "PURCHASE_ACCOUNT_NOT_AVAILABLE", "Falta alguna subcuenta activa e imputable para contabilizar la rectificación.");
     const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+    const rectificationNumber = normalizeInvoiceNumber(command.supplierInvoiceNumber);
+    const rectificationIdentity = await tx.purchaseSupplierDocumentIdentity.create({ data: { companyId: companyId!, supplierId: original.supplierId,
+      supplierInvoiceNumberNormalized: rectificationNumber }, select: { id: true } });
 
     const rectification = await tx.purchaseInvoice.create({ data: {
-      companyId: companyId!, supplierId: original.supplierId,
+      companyId: companyId!, supplierId: original.supplierId, documentIdentityId: rectificationIdentity.id,
       supplierCodeSnapshot: original.supplierCodeSnapshot, supplierAccountingCodeSnapshot: original.supplierAccountingCodeSnapshot,
       supplierLegalNameSnapshot: original.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: original.supplierTaxIdLast4Snapshot,
       supplierTaxIdEncryptedSnapshot: original.supplierTaxIdEncryptedSnapshot,
-      supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: normalizeInvoiceNumber(command.supplierInvoiceNumber),
+      supplierInvoiceNumber: command.supplierInvoiceNumber, supplierInvoiceNumberNormalized: rectificationNumber,
       documentType: "RECTIFICATION", paymentStatus: "NOT_APPLICABLE", ...dates.value,
       subtotal: original.subtotal.neg(), discountTotal: original.discountTotal.neg(), taxableBase: original.taxableBase.neg(), taxAmount: original.taxAmount.neg(), total: original.total.neg(),
       notes: command.notes, rectificationReason: command.reason, rectifiesPurchaseInvoiceId: original.id, createdById: actor.id, updatedById: actor.id
@@ -489,7 +496,7 @@ export async function registerSupplierPayment(command: z.infer<typeof registerSu
 }
 
 export async function refreshPurchasePaymentStatus(tx: Prisma.TransactionClient, id: string, actorId: string): Promise<void> { const row = await tx.purchaseInvoice.findUniqueOrThrow({ where: { id }, include: { allocations: { where: { supplierPayment: { status: "POSTED" } }, select: { amount: true } }, creditApplications: { select: { amount: true } } } }); const paid = row.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = row.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const settled = paid.plus(credited); const status: PurchasePaymentStatus = settled.isZero() ? "PENDING" : credited.gt(0) ? (settled.gte(row.total) ? "SETTLED" : "PARTIALLY_SETTLED") : (settled.gte(row.total) ? "PAID" : "PARTIALLY_PAID"); await tx.purchaseInvoice.update({ where: { id }, data: { paymentStatus: status, updatedById: actorId } }); }
-async function lockPurchase(tx: Prisma.TransactionClient, id: string): Promise<{ id: string; companyId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date } | null> { const rows = await tx.$queryRaw<Array<{ id: string; companyId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date }>>(Prisma.sql`SELECT "id", "companyId", "documentType", "status", "version", "total", "issueDate" FROM "purchase_invoices" WHERE "id" = ${id}::uuid FOR UPDATE`); return rows[0] ?? null; }
+async function lockPurchase(tx: Prisma.TransactionClient, id: string): Promise<{ id: string; companyId: string; documentIdentityId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date } | null> { const rows = await tx.$queryRaw<Array<{ id: string; companyId: string; documentIdentityId: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; version: number; total: Prisma.Decimal; issueDate: Date }>>(Prisma.sql`SELECT "id", "companyId", "documentIdentityId", "documentType", "status", "version", "total", "issueDate" FROM "purchase_invoices" WHERE "id" = ${id}::uuid FOR UPDATE`); return rows[0] ?? null; }
 async function lockFiscalYear(tx: Prisma.TransactionClient, companyId: string, date: Date): Promise<{ id: string } | null> { const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "accounting_fiscal_years" WHERE "companyId" = ${companyId}::uuid AND "status" = 'OPEN' AND "startDate" <= ${date} AND "endDate" >= ${date} FOR UPDATE`); return rows.length === 1 ? rows[0]! : null; }
 async function nextJournalSequence(tx: Prisma.TransactionClient, fiscalYearId: string): Promise<number> { const last = await tx.accountingJournalEntry.findFirst({ where: { fiscalYearId }, orderBy: { sequence: "desc" }, select: { sequence: true } }); return (last?.sequence ?? 0) + 1; }
 async function currentCompanyId(client: Prisma.TransactionClient | typeof prisma): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }

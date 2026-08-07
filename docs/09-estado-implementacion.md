@@ -230,6 +230,13 @@ idempotencia, versión visible, rate limit y ejercicio abierto; las denegaciones
 se auditan con códigos estables. Las 127 migraciones se aplicaron desde cero y
 las pruebas dirigidas de persistencia y contrato HTTP finalizaron correctamente.
 
+El siguiente corte inicia la sustitución interna versionada con las migraciones
+128 y 129. Cada factura de proveedor queda enlazada a una identidad documental
+única por empresa, proveedor y número normalizado; el histórico podrá conservar
+versiones `SUPERSEDED` sin liberar el número para otra factura independiente y
+un índice parcial impide más de una versión borrador o registrada. El endpoint
+`REPLACE` y sus efectos económicos completos continúan en construcción.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).

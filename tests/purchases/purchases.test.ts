@@ -58,6 +58,7 @@ describe("supplier purchases and payments", () => {
     const first = await createPurchase(command, actor, context("same", "create", command)); const replay = await createPurchase(command, actor, context("same", "create", command)); expect(replay).toEqual(first);
     const changed = { ...command, supplierInvoiceNumber: "OTHER" }; const conflict = await createPurchase(changed, actor, context("same", "create", changed)); expect(conflict).toMatchObject({ ok: false, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
     const duplicate = await createPurchase({ ...command, supplierInvoiceNumber: "dup-01" }, actor, context("duplicate", "create", command)); expect(duplicate).toMatchObject({ ok: false, error: { code: "PURCHASE_NUMBER_ALREADY_USED" } });
+    expect(await prisma.purchaseSupplierDocumentIdentity.count()).toBe(1);
   });
 
   it("voids an unpaid purchase with append-only accounting, VAT and stock reversals", async () => {

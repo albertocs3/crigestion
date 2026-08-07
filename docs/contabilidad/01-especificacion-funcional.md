@@ -392,6 +392,9 @@ Una factura registrada puede corregirse mientras el ejercicio esté abierto.
 > documento y añade contraasiento, ajustes inversos de IVA y stock y auditoría
 > dentro de una operación append-only. La sustitución por una nueva versión
 > corregida continúa pendiente y no reutilizará una rectificativa del proveedor.
+> La base de persistencia ya asigna a cada número de factura una identidad
+> documental estable, admite el estado histórico `SUPERSEDED` y garantiza en
+> PostgreSQL que solo exista una versión borrador o registrada por identidad.
 
 La corrección:
 

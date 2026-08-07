@@ -1,0 +1,1 @@
+ALTER TYPE "PurchaseInvoiceStatus" ADD VALUE IF NOT EXISTS 'SUPERSEDED';

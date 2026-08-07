@@ -97,6 +97,7 @@ enum PurchaseInvoiceStatus {
   REGISTERED
   RECTIFIED
   VOIDED
+  SUPERSEDED
 }
 
 enum PurchaseInvoiceDocumentType {
@@ -637,6 +638,7 @@ model Company {
   bankStatements                          BankStatement[]
   invoices                                Invoice[]
   purchaseInvoices                        PurchaseInvoice[]
+  purchaseSupplierDocumentIdentities      PurchaseSupplierDocumentIdentity[]
   purchaseCorrectionOperations            PurchaseCorrectionOperation[]
   purchaseVatRecords                      PurchaseVatRecord[]
   supplierPayments                        SupplierPayment[]
@@ -796,6 +798,7 @@ model Supplier {
   updatedBy          User?                  @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   accounts           AccountingAccount[]
   purchaseInvoices   PurchaseInvoice[]
+  purchaseDocumentIdentities PurchaseSupplierDocumentIdentity[]
   purchaseVatRecords PurchaseVatRecord[]
   supplierPayments   SupplierPayment[]
   credits            SupplierCredit[]
@@ -815,6 +818,7 @@ model PurchaseInvoice {
   id                              String                      @id @default(uuid()) @db.Uuid
   companyId                       String                      @db.Uuid
   supplierId                      String                      @db.Uuid
+  documentIdentityId              String                      @db.Uuid
   supplierCodeSnapshot            String                      @db.VarChar(20)
   supplierAccountingCodeSnapshot  String                      @db.VarChar(9)
   supplierLegalNameSnapshot       String                      @db.VarChar(200)
@@ -847,6 +851,7 @@ model PurchaseInvoice {
 
   company                  Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
   supplier                 Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  documentIdentity         PurchaseSupplierDocumentIdentity @relation(fields: [documentIdentityId], references: [id], onDelete: Restrict)
   createdBy                User                        @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy                User?                       @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   registeredBy             User?                       @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
@@ -863,15 +868,31 @@ model PurchaseInvoice {
   rectifiesPurchaseInvoice PurchaseInvoice?            @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
   rectificationInvoices    PurchaseInvoice[]           @relation("PurchaseInvoiceRectifications")
 
-  @@unique([companyId, supplierId, supplierInvoiceNumberNormalized])
   @@unique([id, companyId])
   @@unique([id, companyId, supplierId], map: "purchase_invoices_id_company_supplier_key")
   @@index([companyId, status, accountingDate, id])
   @@index([companyId, paymentStatus, accountingDate, id])
   @@index([supplierId, issueDate, id])
+  @@index([documentIdentityId, createdAt, id])
   @@index([rectifiesPurchaseInvoiceId])
   @@index([createdById, createdAt, id])
   @@map("purchase_invoices")
+}
+
+model PurchaseSupplierDocumentIdentity {
+  id                              String            @id @default(uuid()) @db.Uuid
+  companyId                       String            @db.Uuid
+  supplierId                      String            @db.Uuid
+  supplierInvoiceNumberNormalized String            @db.VarChar(80)
+  createdAt                       DateTime          @default(now()) @db.Timestamptz(3)
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier  Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  invoices  PurchaseInvoice[]
+
+  @@unique([companyId, supplierId, supplierInvoiceNumberNormalized], map: "purchase_supplier_document_identities_business_key")
+  @@index([supplierId, createdAt, id])
+  @@map("purchase_supplier_document_identities")
 }
 
 model PurchaseInvoiceLine {
