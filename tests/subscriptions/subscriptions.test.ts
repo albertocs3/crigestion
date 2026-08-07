@@ -813,7 +813,13 @@ describe("subscriptions application service", () => {
       waiverReplacementCancellationContext("third-party-cancel", requestedReplacement.value.id, cancellationCommand))).toMatchObject({
       ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_NOT_CANCELLABLE" }
     });
-    const replacementApproval = { expectedVersion: 1 as const };
+    if (!replacementDetail) throw new Error("WAIVER_REPLACEMENT_DETAIL_EXPECTED");
+    const replacementApproval = { expectedVersion: 1 as const, expectedProposalDigest: replacementDetail.proposalDigest };
+    const changedProposalApproval = { expectedVersion: 1 as const, expectedProposalDigest: "0".repeat(64) };
+    expect(await approveWaiverEvidenceReplacement(requestedReplacement.value.id, changedProposalApproval, otherReviewer,
+      waiverReplacementApprovalContext("changed-proposal", requestedReplacement.value.id, changedProposalApproval))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_PROPOSAL_CHANGED" }
+    });
     expect(await approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, reversalApprover,
       waiverReplacementApprovalContext("self-approve", requestedReplacement.value.id, replacementApproval))).toMatchObject({
       ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN" }

@@ -80,6 +80,7 @@ describe("subscription HTTP contracts", () => {
     expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, replacementBody, { csrf, idempotency: null }), reviewContext)).status).toBe(400);
     expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, { ...replacementBody, accountingDate: "2026-02-31" }, { csrf }), reviewContext)).status).toBe(422);
     expect((await waiverEvidenceReplacementApprove(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/approve`, { expectedVersion: 1, unexpected: true }, { csrf }), reversalContext)).status).toBe(422);
+    expect((await waiverEvidenceReplacementApprove(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/approve`, { expectedVersion: 1, expectedProposalDigest: "invalid" }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReplacementReject(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/reject`, { expectedVersion: 1, rejectionDetail: "corto" }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReplacementCancel(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
   });

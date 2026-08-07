@@ -20,7 +20,9 @@ export const requestWaiverEvidenceReplacementSchema = z.object({
   concept: z.string().trim().min(2).max(240),
   lines: z.array(proposalLine).min(2).max(200)
 }).strict();
-export const approveWaiverEvidenceReplacementSchema = z.object({ expectedVersion: z.literal(1) }).strict();
+export const approveWaiverEvidenceReplacementSchema = z.object({
+  expectedVersion: z.literal(1), expectedProposalDigest: z.string().regex(/^[a-f0-9]{64}$/)
+}).strict();
 export const rejectWaiverEvidenceReplacementSchema = z.object({ expectedVersion: z.literal(1), rejectionDetail: z.string().trim().min(10).max(500) }).strict();
 export const cancelWaiverEvidenceReplacementSchema = z.object({ expectedVersion: z.literal(1) }).strict();
 
@@ -42,6 +44,7 @@ export type WaiverEvidenceReplacementDetailDto = {
   id: string; reviewId: string; status: "REQUESTED" | "COMPLETED" | "REJECTED" | "CANCELLED"; version: number;
   reasonCode: RequestWaiverEvidenceReplacementCommand["reasonCode"]; reasonDetail: string;
   accountingDate: string; concept: string; requestedAt: string;
+  proposalDigest: string;
   isRequestedByActor: boolean;
   requestedBy: { displayName: string };
   sourceEvidence: {
@@ -76,6 +79,7 @@ type FailureCode = "WAIVER_REVIEW_NOT_FOUND" | "WAIVER_EVIDENCE_NOT_REPLACEABLE"
   | "WAIVER_REPLACEMENT_FISCAL_YEAR_NOT_OPEN" | "WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED"
   | "WAIVER_REPLACEMENT_ACCOUNT_NOT_POSTABLE" | "WAIVER_REPLACEMENT_ACTIVE_REQUEST_EXISTS"
   | "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" | "WAIVER_REPLACEMENT_REQUEST_NOT_PENDING"
+  | "WAIVER_REPLACEMENT_PROPOSAL_CHANGED"
   | "WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN" | "WAIVER_REPLACEMENT_SELF_REJECTION_FORBIDDEN"
   | "WAIVER_REPLACEMENT_NOT_CANCELLABLE" | "WAIVER_REPLACEMENT_RATE_LIMITED" | "IDEMPOTENCY_KEY_REUSED";
 type Result = { ok: true; status: 200 | 201; value: WaiverEvidenceReplacementDto }
@@ -126,7 +130,7 @@ export async function getWaiverEvidenceReplacementDetail(
       } },
         supersededByEvidence: { select: { id: true } } } },
       reversalRequest: { select: { reversalEntry: { select: { number: true, accountingDate: true } } } },
-      lines: { orderBy: { position: "asc" }, select: { position: true, concept: true, debit: true, credit: true,
+      lines: { orderBy: { position: "asc" }, select: { accountId: true, position: true, concept: true, debit: true, credit: true,
         account: { select: { code: true, name: true, status: true, isPostable: true } } } }
     } });
     if (!record?.reversalRequest.reversalEntry) return null;
@@ -145,7 +149,8 @@ export async function getWaiverEvidenceReplacementDetail(
     return {
       id: record.id, reviewId: record.reviewId, status: record.status, version: record.version,
       reasonCode: record.reasonCode, reasonDetail: record.reasonDetail, accountingDate: formatDateOnly(record.accountingDate),
-      concept: record.concept, requestedAt: record.requestedAt.toISOString(), isRequestedByActor: record.requestedById === actor.id,
+      concept: record.concept, requestedAt: record.requestedAt.toISOString(),
+      proposalDigest: waiverEvidenceReplacementProposalDigest(record), isRequestedByActor: record.requestedById === actor.id,
       requestedBy: record.requestedBy,
       sourceEvidence: {
         sequence: record.sourceEvidence.sequence, entryNumber: record.sourceEvidence.accountingJournalEntry.number,
@@ -247,6 +252,12 @@ export async function approveWaiverEvidenceReplacement(
     } });
     if (!request) return { kind: "request-not-found" as const };
     if (request.status !== "REQUESTED" || request.version !== command.expectedVersion || request.sourceEvidence.supersededByEvidence) return { kind: "request-not-pending" as const };
+    if (waiverEvidenceReplacementProposalDigest(request) !== command.expectedProposalDigest) {
+      await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, {
+        companyId, replacementRequestId: request.id, denialReason: "PROPOSAL_DIGEST_MISMATCH"
+      });
+      return { kind: "proposal-changed" as const };
+    }
     if ([request.requestedById, request.review.openedById, request.review.closedById].includes(actor.id)) {
       await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, { companyId, replacementRequestId: request.id, denialReason: "INDEPENDENCE_REQUIRED" });
       return { kind: "self-approval" as const };
@@ -362,6 +373,7 @@ function mapResult(result: { kind: string; value?: WaiverEvidenceReplacementDto 
     "year-not-open": ["WAIVER_REPLACEMENT_FISCAL_YEAR_NOT_OPEN", "El ejercicio contable debe estar abierto."],
     "account-not-postable": ["WAIVER_REPLACEMENT_ACCOUNT_NOT_POSTABLE", "La propuesta contiene cuentas no imputables."],
     "request-not-pending": ["WAIVER_REPLACEMENT_REQUEST_NOT_PENDING", "La solicitud ya no está pendiente o su versión cambió."],
+    "proposal-changed": ["WAIVER_REPLACEMENT_PROPOSAL_CHANGED", "La propuesta no coincide con el detalle revisado; vuelva a cargarla."],
     "self-approval": ["WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN", "La aprobación requiere un actor independiente."],
     "self-rejection": ["WAIVER_REPLACEMENT_SELF_REJECTION_FORBIDDEN", "El solicitante no puede rechazar su solicitud."],
     "not-cancellable": ["WAIVER_REPLACEMENT_NOT_CANCELLABLE", "Solo el solicitante puede cancelar una solicitud pendiente."],
@@ -407,6 +419,16 @@ async function audit(tx: Prisma.TransactionClient, eventType: string, actor: Ses
     ...(context.correlationId ? { correlationId: context.correlationId } : {}) } as Prisma.InputJsonValue } });
 }
 function isUniqueConstraintError(error: unknown): boolean { return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"; }
+function waiverEvidenceReplacementProposalDigest(record: {
+  id: string; version: number; accountingDate: Date; concept: string;
+  lines: Array<{ accountId: string; position: number; concept: string; debit: Prisma.Decimal; credit: Prisma.Decimal }>;
+}): string {
+  return hashIdempotencyPayload("accounting-waiver-evidence-replacement-proposal-digest:v1", {
+    requestId: record.id, version: record.version, accountingDate: formatDateOnly(record.accountingDate), concept: record.concept,
+    lines: record.lines.map((line) => ({ accountId: line.accountId, position: line.position, concept: line.concept,
+      debit: line.debit.toFixed(2), credit: line.credit.toFixed(2) }))
+  });
+}
 function parseDateOnly(value: string): Date { return new Date(`${value}T00:00:00.000Z`); }
 function formatDateOnly(value: Date): string { return value.toISOString().slice(0, 10); }
 function isValidDateOnly(value: string): boolean {
