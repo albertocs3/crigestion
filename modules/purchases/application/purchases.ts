@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -48,7 +48,8 @@ const purchaseLineSchema = z.object({
 }).strict();
 
 export const replacePurchaseLinesSchema = z.object({ expectedVersion: z.number().int().positive(), lines: z.array(purchaseLineSchema).min(1).max(200) }).strict();
-export const replacePurchaseDueDatesSchema = z.object({ expectedVersion: z.number().int().positive(), dueDates: z.array(z.object({ dueDate: dateOnly, amount: money, paymentMethod }).strict()).min(1).max(60) }).strict();
+const purchaseDueDateSchema = z.object({ dueDate: dateOnly, amount: money, paymentMethod }).strict();
+export const replacePurchaseDueDatesSchema = z.object({ expectedVersion: z.number().int().positive(), dueDates: z.array(purchaseDueDateSchema).min(1).max(60) }).strict();
 export const registerPurchaseSchema = z.object({ expectedVersion: z.number().int().positive() }).strict();
 export const createPurchaseRectificationSchema = z.object({
   mode: z.literal("FULL"),
@@ -61,7 +62,7 @@ export const createPurchaseRectificationSchema = z.object({
   reason: z.enum(["RETURN", "OPERATION_CANCELLED"]),
   notes: nullableText(1000).default(null)
 }).strict();
-export const createPurchaseCorrectionSchema = z.object({
+const createPurchaseVoidSchema = z.object({
   mode: z.literal("VOID"),
   expectedVersion: z.number().int().positive(),
   accountingDate: dateOnly,
@@ -69,6 +70,24 @@ export const createPurchaseCorrectionSchema = z.object({
   reason: nullableText(500).default(null),
   confirmation: z.literal("VOID_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY")
 }).strict();
+const createPurchaseReplacementSchema = z.object({
+  mode: z.literal("REPLACE"),
+  expectedVersion: z.number().int().positive(),
+  accountingDate: dateOnly,
+  reasonCode: z.enum(["DATA_ENTRY_ERROR", "WRONG_DATE", "WRONG_AMOUNT", "WRONG_TAX", "OTHER"]),
+  reason: nullableText(500).default(null),
+  confirmation: z.literal("REPLACE_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY"),
+  replacement: z.object({
+    issueDate: dateOnly, receivedDate: dateOnly, operationDate: dateOnly, accountingDate: dateOnly,
+    notes: nullableText(1000).default(null),
+    lines: z.array(purchaseLineSchema).min(1).max(200),
+    dueDates: z.array(purchaseDueDateSchema).min(1).max(60)
+  }).strict()
+}).strict().superRefine((value, context) => {
+  if (value.reasonCode === "OTHER" && !value.reason) context.addIssue({ code: z.ZodIssueCode.custom, path: ["reason"], message: "El motivo OTHER requiere una explicación." });
+  if (value.accountingDate !== value.replacement.accountingDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ["replacement", "accountingDate"], message: "La sustitución y la nueva versión deben contabilizarse en la misma fecha." });
+});
+export const createPurchaseCorrectionSchema = z.union([createPurchaseVoidSchema, createPurchaseReplacementSchema]);
 export const listSupplierDueDatesSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   supplierId: z.string().uuid().optional(),
@@ -106,19 +125,31 @@ export type PurchaseDetail = PurchaseListItem & {
   rectificationReason: string | null;
   rectifiesPurchaseInvoice: { id: string; supplierInvoiceNumber: string } | null;
   rectificationInvoices: Array<{ id: string; supplierInvoiceNumber: string }>;
+  supersededByPurchaseInvoice: { id: string; supplierInvoiceNumber: string } | null;
+  supersedesPurchaseInvoice: { id: string; supplierInvoiceNumber: string } | null;
   lines: Array<{ id: string; position: number; catalogItemId: string | null; catalogItemCode: string | null; description: string; quantity: string; unitPrice: string; discountPercent: string; discountAmount: string; purchaseAccountCode: string; taxRateId: string; taxRateCode: string; taxRate: string; taxableBase: string; taxAmount: string; total: string }>;
   dueDates: Array<{ id: string; position: number; dueDate: string; amount: string; allocatedAmount: string; creditedAmount: string; pendingAmount: string; paymentMethod: PaymentMethod; status: "PENDING" | "PAID" | "SETTLED" | "CANCELLED" }>;
 };
 export type SupplierDueDateItem = { id: string; purchaseInvoiceId: string; supplierId: string; supplierCode: string; supplierName: string; supplierInvoiceNumber: string; dueDate: string; amount: string; allocatedAmount: string; creditedAmount: string; pendingAmount: string; paymentMethod: PaymentMethod; status: "PENDING" | "PAID" | "SETTLED" | "CANCELLED" };
 export type SupplierPaymentDto = { id: string; supplierId: string; paymentDate: string; totalAmount: string; paymentMethod: PaymentMethod; reference: string | null; accountingEntry: { id: string; number: string }; allocations: Array<{ dueDateId: string; purchaseInvoiceId: string; amount: string }> };
-export type PurchaseCorrectionDto = { operationId: string; purchaseInvoiceId: string; mode: "VOID"; status: "VOIDED"; paymentStatus: "NOT_APPLICABLE"; reversalEntry: { id: string; number: string }; vatAdjustmentCount: number; stockReversalCount: number };
+export type PurchaseCorrectionDto = { operationId: string; purchaseInvoiceId: string; replacementPurchaseInvoiceId: string | null; mode: "VOID" | "REPLACE"; status: "VOIDED" | "SUPERSEDED"; paymentStatus: "NOT_APPLICABLE"; reversalEntry: { id: string; number: string }; replacementEntry: { id: string; number: string } | null; vatAdjustmentCount: number; stockReversalCount: number; replacementVatRecordCount: number; replacementStockMovementCount: number };
+const purchaseCorrectionReplaySchema = z.object({ operationId: z.string().uuid(), purchaseInvoiceId: z.string().uuid(), replacementPurchaseInvoiceId: z.string().uuid().nullable().default(null),
+  mode: z.enum(["VOID", "REPLACE"]), status: z.enum(["VOIDED", "SUPERSEDED"]), paymentStatus: z.literal("NOT_APPLICABLE"),
+  reversalEntry: z.object({ id: z.string().uuid(), number: z.string() }).strict(), replacementEntry: z.object({ id: z.string().uuid(), number: z.string() }).strict().nullable().default(null),
+  vatAdjustmentCount: z.number().int().nonnegative(), stockReversalCount: z.number().int().nonnegative(), replacementVatRecordCount: z.number().int().nonnegative().default(0),
+  replacementStockMovementCount: z.number().int().nonnegative().default(0) }).strict().superRefine((value, context) => {
+    if (value.mode === "VOID" && (value.status !== "VOIDED" || value.replacementPurchaseInvoiceId || value.replacementEntry)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Replay VOID incompatible." });
+    if (value.mode === "REPLACE" && (value.status !== "SUPERSEDED" || !value.replacementPurchaseInvoiceId || !value.replacementEntry)) context.addIssue({ code: z.ZodIssueCode.custom, message: "Replay REPLACE incompatible." });
+  });
 
 const detailInclude = {
   lines: { orderBy: { position: "asc" as const } },
   dueDates: { orderBy: { position: "asc" as const }, include: { allocations: { where: { supplierPayment: { status: "POSTED" as const } }, select: { amount: true } }, creditApplications: { select: { amount: true } } } },
   accountingEntry: { select: { id: true, number: true } },
   rectifiesPurchaseInvoice: { select: { id: true, supplierInvoiceNumber: true } },
-  rectificationInvoices: { select: { id: true, supplierInvoiceNumber: true }, orderBy: { createdAt: "asc" as const } }
+  rectificationInvoices: { select: { id: true, supplierInvoiceNumber: true }, orderBy: { createdAt: "asc" as const } },
+  sourceCorrectionOperation: { select: { replacementPurchaseInvoice: { select: { id: true, supplierInvoiceNumber: true } } } },
+  replacementCorrectionOperation: { select: { sourcePurchaseInvoice: { select: { id: true, supplierInvoiceNumber: true } } } }
 } satisfies Prisma.PurchaseInvoiceInclude;
 type PurchaseRecord = Prisma.PurchaseInvoiceGetPayload<{ include: typeof detailInclude }>;
 
@@ -391,6 +422,10 @@ export async function createPurchaseRectification(id: string, command: z.infer<t
 }
 
 export async function createPurchaseCorrection(id: string, command: z.infer<typeof createPurchaseCorrectionSchema>, actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto>> {
+  return command.mode === "REPLACE" ? createPurchaseReplacement(id, command, actor, context) : createPurchaseVoid(id, command, actor, context);
+}
+
+async function createPurchaseVoid(id: string, command: Extract<z.infer<typeof createPurchaseCorrectionSchema>, { mode: "VOID" }>, actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto>> {
   return mutate(actor, context, async (tx) => {
     const replay = await replayMutation<PurchaseCorrectionDto>(tx, actor, context); if (replay) return replay;
     const locked = await lockPurchase(tx, id); const companyId = await currentCompanyId(tx);
@@ -448,14 +483,139 @@ export async function createPurchaseCorrection(id: string, command: z.infer<type
     }
     await tx.purchaseDueDate.updateMany({ where: { purchaseInvoiceId: id }, data: { status: "CANCELLED" } });
     await tx.purchaseInvoice.update({ where: { id }, data: { status: "VOIDED", paymentStatus: "NOT_APPLICABLE", updatedById: actor.id, version: { increment: 1 } } });
-    const value: PurchaseCorrectionDto = { operationId: operation.id, purchaseInvoiceId: id, mode: "VOID", status: "VOIDED", paymentStatus: "NOT_APPLICABLE", reversalEntry, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: stockLines.length };
+    const value: PurchaseCorrectionDto = { operationId: operation.id, purchaseInvoiceId: id, replacementPurchaseInvoiceId: null, mode: "VOID", status: "VOIDED", paymentStatus: "NOT_APPLICABLE", reversalEntry, replacementEntry: null, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: stockLines.length, replacementVatRecordCount: 0, replacementStockMovementCount: 0 };
     await audit(tx, "PURCHASE_CORRECTION_VOIDED", actor, context, { companyId, purchaseInvoiceId: id, operationId: operation.id, reasonCode: command.reasonCode, reversalAccountingEntryId: reversalEntry.id, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: stockLines.length, negativeStockCount });
     await persist(tx, actor, context, 201, value); return { ok: true, status: 201, value };
   }, () => failure(409, "PURCHASE_CORRECTION_CONFLICT", "La compra ha cambiado durante la anulación. Revise su estado y reintente."));
 }
 
+async function createPurchaseReplacement(id: string, command: Extract<z.infer<typeof createPurchaseCorrectionSchema>, { mode: "REPLACE" }>, actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto>> {
+  return mutate(actor, context, async (tx) => {
+    const replay = await replayMutation<PurchaseCorrectionDto>(tx, actor, context); if (replay) return replay;
+    const locked = await lockPurchase(tx, id); const companyId = await currentCompanyId(tx);
+    if (!locked || locked.companyId !== companyId) return failure(404, "PURCHASE_NOT_FOUND", "La factura de compra no existe.");
+    if (locked.version !== command.expectedVersion) return failure(409, "PURCHASE_VERSION_CONFLICT", "La compra ha cambiado. Recarga antes de sustituirla.");
+    if (locked.documentType !== "STANDARD" || locked.status !== "REGISTERED") return failure(409, "PURCHASE_CORRECTION_NOT_ALLOWED", "Solo se puede sustituir una compra ordinaria registrada.");
+    const accountingDate = parseDate(command.accountingDate); const replacementDates = parsePurchaseDates(command.replacement);
+    if (!accountingDate || !replacementDates.ok || accountingDate < locked.issueDate) return failure(409, "PURCHASE_CORRECTION_DATE_INVALID", "Las fechas de la sustitución no son válidas.");
+    const source = await tx.purchaseInvoice.findUniqueOrThrow({ where: { id }, include: {
+      accountingEntry: { include: { fiscalYear: true, lines: { orderBy: { position: "asc" } } } },
+      sourceCorrectionOperation: { select: { id: true } }, rectificationInvoices: { select: { id: true }, take: 1 },
+      dueDates: { include: { allocations: { select: { id: true } }, creditApplications: { select: { id: true } } } },
+      vatRecords: { where: { kind: "DOCUMENT" }, orderBy: { id: "asc" } },
+      lines: { orderBy: { position: "asc" }, include: { stockMovement: true } }
+    } });
+    if (accountingDate < source.accountingDate) return failure(409, "PURCHASE_CORRECTION_DATE_INVALID", "La fecha de sustitución no puede ser anterior a la fecha contable original.");
+    if (source.sourceCorrectionOperation) return failure(409, "PURCHASE_CORRECTION_ALREADY_COMPLETED", "La compra ya tiene una corrección interna.");
+    if (source.rectificationInvoices.length) return failure(409, "PURCHASE_CORRECTION_HAS_RECTIFICATION", "La compra ya tiene una rectificativa del proveedor.");
+    if (source.paymentStatus !== "PENDING" || source.dueDates.some((due) => due.status !== "PENDING" || due.allocations.length || due.creditApplications.length)) return failure(409, "PURCHASE_CORRECTION_FINANCIAL_ACTIVITY", "La compra tiene actividad financiera y no puede sustituirse.");
+    const originalEntry = source.accountingEntry;
+    if (!originalEntry || originalEntry.origin !== "PURCHASE_INVOICE" || originalEntry.status !== "POSTED" || !originalEntry.lines.length || !originalEntry.totalDebit.equals(originalEntry.totalCredit)) return failure(409, "PURCHASE_CORRECTION_ACCOUNTING_INVALID", "El asiento original no permite una sustitución segura.");
+    const fiscalYear = await lockFiscalYear(tx, companyId!, accountingDate);
+    if (!fiscalYear || fiscalYear.id !== originalEntry.fiscalYearId) return failure(409, "PURCHASE_CORRECTION_FISCAL_YEAR_NOT_OPEN", "La sustitución debe pertenecer al mismo ejercicio abierto que la compra.");
+    const supplier = await tx.supplier.findFirst({ where: { id: source.supplierId, companyId: companyId! }, select: { id: true } });
+    if (!supplier) return failure(409, "PURCHASE_SUPPLIER_NOT_AVAILABLE", "El proveedor histórico ya no pertenece a la empresa.");
+
+    const taxIds = [...new Set(command.replacement.lines.map((line) => line.taxRateId))];
+    const itemIds = [...new Set(command.replacement.lines.flatMap((line) => line.catalogItemId ? [line.catalogItemId] : []))];
+    const sourceStockItemIds = source.lines.flatMap((line) => line.stockMovement ? [line.stockMovement.itemId] : []);
+    const itemIdsForLock = [...new Set([...sourceStockItemIds, ...itemIds])].sort();
+    if (itemIdsForLock.length) await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "catalog_items" WHERE "id" IN (${Prisma.join(itemIdsForLock.map((itemId) => Prisma.sql`${itemId}::uuid`))}) ORDER BY "id" FOR UPDATE`);
+    const [taxRates, items] = await Promise.all([tx.catalogTaxRate.findMany({ where: { id: { in: taxIds }, status: "ACTIVE" } }), tx.catalogItem.findMany({ where: { id: { in: itemIds }, status: "ACTIVE" } })]);
+    if (taxRates.length !== taxIds.length) return failure(409, "PURCHASE_TAX_RATE_NOT_AVAILABLE", "Algún tipo de IVA no está activo.");
+    if (items.length !== itemIds.length) return failure(409, "PURCHASE_CATALOG_ITEM_NOT_AVAILABLE", "Algún elemento de catálogo no está activo.");
+    const taxes = new Map(taxRates.map((tax) => [tax.id, tax])); const catalog = new Map(items.map((item) => [item.id, item]));
+    const candidateRows = command.replacement.lines.map((line, index) => {
+      const tax = taxes.get(line.taxRateId)!; const item = line.catalogItemId ? catalog.get(line.catalogItemId)! : null; const accountCode = line.purchaseAccountCode ?? item?.purchaseAccountCode;
+      if (!accountCode) return null; const calculated = calculateInvoiceLine({ ...line, taxRate: tax.rate });
+      return { position: index + 1, catalogItemId: item?.id ?? null, catalogItemCodeSnapshot: item?.code ?? null, catalogItemKindSnapshot: item?.kind ?? null,
+        description: line.description, quantity: new Prisma.Decimal(line.quantity), unitPrice: new Prisma.Decimal(line.unitPrice), discountPercent: new Prisma.Decimal(line.discountPercent),
+        discountAmount: new Prisma.Decimal(line.discountAmount), purchaseAccountCode: accountCode, taxRateId: tax.id, taxRateCodeSnapshot: tax.code,
+        taxRateNameSnapshot: tax.name, taxRateSnapshot: tax.rate, ...calculated };
+    });
+    if (candidateRows.some((row) => !row)) return failure(409, "PURCHASE_ACCOUNT_REQUIRED", "Cada línea necesita una subcuenta de compra.");
+    const replacementRows = candidateRows as NonNullable<(typeof candidateRows)[number]>[];
+    const totals = calculateInvoiceTotals(replacementRows.map((row) => ({ taxRateCode: row.taxRateCodeSnapshot, taxRate: row.taxRateSnapshot, ...row })));
+    const summaries = calculateInvoiceTaxSummaries(replacementRows.map((row) => ({ taxRateCode: row.taxRateCodeSnapshot, taxRate: row.taxRateSnapshot, ...row })));
+    const replacementDues = command.replacement.dueDates.map((due) => ({ ...due, dueDate: parseDate(due.dueDate), amount: new Prisma.Decimal(due.amount) }));
+    if (replacementDues.some((due) => !due.dueDate || due.dueDate < replacementDates.value.issueDate)) return failure(409, "PURCHASE_DUE_DATE_INVALID", "Los vencimientos de la nueva versión no son válidos.");
+    if (!replacementDues.reduce((sum, due) => sum.plus(due.amount), new Prisma.Decimal(0)).equals(totals.total)) return failure(409, "PURCHASE_DUE_DATES_TOTAL_MISMATCH", "Los vencimientos de la nueva versión deben sumar su total.");
+    const requiredCodes = [...new Set([...replacementRows.map((row) => row.purchaseAccountCode), source.supplierAccountingCodeSnapshot, ...(totals.taxAmount.isZero() ? [] : ["472000000"])])];
+    const accounts = await tx.accountingAccount.findMany({ where: { fiscalYearId: fiscalYear.id, code: { in: requiredCodes }, status: "ACTIVE", isPostable: true }, select: { id: true, code: true } });
+    if (accounts.length !== requiredCodes.length) return failure(409, "PURCHASE_ACCOUNT_NOT_AVAILABLE", "Falta alguna subcuenta activa e imputable para contabilizar la nueva versión.");
+    const accountByCode = new Map(accounts.map((account) => [account.code, account.id]));
+    const operationId = randomUUID(); const replacementId = randomUUID();
+    await tx.purchaseCorrectionOperation.create({ data: { id: operationId, companyId: companyId!, sourcePurchaseInvoiceId: id, replacementPurchaseInvoiceId: replacementId,
+      mode: "REPLACE", accountingDate, reasonCode: command.reasonCode, reason: command.reason, sourceVersion: command.expectedVersion, createdById: actor.id } });
+    const reversalSequence = await nextJournalSequence(tx, fiscalYear.id); const year = accountingDate.getUTCFullYear(); const reversalConcept = `Contraasiento sustitución compra ${source.supplierInvoiceNumber}`.slice(0, 240);
+    const reversalEntry = await tx.accountingJournalEntry.create({ data: { fiscalYearId: fiscalYear.id, purchaseCorrectionOperationId: operationId, reversesEntryId: originalEntry.id,
+      year, sequence: reversalSequence, number: `${year}/${String(reversalSequence).padStart(6, "0")}`, accountingDate, concept: reversalConcept, origin: "PURCHASE_CORRECTION_REVERSAL",
+      totalDebit: originalEntry.totalCredit, totalCredit: originalEntry.totalDebit, createdById: actor.id, lines: { create: originalEntry.lines.map((line) => ({ accountId: line.accountId,
+        position: line.position, concept: reversalConcept, debit: line.credit, credit: line.debit })) } }, select: { id: true, number: true } });
+    if (source.vatRecords.length) await tx.purchaseVatRecord.createMany({ data: source.vatRecords.map((vat) => ({ companyId: vat.companyId, supplierId: vat.supplierId,
+      purchaseInvoiceId: vat.purchaseInvoiceId, taxSummaryId: null, accountingEntryId: reversalEntry.id, correctionOperationId: operationId, reversesVatRecordId: vat.id,
+      kind: "INTERNAL_CORRECTION_REVERSAL", supplierInvoiceNumberSnapshot: vat.supplierInvoiceNumberSnapshot, supplierCodeSnapshot: vat.supplierCodeSnapshot,
+      supplierLegalNameSnapshot: vat.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: vat.supplierTaxIdLast4Snapshot, supplierTaxIdEncryptedSnapshot: vat.supplierTaxIdEncryptedSnapshot,
+      issueDate: vat.issueDate, accountingDate, taxRateCode: vat.taxRateCode, taxRate: vat.taxRate, taxableBase: vat.taxableBase.negated(), taxAmount: vat.taxAmount.negated(), total: vat.total.negated() })) });
+
+    await tx.purchaseDueDate.updateMany({ where: { purchaseInvoiceId: id }, data: { status: "CANCELLED" } });
+    await tx.purchaseInvoice.update({ where: { id }, data: { status: "SUPERSEDED", paymentStatus: "NOT_APPLICABLE", updatedById: actor.id, version: { increment: 1 } } });
+    await tx.purchaseInvoice.create({ data: { id: replacementId, companyId: companyId!, supplierId: source.supplierId, documentIdentityId: source.documentIdentityId,
+      supplierCodeSnapshot: source.supplierCodeSnapshot, supplierAccountingCodeSnapshot: source.supplierAccountingCodeSnapshot, supplierLegalNameSnapshot: source.supplierLegalNameSnapshot,
+      supplierTaxIdLast4Snapshot: source.supplierTaxIdLast4Snapshot, supplierTaxIdEncryptedSnapshot: source.supplierTaxIdEncryptedSnapshot,
+      supplierInvoiceNumber: source.supplierInvoiceNumber, supplierInvoiceNumberNormalized: source.supplierInvoiceNumberNormalized, ...replacementDates.value, ...totals,
+      notes: command.replacement.notes, createdById: actor.id, updatedById: actor.id } });
+    await tx.purchaseInvoiceLine.createMany({ data: replacementRows.map((row) => ({ purchaseInvoiceId: replacementId, ...row })) });
+    await tx.purchaseInvoiceTaxSummary.createMany({ data: summaries.map((summary) => ({ purchaseInvoiceId: replacementId, ...summary })) });
+    await tx.purchaseDueDate.createMany({ data: replacementDues.map((due, index) => ({ purchaseInvoiceId: replacementId, position: index + 1, dueDate: due.dueDate!, amount: due.amount, paymentMethod: due.paymentMethod })) });
+    const replacementLines = await tx.purchaseInvoiceLine.findMany({ where: { purchaseInvoiceId: replacementId }, orderBy: { position: "asc" } });
+    const replacementSummaries = await tx.purchaseInvoiceTaxSummary.findMany({ where: { purchaseInvoiceId: replacementId } });
+    const grouped = new Map<string, Prisma.Decimal>(); for (const line of replacementLines) grouped.set(line.purchaseAccountCode, (grouped.get(line.purchaseAccountCode) ?? new Prisma.Decimal(0)).plus(line.lineTaxableBase));
+    const replacementSequence = await nextJournalSequence(tx, fiscalYear.id); const replacementConcept = `Compra sustituida ${source.supplierInvoiceNumber} - ${source.supplierLegalNameSnapshot}`.slice(0, 240);
+    const debitLines = [...grouped].map(([code, amount]) => ({ code, amount })); if (!totals.taxAmount.isZero()) debitLines.push({ code: "472000000", amount: totals.taxAmount });
+    const replacementEntry = await tx.accountingJournalEntry.create({ data: { fiscalYearId: fiscalYear.id, purchaseInvoiceId: replacementId, year, sequence: replacementSequence,
+      number: `${year}/${String(replacementSequence).padStart(6, "0")}`, accountingDate, concept: replacementConcept, origin: "PURCHASE_INVOICE", totalDebit: totals.total, totalCredit: totals.total,
+      createdById: actor.id, lines: { create: [...debitLines.map((line, index) => ({ accountId: accountByCode.get(line.code)!, position: index + 1, concept: replacementConcept,
+        debit: line.amount, credit: new Prisma.Decimal(0) })), { accountId: accountByCode.get(source.supplierAccountingCodeSnapshot)!, position: debitLines.length + 1,
+        concept: replacementConcept, debit: new Prisma.Decimal(0), credit: totals.total }] } }, select: { id: true, number: true } });
+    if (replacementSummaries.length) await tx.purchaseVatRecord.createMany({ data: replacementSummaries.map((summary) => ({ companyId: companyId!, supplierId: source.supplierId,
+      purchaseInvoiceId: replacementId, taxSummaryId: summary.id, accountingEntryId: replacementEntry.id, supplierInvoiceNumberSnapshot: source.supplierInvoiceNumber,
+      supplierCodeSnapshot: source.supplierCodeSnapshot, supplierLegalNameSnapshot: source.supplierLegalNameSnapshot, supplierTaxIdLast4Snapshot: source.supplierTaxIdLast4Snapshot,
+      supplierTaxIdEncryptedSnapshot: source.supplierTaxIdEncryptedSnapshot, issueDate: replacementDates.value.issueDate, accountingDate, taxRateCode: summary.taxRateCode,
+      taxRate: summary.taxRate, taxableBase: summary.taxableBase, taxAmount: summary.taxAmount, total: summary.total })) });
+
+    const sourceStockLines = source.lines.filter((line) => line.stockMovement); const replacementStockLines = replacementLines.filter((line) => line.catalogItemId);
+    let negativeStockCount = 0; let replacementStockMovementCount = 0;
+    for (const line of sourceStockLines.sort((a, b) => a.stockMovement!.itemId.localeCompare(b.stockMovement!.itemId))) {
+      const movement = line.stockMovement!; const item = await tx.catalogItem.findUniqueOrThrow({ where: { id: movement.itemId }, select: { stockCurrent: true } });
+      const quantity = movement.quantity.negated(); const next = item.stockCurrent.plus(quantity); if (next.isNegative()) negativeStockCount += 1;
+      await tx.catalogStockMovement.create({ data: { itemId: movement.itemId, purchaseCorrectionOperationId: operationId, reversesMovementId: movement.id, type: "PURCHASE_INTERNAL_REVERSAL",
+        quantity, previousStock: item.stockCurrent, newStock: next, reason: `Reversión por sustitución ${source.supplierInvoiceNumber}`.slice(0, 500), createdById: actor.id } });
+      await tx.catalogItem.update({ where: { id: movement.itemId }, data: { stockCurrent: next, updatedById: actor.id } });
+    }
+    for (const line of replacementStockLines.sort((a, b) => a.catalogItemId!.localeCompare(b.catalogItemId!))) {
+      const item = await tx.catalogItem.findUniqueOrThrow({ where: { id: line.catalogItemId! } }); if (item.kind !== "PRODUCT" || !item.stockTracked) continue;
+      const next = item.stockCurrent.plus(line.quantity); const unitCost = line.lineTaxableBase.div(line.quantity).toDecimalPlaces(2);
+      await tx.catalogStockMovement.create({ data: { itemId: item.id, purchaseInvoiceLineId: line.id, type: "PURCHASE_RECEIPT", quantity: line.quantity, previousStock: item.stockCurrent,
+        newStock: next, reason: `Entrada por sustitución ${source.supplierInvoiceNumber}`.slice(0, 500), createdById: actor.id } });
+      await tx.catalogItem.update({ where: { id: item.id }, data: { stockCurrent: next, costPrice: unitCost, updatedById: actor.id } }); replacementStockMovementCount += 1;
+    }
+    await tx.purchaseInvoice.update({ where: { id: replacementId }, data: { status: "REGISTERED", registeredAt: new Date(), registeredById: actor.id, updatedById: actor.id, version: { increment: 1 } } });
+    const value: PurchaseCorrectionDto = { operationId, purchaseInvoiceId: id, replacementPurchaseInvoiceId: replacementId, mode: "REPLACE", status: "SUPERSEDED",
+      paymentStatus: "NOT_APPLICABLE", reversalEntry, replacementEntry, vatAdjustmentCount: source.vatRecords.length, stockReversalCount: sourceStockLines.length,
+      replacementVatRecordCount: replacementSummaries.length, replacementStockMovementCount };
+    await audit(tx, "PURCHASE_CORRECTION_REPLACED", actor, context, { companyId, purchaseInvoiceId: id, replacementPurchaseInvoiceId: replacementId, operationId,
+      reasonCode: command.reasonCode, reversalAccountingEntryId: reversalEntry.id, replacementAccountingEntryId: replacementEntry.id, vatAdjustmentCount: source.vatRecords.length,
+      stockReversalCount: sourceStockLines.length, replacementVatRecordCount: replacementSummaries.length, replacementStockMovementCount, negativeStockCount });
+    await persist(tx, actor, context, 201, value); return { ok: true, status: 201, value };
+  }, () => failure(409, "PURCHASE_CORRECTION_CONFLICT", "La compra ha cambiado durante la sustitución. Revise su estado y reintente."));
+}
+
 export async function readPurchaseCorrectionReplay(actor: SessionUser, context: MutationContext): Promise<PurchaseResult<PurchaseCorrectionDto> | null> {
-  return prisma.$transaction((tx) => replayMutation<PurchaseCorrectionDto>(tx, actor, context));
+  const replay = await prisma.$transaction((tx) => replayMutation<unknown>(tx, actor, context));
+  if (!replay || !replay.ok) return replay;
+  const parsed = purchaseCorrectionReplaySchema.safeParse(replay.value);
+  return parsed.success ? { ...replay, value: parsed.data } : failure(409, "IDEMPOTENCY_REPLAY_INVALID", "La respuesta idempotente almacenada no es compatible con el contrato actual.");
 }
 
 export async function listSupplierDueDates(command: z.infer<typeof listSupplierDueDatesSchema>, actor: SessionUser): Promise<{ dueDates: SupplierDueDateItem[] }> {
@@ -506,7 +666,7 @@ function parseDate(value: string): Date | null { const date = new Date(`${value}
 function formatDate(value: Date): string { return value.toISOString().slice(0, 10); }
 function normalizeInvoiceNumber(value: string): string { return value.trim().toLocaleUpperCase("es-ES").replace(/\s+/g, " "); }
 function mapListItem(row: { id: string; supplierInvoiceNumber: string; supplierCodeSnapshot: string; supplierLegalNameSnapshot: string; documentType: "STANDARD" | "RECTIFICATION"; status: PurchaseStatus; paymentStatus: PurchasePaymentStatus; issueDate: Date; accountingDate: Date; total: Prisma.Decimal; version: number }): PurchaseListItem { return { id: row.id, supplierInvoiceNumber: row.supplierInvoiceNumber, supplierCode: row.supplierCodeSnapshot, supplierName: row.supplierLegalNameSnapshot, documentType: row.documentType, status: row.status, paymentStatus: row.paymentStatus, issueDate: formatDate(row.issueDate), accountingDate: formatDate(row.accountingDate), total: row.total.toFixed(2), version: row.version }; }
-function mapDetail(row: PurchaseRecord): PurchaseDetail { return { ...mapListItem(row), supplierId: row.supplierId, receivedDate: formatDate(row.receivedDate), operationDate: formatDate(row.operationDate), notes: row.notes, subtotal: row.subtotal.toFixed(2), discountTotal: row.discountTotal.toFixed(2), taxableBase: row.taxableBase.toFixed(2), taxAmount: row.taxAmount.toFixed(2), registeredAt: row.registeredAt?.toISOString() ?? null, accountingEntry: row.accountingEntry, rectificationReason: row.rectificationReason, rectifiesPurchaseInvoice: row.rectifiesPurchaseInvoice, rectificationInvoices: row.rectificationInvoices, lines: row.lines.map((line) => ({ id: line.id, position: line.position, catalogItemId: line.catalogItemId, catalogItemCode: line.catalogItemCodeSnapshot, description: line.description, quantity: line.quantity.toFixed(3), unitPrice: line.unitPrice.toFixed(2), discountPercent: line.discountPercent.toFixed(2), discountAmount: line.discountAmount.toFixed(2), purchaseAccountCode: line.purchaseAccountCode, taxRateId: line.taxRateId, taxRateCode: line.taxRateCodeSnapshot, taxRate: line.taxRateSnapshot.toFixed(2), taxableBase: line.lineTaxableBase.toFixed(2), taxAmount: line.lineTaxAmount.toFixed(2), total: line.lineTotal.toFixed(2) })), dueDates: row.dueDates.map((due) => { const allocated = due.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = due.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: due.id, position: due.position, dueDate: formatDate(due.dueDate), amount: due.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), creditedAmount: credited.toFixed(2), pendingAmount: Prisma.Decimal.max(due.amount.minus(allocated).minus(credited), 0).toFixed(2), paymentMethod: due.paymentMethod, status: due.status }; }) }; }
+function mapDetail(row: PurchaseRecord): PurchaseDetail { return { ...mapListItem(row), supplierId: row.supplierId, receivedDate: formatDate(row.receivedDate), operationDate: formatDate(row.operationDate), notes: row.notes, subtotal: row.subtotal.toFixed(2), discountTotal: row.discountTotal.toFixed(2), taxableBase: row.taxableBase.toFixed(2), taxAmount: row.taxAmount.toFixed(2), registeredAt: row.registeredAt?.toISOString() ?? null, accountingEntry: row.accountingEntry, rectificationReason: row.rectificationReason, rectifiesPurchaseInvoice: row.rectifiesPurchaseInvoice, rectificationInvoices: row.rectificationInvoices, supersededByPurchaseInvoice: row.sourceCorrectionOperation?.replacementPurchaseInvoice ?? null, supersedesPurchaseInvoice: row.replacementCorrectionOperation?.sourcePurchaseInvoice ?? null, lines: row.lines.map((line) => ({ id: line.id, position: line.position, catalogItemId: line.catalogItemId, catalogItemCode: line.catalogItemCodeSnapshot, description: line.description, quantity: line.quantity.toFixed(3), unitPrice: line.unitPrice.toFixed(2), discountPercent: line.discountPercent.toFixed(2), discountAmount: line.discountAmount.toFixed(2), purchaseAccountCode: line.purchaseAccountCode, taxRateId: line.taxRateId, taxRateCode: line.taxRateCodeSnapshot, taxRate: line.taxRateSnapshot.toFixed(2), taxableBase: line.lineTaxableBase.toFixed(2), taxAmount: line.lineTaxAmount.toFixed(2), total: line.lineTotal.toFixed(2) })), dueDates: row.dueDates.map((due) => { const allocated = due.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = due.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: due.id, position: due.position, dueDate: formatDate(due.dueDate), amount: due.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), creditedAmount: credited.toFixed(2), pendingAmount: Prisma.Decimal.max(due.amount.minus(allocated).minus(credited), 0).toFixed(2), paymentMethod: due.paymentMethod, status: due.status }; }) }; }
 function mapDueDate(row: Prisma.PurchaseDueDateGetPayload<{ include: { purchaseInvoice: true; allocations: { select: { amount: true } }; creditApplications: { select: { amount: true } } } }>): SupplierDueDateItem { const allocated = row.allocations.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); const credited = row.creditApplications.reduce((sum, item) => sum.plus(item.amount), new Prisma.Decimal(0)); return { id: row.id, purchaseInvoiceId: row.purchaseInvoiceId, supplierId: row.purchaseInvoice.supplierId, supplierCode: row.purchaseInvoice.supplierCodeSnapshot, supplierName: row.purchaseInvoice.supplierLegalNameSnapshot, supplierInvoiceNumber: row.purchaseInvoice.supplierInvoiceNumber, dueDate: formatDate(row.dueDate), amount: row.amount.toFixed(2), allocatedAmount: allocated.toFixed(2), creditedAmount: credited.toFixed(2), pendingAmount: Prisma.Decimal.max(row.amount.minus(allocated).minus(credited), 0).toFixed(2), paymentMethod: row.paymentMethod, status: row.status }; }
 function failure(status: 404 | 409 | 503, code: string, message: string): Failure { return { ok: false, status, error: { code, message } }; }
 function scopedKey(actor: SessionUser, context: MutationContext, companyId: string | null): string { return `v2:purchases:${createHash("sha256").update(`${companyId ?? "uninitialized"}:${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }

@@ -113,6 +113,40 @@ describe("supplier purchases and payments", () => {
     expect(await prisma.purchaseCorrectionOperation.count()).toBe(0);
   });
 
+  it("replaces an unpaid purchase with a registered version under the same document identity", async () => {
+    const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const item = await prisma.catalogItem.create({ data: { code: "REPLACE-1", kind: "PRODUCT", name: "Producto sustituible", unitName: "Unidades", salePrice: "20", costPrice: "8", taxRateId: tax.id, taxRate: tax.rate, purchaseAccountCode: "600000000", stockTracked: true, stockCurrent: "2", stockMinimum: "0", createdById: actor.id } });
+    const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-REPLACE-01", issueDate: "2026-07-01", receivedDate: "2026-07-02", operationDate: "2026-07-01", accountingDate: "2026-07-02", notes: null }, actor, context("replace-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: item.id, description: "Producto original", quantity: "3", unitPrice: "8", discountPercent: "0", discountAmount: "0", purchaseAccountCode: null, taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, context("replace-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, context("replace-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("replace-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    const command = { mode: "REPLACE" as const, expectedVersion: registered.value.version, accountingDate: "2026-07-20", reasonCode: "WRONG_AMOUNT" as const, reason: "Cantidad recibida corregida", confirmation: "REPLACE_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY" as const,
+      replacement: { issueDate: "2026-07-01", receivedDate: "2026-07-02", operationDate: "2026-07-01", accountingDate: "2026-07-20", notes: "Versión corregida", lines: [{ catalogItemId: item.id, description: "Producto corregido", quantity: "5", unitPrice: "10", discountPercent: "0", discountAmount: "0", purchaseAccountCode: null, taxRateId: tax.id }], dueDates: [{ dueDate: "2026-08-15", amount: "60.50", paymentMethod: "BANK_TRANSFER" as const }] } };
+    const result = await createPurchaseCorrection(created.value.id, command, actor, context("replace", `correct:${created.value.id}`, command));
+    expect(result).toMatchObject({ ok: true, status: 201, value: { mode: "REPLACE", purchaseInvoiceId: created.value.id, status: "SUPERSEDED", replacementVatRecordCount: 1, replacementStockMovementCount: 1 } });
+    if (!result.ok || !result.value.replacementPurchaseInvoiceId || !result.value.replacementEntry) throw new Error("replacement failed");
+    const [source, replacement] = await Promise.all([prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true } }), prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: result.value.replacementPurchaseInvoiceId }, include: { dueDates: true } })]);
+    expect(source).toMatchObject({ status: "SUPERSEDED", paymentStatus: "NOT_APPLICABLE", documentIdentityId: replacement.documentIdentityId });
+    expect(source.dueDates.every((due) => due.status === "CANCELLED")).toBe(true);
+    expect(replacement).toMatchObject({ status: "REGISTERED", paymentStatus: "PENDING", supplierInvoiceNumberNormalized: source.supplierInvoiceNumberNormalized, total: expect.objectContaining({}) });
+    expect(replacement.total.toFixed(2)).toBe("60.50"); expect(replacement.dueDates[0]?.amount.toFixed(2)).toBe("60.50");
+    expect((await prisma.catalogItem.findUniqueOrThrow({ where: { id: item.id } })).stockCurrent.toFixed(3)).toBe("7.000");
+    expect(await prisma.accountingJournalEntry.count({ where: { OR: [{ purchaseCorrectionOperationId: result.value.operationId }, { purchaseInvoiceId: replacement.id }] } })).toBe(2);
+    expect(await prisma.purchaseVatRecord.count({ where: { purchaseInvoiceId: replacement.id, kind: "DOCUMENT" } })).toBe(1);
+    expect(await prisma.purchaseInvoice.count({ where: { documentIdentityId: source.documentIdentityId, status: { in: ["DRAFT", "REGISTERED"] } } })).toBe(1);
+    const secondCommand = { ...command, expectedVersion: replacement.version, accountingDate: "2026-07-21", reasonCode: "WRONG_DATE" as const,
+      replacement: { ...command.replacement, accountingDate: "2026-07-21", lines: [{ ...command.replacement.lines[0]!, quantity: "4" }], dueDates: [{ ...command.replacement.dueDates[0]!, amount: "48.40" }] } };
+    const second = await createPurchaseCorrection(replacement.id, secondCommand, actor, context("replace-again", `correct:${replacement.id}`, secondCommand));
+    expect(second).toMatchObject({ ok: true, value: { mode: "REPLACE", purchaseInvoiceId: replacement.id, status: "SUPERSEDED" } }); if (!second.ok || !second.value.replacementPurchaseInvoiceId) throw new Error("second replacement failed");
+    const current = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: second.value.replacementPurchaseInvoiceId }, include: { dueDates: true } });
+    expect(current).toMatchObject({ status: "REGISTERED", documentIdentityId: source.documentIdentityId }); expect((await prisma.catalogItem.findUniqueOrThrow({ where: { id: item.id } })).stockCurrent.toFixed(3)).toBe("6.000");
+    const payment = { supplierId: supplier.id, paymentDate: "2026-07-25", paymentMethod: "BANK_TRANSFER" as const, reference: "REPLACE-PAY", notes: null, allocations: [{ dueDateId: current.dueDates[0]!.id, amount: "1.00" }] };
+    expect((await registerSupplierPayment(payment, actor, context("replace-pay", "pay", payment))).ok).toBe(true);
+    expect((await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: current.id } })).paymentStatus).toBe("PARTIALLY_PAID");
+  });
+
   it("creates an append-only full supplier rectification and reverses accounting, VAT, stock and due dates", async () => {
     const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
     const item = await prisma.catalogItem.create({ data: { code: "RECT-1", kind: "PRODUCT", name: "Producto rectificable", unitName: "Unidades", salePrice: "20", costPrice: "8", taxRateId: tax.id, taxRate: tax.rate, purchaseAccountCode: "600000000", stockTracked: true, stockCurrent: "2", stockMinimum: "0", createdById: actor.id } });

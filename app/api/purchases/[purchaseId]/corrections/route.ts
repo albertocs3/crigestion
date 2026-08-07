@@ -9,7 +9,7 @@ const paramsSchema = z.object({ purchaseId: z.string().uuid() });
 export const runtime = "nodejs";
 
 export async function POST(request: Request, context: { params: Promise<{ purchaseId: string }> }) {
-  const authorization = await authorizePurchaseMutation(request, "Purchases.Correct", 2_048);
+  const authorization = await authorizePurchaseMutation(request, "Purchases.Correct", 262_144);
   if (!authorization.ok) return authorization.response;
   const params = paramsSchema.safeParse(await context.params);
   if (!params.success) return jsonResponse(request, validationError(params.error.flatten()), { status: 422 });
@@ -52,8 +52,12 @@ async function consumeRateLimit(userId: string, targetFingerprint: string, corre
 }
 
 async function auditDenied(userId: string, targetFingerprint: string, stableCode: string, correlationId: string): Promise<void> {
-  await prisma.auditEvent.create({ data: { eventType: "PURCHASE_CORRECTION_DENIED", actorType: "USER",
-    payload: { actorUserId: userId, targetFingerprint, stableCode, correlationId } } });
+  try {
+    await prisma.auditEvent.create({ data: { eventType: "PURCHASE_CORRECTION_DENIED", actorType: "USER",
+      payload: { actorUserId: userId, targetFingerprint, stableCode, correlationId } } });
+  } catch {
+    console.error("PURCHASE_CORRECTION_DENIAL_AUDIT_FAILED", { correlationId });
+  }
 }
 
 function fingerprintTarget(purchaseId: string): string {

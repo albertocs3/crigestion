@@ -189,9 +189,11 @@ validado. Solo se emite un evento de exceso por usuario y ventana.
 }
 ```
 
-En este corte `VOID` solo admite el motivo terminal `DUPLICATE_DOCUMENT`; los
-errores de proveedor, fecha, importe o impuesto requieren la futura sustitución
-`REPLACE` y se rechazan. Solo admite compras `STANDARD/REGISTERED/PENDING`, sin pagos, aplicaciones de
+`VOID` solo admite el motivo terminal `DUPLICATE_DOCUMENT`. `REPLACE` admite
+`DATA_ENTRY_ERROR`, `WRONG_DATE`, `WRONG_AMOUNT`, `WRONG_TAX` y `OTHER`; este
+último exige explicación. `WRONG_SUPPLIER` permanece fuera porque esta versión
+conserva proveedor, número normalizado e identidad documental. Solo admite
+compras `STANDARD/REGISTERED/PENDING`, sin pagos, aplicaciones de
 crédito ni rectificativa y dentro del mismo ejercicio abierto. Una transacción
 serializable crea `PurchaseCorrectionOperation`, un contraasiento
 `PURCHASE_CORRECTION_REVERSAL`, ajustes negativos de IVA y movimientos
@@ -199,6 +201,14 @@ serializable crea `PurchaseCorrectionOperation`, un contraasiento
 `VOIDED/NOT_APPLICABLE`. Documento, asiento, IVA y movimientos originales no se
 modifican. Constraints diferidas exigen que todas las evidencias existan antes
 del commit y la operación no admite `UPDATE` ni `DELETE`.
+
+Para `REPLACE`, el cuerpo usa la misma ruta y añade `replacement` con fechas,
+notas, entre 1 y 200 líneas y entre 1 y 60 vencimientos. La fecha contable del
+reemplazo debe coincidir con `accountingDate`; los vencimientos deben sumar el
+total calculado. El límite del cuerpo es 256 KiB. La respuesta `201` identifica
+la operación, la versión sustituida y la nueva versión registrada, los dos
+asientos y los recuentos de evidencias. La versión origen queda
+`SUPERSEDED/NOT_APPLICABLE` y solo la nueva permanece `REGISTERED/PENDING`.
 
 Errores principales: `PURCHASE_NOT_FOUND`, `PURCHASE_VERSION_CONFLICT`,
 `PURCHASE_CORRECTION_NOT_ALLOWED`, `PURCHASE_CORRECTION_FINANCIAL_ACTIVITY`,

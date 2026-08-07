@@ -121,6 +121,27 @@ describe("purchase HTTP contracts", () => {
     expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["targetFingerprint"], equals: targetFingerprint } } })).toBe(1);
     expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["purchaseInvoiceId"], equals: limitedId } } })).toBe(0);
   });
+
+  it("replaces an unpaid purchase through the protected correction contract", async () => {
+    const supplierId = await createTestSupplier(); const actor = testActor; const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const created = await createPurchase({ supplierId, supplierInvoiceNumber: "HTTP-REPLACE", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, purchaseContext("http-replace-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio original", quantity: "1", unitPrice: "100", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, purchaseContext("http-replace-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, purchaseContext("http-replace-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, purchaseContext("http-replace-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken(); const key = randomUUID();
+    const body = { mode: "REPLACE", expectedVersion: registered.value.version, accountingDate: "2026-07-20", reasonCode: "WRONG_AMOUNT", reason: null, confirmation: "REPLACE_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY", replacement: { issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-20", notes: null, lines: [{ catalogItemId: null, description: "Servicio corregido", quantity: "1", unitPrice: "120", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }], dueDates: [{ dueDate: "2026-08-15", amount: "145.20", paymentMethod: "BANK_TRANSFER" }] } };
+    const routeContext = { params: Promise.resolve({ purchaseId: created.value.id }) };
+    const response = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, body, { csrf, idempotency: key }), routeContext);
+    expect(response.status).toBe(201); const value = await response.json(); expect(value).toMatchObject({ mode: "REPLACE", purchaseInvoiceId: created.value.id, status: "SUPERSEDED", replacementVatRecordCount: 1 });
+    expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, body, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) })).status).toBe(201);
+    expect((await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: value.replacementPurchaseInvoiceId } })).total.toFixed(2)).toBe("145.20");
+    expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, { ...body, reasonCode: "OTHER", reason: null }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) })).status).toBe(422);
+    expect((await purchaseCorrectionPost(jsonRequest(`/api/purchases/${created.value.id}/corrections`, { ...body, confirmation: "WRONG" }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) })).status).toBe(422);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "PURCHASE_CORRECTION_REPLACED", payload: { path: ["operationId"], equals: value.operationId } } });
+    expect(JSON.stringify(audit.payload)).not.toContain("Servicio corregido"); expect(JSON.stringify(audit.payload)).not.toContain("145.20");
+  });
 });
 
 function configure() { process.env.APP_BASE_URL = "http://localhost:3000"; process.env.AUTH_COOKIE_SECURE = "false"; process.env.SENSITIVE_DATA_ACTIVE_KEY_ID = "test-key"; process.env.SENSITIVE_DATA_KEYS = JSON.stringify({ "test-key": Buffer.alloc(32, 5).toString("base64") }); process.env.SENSITIVE_DATA_LOOKUP_SECRET = "supplier-lookup-secret-at-least-32-characters"; }

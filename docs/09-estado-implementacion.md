@@ -235,7 +235,16 @@ El siguiente corte inicia la sustitución interna versionada con las migraciones
 única por empresa, proveedor y número normalizado; el histórico podrá conservar
 versiones `SUPERSEDED` sin liberar el número para otra factura independiente y
 un índice parcial impide más de una versión borrador o registrada. El endpoint
-`REPLACE` y sus efectos económicos completos continúan en construcción.
+`REPLACE` queda completado en la migración 130 y en el caso de uso serializable:
+contraasienta la versión origen, crea y contabiliza la versión sustituta,
+revierte y regenera IVA y stock, cancela y recrea vencimientos y valida toda la
+cadena mediante constraints diferidas antes del commit. La primera versión
+conserva proveedor y número documental y limita el cuerpo HTTP a 256 KiB.
+Las 130 migraciones se aplicaron desde cero; las 18 pruebas dirigidas cubren
+VOID, REPLACE, replay HTTP, sustituciones sucesivas y pago posterior de la
+versión vigente. Prisma, TypeScript, ESLint, build, auditoría npm y smoke local
+HTTP 200 finalizaron correctamente. Las revisiones independientes de datos y
+seguridad no dejaron hallazgos P0/P1 abiertos.
 
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el

@@ -390,9 +390,10 @@ Una factura registrada puede corregirse mientras el ejercicio esté abierto.
 > Estado actual: una compra registrada sigue siendo inmutable. La anulación
 > interna de una compra ordinaria completamente impagada ya conserva el
 > documento y añade contraasiento, ajustes inversos de IVA y stock y auditoría
-> dentro de una operación append-only. La sustitución por una nueva versión
-> corregida continúa pendiente y no reutilizará una rectificativa del proveedor.
-> La base de persistencia ya asigna a cada número de factura una identidad
+> dentro de una operación append-only. La sustitución interna crea ya una nueva
+> versión registrada, contraasienta la anterior y regenera IVA, stock y
+> vencimientos sin reutilizar una rectificativa del proveedor.
+> La base de persistencia asigna a cada número de factura una identidad
 > documental estable, admite el estado histórico `SUPERSEDED` y garantiza en
 > PostgreSQL que solo exista una versión borrador o registrada por identidad.
 
@@ -402,6 +403,10 @@ La corrección:
 - Crea un asiento nuevo.
 - Revierte y regenera movimientos de stock.
 - Conserva todas las versiones.
+- Solo permite sustitución si la compra sigue completamente impagada y el
+  ejercicio de ambas evidencias permanece abierto.
+- La primera versión de `REPLACE` conserva proveedor y número; una corrección de
+  proveedor requiere un flujo posterior específico.
 
 Una factura puede anularse únicamente si no tiene pagos.
 
