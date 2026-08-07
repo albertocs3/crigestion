@@ -59,9 +59,15 @@ describe("subscription HTTP contracts", () => {
       { params: Promise.resolve({ requestId: "no" }) });
     expect(invalidReplacementDetail.status).toBe(422);
     expect(invalidReplacementDetail.headers.get("cache-control")).toContain("private, no-store");
-    const missingReplacementDetail = await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${requestId}`), reversalContext);
+    const lookupCorrelationId = randomUUID();
+    const missingReplacementDetail = await waiverEvidenceReplacementGet(new Request(`http://localhost/api/accounting/waiver-evidence-replacements/${requestId}`,
+      { headers: { "X-Correlation-ID": lookupCorrelationId } }), reversalContext);
     expect(missingReplacementDetail.status).toBe(404);
     expect(missingReplacementDetail.headers.get("vary")).toBe("Cookie");
+    const lookupAudits = await prisma.auditEvent.findMany({ where: { eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LOOKUP_DENIED",
+      payload: { path: ["correlationId"], equals: lookupCorrelationId } }, select: { payload: true } });
+    expect(lookupAudits).toHaveLength(1);
+    expect(JSON.stringify(lookupAudits[0]!.payload)).not.toContain(requestId);
     const reversalBody = { expectedReviewVersion: 4, reasonCode: "ACCOUNTING_ERROR", reasonDetail: "Corrección contable suficientemente justificada", accountingDate: todayDate() };
     expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody, { csrf, origin: "https://evil.example" }), reviewContext)).status).toBe(403);
     expect((await waiverEvidenceReversalRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-reversals`, reversalBody), reviewContext)).status).toBe(403);

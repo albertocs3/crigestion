@@ -211,6 +211,14 @@ compara la evidencia revertida con las nuevas lineas y entrega una huella
 canonica; aprobar exige devolver esa misma huella y un actor independiente. La
 aprobacion crea un unico asiento `POSTED` y una evidencia append-only contigua.
 
+La comprobacion de replay precede a las reglas contables: una clave ya usada
+con otro cuerpo devuelve siempre `409 IDEMPOTENCY_KEY_REUSED`, aunque la nueva
+propuesta este descuadrada. Una clave nueva con debe y haber incoherentes
+devuelve `422 WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED`, consume cuota y deja
+una auditoria de denegacion, pero no solicitud, lineas, evento ni replay.
+Los intentos sobre UUID inexistentes o ajenos conservan el mismo `404` opaco y
+la auditoria guarda una huella versionada del UUID, nunca el valor consultado.
+
 Las mutaciones requieren origen permitido, CSRF, JSON e `Idempotency-Key`. Se
 ejecutan en transaccion `Serializable` con hasta tres intentos completos ante
 `P2034` o PostgreSQL `40001`. Cada intento fallido revierte cuota, auditoria,

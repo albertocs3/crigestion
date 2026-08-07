@@ -778,6 +778,13 @@ describe("subscriptions application service", () => {
         { accountId: journalAccounts[0]!.id, concept: "Debe corregido", debit: "61.00", credit: "0.00" },
         { accountId: journalAccounts[1]!.id, concept: "Haber corregido", debit: "0.00", credit: "61.00" }
       ] };
+    const unbalancedReplacementCommand = { ...replacementCommand, lines: [
+      replacementCommand.lines[0]!, { ...replacementCommand.lines[1]!, credit: "60.00" }
+    ] };
+    expect(await requestWaiverEvidenceReplacement(fiscalReview.id, unbalancedReplacementCommand, reversalApprover,
+      waiverReplacementRequestContext("unbalanced", fiscalReview.id, unbalancedReplacementCommand))).toMatchObject({
+      ok: false, status: 422, error: { code: "WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED" }
+    });
     const replacementRequestContext = waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand);
     const [requestedReplacement, concurrentRequestReplay] = await Promise.all([
       requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover, replacementRequestContext),
@@ -787,6 +794,10 @@ describe("subscriptions application service", () => {
       sourceEvidenceId: accountingEvidence.id, reversalRequestId: requestedReversal.value.id } });
     if (!requestedReplacement.ok) throw new Error("WAIVER_REPLACEMENT_REQUEST_EXPECTED");
     expect(concurrentRequestReplay).toEqual(requestedReplacement);
+    expect(await requestWaiverEvidenceReplacement(fiscalReview.id, unbalancedReplacementCommand, reversalApprover,
+      waiverReplacementRequestContext("request", fiscalReview.id, unbalancedReplacementCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" }
+    });
     const replacementDetail = await getWaiverEvidenceReplacementDetail(requestedReplacement.value.id, otherReviewer,
       { correlationId: "accounting-waiver-replacement-view" });
     expect(replacementDetail).toMatchObject({
@@ -835,6 +846,23 @@ describe("subscriptions application service", () => {
     expect(approvedReplacement).toMatchObject({ ok: true, status: 200, value: { status: "COMPLETED", version: 2,
       approvedById: otherReviewer.id, resultingEvidence: { sequence: 2 } } });
     expect(concurrentApprovalReplay).toEqual(approvedReplacement);
+    expect(await approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, otherReviewer,
+      waiverReplacementApprovalContext("resolved-again", requestedReplacement.value.id, replacementApproval))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_PENDING" }
+    });
+    const missingReplacementId = randomUUID();
+    expect(await approveWaiverEvidenceReplacement(missingReplacementId, replacementApproval, otherReviewer,
+      waiverReplacementApprovalContext("missing", missingReplacementId, replacementApproval))).toMatchObject({
+      ok: false, status: 404, error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" }
+    });
+    expect(await rejectWaiverEvidenceReplacement(missingReplacementId, rejectionCommand, otherReviewer,
+      waiverReplacementRejectionContext("missing", missingReplacementId, rejectionCommand))).toMatchObject({
+      ok: false, status: 404, error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" }
+    });
+    expect(await cancelWaiverEvidenceReplacement(missingReplacementId, cancellationCommand, reversalApprover,
+      waiverReplacementCancellationContext("missing", missingReplacementId, cancellationCommand))).toMatchObject({
+      ok: false, status: 404, error: { code: "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND" }
+    });
     const replacementEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { waiverReplacementRequestId: requestedReplacement.value.id },
       include: { lines: { orderBy: { position: "asc" } } } });
     expect(replacementEntry).toMatchObject({ origin: "WAIVER_REGULARIZATION_REPLACEMENT", status: "POSTED", totalDebit: expect.anything(), totalCredit: expect.anything() });
@@ -852,6 +880,35 @@ describe("subscriptions application service", () => {
     const replacementAudit = JSON.stringify(await prisma.auditEvent.findMany({ where: { eventType: { startsWith: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT" } }, select: { payload: true } }));
     expect(replacementAudit).not.toContain(replacementCommand.reasonDetail);
     expect(replacementAudit).not.toContain("Debe corregido"); expect(replacementAudit).not.toContain("61.00");
+    const idempotencyConflictAudits = await prisma.auditEvent.findMany({ where: {
+      eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REQUEST_DENIED",
+      AND: [{ payload: { path: ["denialReason"], equals: "IDEMPOTENCY_KEY_REUSED" } },
+        { payload: { path: ["companyId"], equals: companyId } }]
+    }, select: { payload: true } });
+    expect(idempotencyConflictAudits).toHaveLength(1);
+    expect(JSON.stringify(idempotencyConflictAudits)).not.toContain(fiscalReview.id);
+    const unbalancedAudits = await prisma.auditEvent.findMany({ where: {
+      eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REQUEST_DENIED", AND: [
+        { payload: { path: ["denialReason"], equals: "PROPOSAL_NOT_BALANCED" } },
+        { payload: { path: ["companyId"], equals: companyId } }
+      ]
+    }, select: { payload: true } });
+    expect(unbalancedAudits).toHaveLength(1);
+    expect(JSON.stringify(unbalancedAudits)).not.toContain(fiscalReview.id);
+    expect(JSON.stringify(unbalancedAudits)).not.toContain(replacementCommand.reasonDetail);
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", AND: [
+      { payload: { path: ["denialReason"], equals: "REQUEST_NOT_PENDING" } }, { payload: { path: ["companyId"], equals: companyId } }
+    ] } })).toBe(1);
+    const missingReplacementAuditRows = await prisma.auditEvent.findMany({ where: {
+      eventType: { in: ["ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REJECTION_DENIED",
+        "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_CANCELLATION_DENIED"] }, AND: [
+        { payload: { path: ["denialReason"], equals: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE" } },
+        { payload: { path: ["companyId"], equals: companyId } }
+      ]
+    }, select: { eventType: true, payload: true } });
+    expect(missingReplacementAuditRows).toHaveLength(3);
+    const missingReplacementAudit = JSON.stringify(missingReplacementAuditRows);
+    expect(missingReplacementAudit).not.toContain(missingReplacementId);
     await expect(prisma.accountingJournalEntry.update({ where: { id: reversalEntry.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
     await expect(prisma.accountingJournalLine.update({ where: { id: reversalEntry.lines[0]!.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
     const ordinaryEntry = await createManualJournalEntry({ accountingDate: todayDate(), concept: "Asiento ordinario independiente", lines: [

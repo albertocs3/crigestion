@@ -84,7 +84,7 @@ type FailureCode = "WAIVER_REVIEW_NOT_FOUND" | "WAIVER_EVIDENCE_NOT_REPLACEABLE"
   | "WAIVER_REPLACEMENT_NOT_CANCELLABLE" | "WAIVER_REPLACEMENT_RATE_LIMITED" | "IDEMPOTENCY_KEY_REUSED"
   | "WAIVER_REPLACEMENT_BUSY";
 type Result = { ok: true; status: 200 | 201; value: WaiverEvidenceReplacementDto }
-  | { ok: false; status: 404 | 409 | 429 | 503; error: { code: FailureCode; message: string } };
+  | { ok: false; status: 404 | 409 | 422 | 429 | 503; error: { code: FailureCode; message: string } };
 
 const requestSelect = {
   id: true, reviewId: true, sourceEvidenceId: true, reversalRequestId: true, status: true, version: true,
@@ -134,7 +134,12 @@ export async function getWaiverEvidenceReplacementDetail(
       lines: { orderBy: { position: "asc" }, select: { accountId: true, position: true, concept: true, debit: true, credit: true,
         account: { select: { code: true, name: true, status: true, isPostable: true } } } }
     } });
-    if (!record?.reversalRequest.reversalEntry) return null;
+    if (!record?.reversalRequest.reversalEntry) {
+      await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_PROPOSAL_LOOKUP_DENIED", actor, context, {
+        companyId, requestIdHash: opaqueLookupHash("proposal-detail", requestId), denialReason: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE"
+      });
+      return null;
+    }
     const blockers: WaiverEvidenceReplacementDetailDto["eligibility"]["blockers"] = [];
     if (record.status !== "REQUESTED") blockers.push("REQUEST_NOT_PENDING");
     if (record.requestedById === actor.id) blockers.push("REQUESTER_CANNOT_APPROVE");
@@ -172,13 +177,23 @@ export async function getWaiverEvidenceReplacementDetail(
 export async function requestWaiverEvidenceReplacement(
   reviewId: string, command: RequestWaiverEvidenceReplacementCommand, actor: SessionUser, context: MutationContext
 ): Promise<Result> {
-  const normalized = normalizeLines(command.lines);
-  if (!normalized) return failure(409, "WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED", "La propuesta debe estar cuadrada y contener debe y haber.");
   try {
     const result = await runWaiverReplacementSerializable(async (tx) => {
       const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
-      const replay = await replayMutation(tx, context, 201); if (replay) return replay;
+      const replay = await replayMutation(tx, context, 201);
+      if (replay?.kind === "idempotency-conflict") await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REQUEST_DENIED", actor, context, {
+        companyId, reviewIdHash: opaqueLookupHash("request-idempotency", reviewId), denialReason: "IDEMPOTENCY_KEY_REUSED"
+      });
+      if (replay) return replay;
       if (await consumeRateLimit(tx, companyId, actor, "request", context)) return { kind: "rate-limited" as const };
+      const normalized = normalizeLines(command.lines);
+      if (!normalized) {
+        await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REQUEST_DENIED", actor, context, {
+          companyId, reviewIdHash: opaqueLookupHash("unbalanced-proposal", reviewId),
+          denialReason: "PROPOSAL_NOT_BALANCED", lineCount: command.lines.length
+        });
+        return { kind: "proposal-not-balanced" as const };
+      }
       await tx.$queryRaw`SELECT "id" FROM "subscription_renewal_waiver_reviews" WHERE "id" = ${reviewId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`;
       const review = await tx.subscriptionRenewalWaiverReview.findFirst({ where: { id: reviewId, companyId }, select: {
         id: true, status: true, version: true, decision: true, openedById: true, closedById: true,
@@ -190,7 +205,12 @@ export async function requestWaiverEvidenceReplacement(
           } }
         } }
       } });
-      if (!review) return { kind: "review-not-found" as const };
+      if (!review) {
+        await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REQUEST_DENIED", actor, context, {
+          companyId, reviewIdHash: opaqueLookupHash("waiver-review", reviewId), denialReason: "REVIEW_NOT_FOUND_OR_NOT_VISIBLE"
+        });
+        return { kind: "review-not-found" as const };
+      }
       const source = review.evidences[0]; const reversal = source?.reversalRequests[0];
       if (review.status !== "CLOSED" || review.version !== command.expectedReviewVersion
         || review.decision !== "MANUAL_ACCOUNTING_ACTION_REQUIRED" || !source || !reversal?.reversalEntry
@@ -242,7 +262,11 @@ export async function approveWaiverEvidenceReplacement(
 ): Promise<Result> {
   const result = await runWaiverReplacementSerializable(async (tx) => {
     const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
-    const replay = await replayMutation(tx, context, 200); if (replay) return replay;
+    const replay = await replayMutation(tx, context, 200);
+    if (replay?.kind === "idempotency-conflict") await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, {
+      companyId, requestIdHash: opaqueLookupHash("approval-idempotency", requestId), denialReason: "IDEMPOTENCY_KEY_REUSED"
+    });
+    if (replay) return replay;
     if (await consumeRateLimit(tx, companyId, actor, "approve", context)) return { kind: "rate-limited" as const };
     await tx.$queryRaw`SELECT "id" FROM "accounting_waiver_evidence_replacement_requests" WHERE "id" = ${requestId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`;
     const request = await tx.accountingWaiverEvidenceReplacementRequest.findFirst({ where: { id: requestId, companyId }, select: {
@@ -251,8 +275,20 @@ export async function approveWaiverEvidenceReplacement(
       sourceEvidence: { select: { id: true, sequence: true, kind: true, supersededByEvidence: { select: { id: true } } } },
       lines: { orderBy: { position: "asc" }, select: { accountId: true, position: true, concept: true, debit: true, credit: true } }
     } });
-    if (!request) return { kind: "request-not-found" as const };
-    if (request.status !== "REQUESTED" || request.version !== command.expectedVersion || request.sourceEvidence.supersededByEvidence) return { kind: "request-not-pending" as const };
+    if (!request) {
+      await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, {
+        companyId, requestIdHash: opaqueLookupHash("approval", requestId), denialReason: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE"
+      });
+      return { kind: "request-not-found" as const };
+    }
+    if (request.status !== "REQUESTED" || request.version !== command.expectedVersion || request.sourceEvidence.supersededByEvidence) {
+      await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, {
+        companyId, replacementRequestId: request.id, denialReason: "REQUEST_NOT_PENDING",
+        currentStatus: request.status, currentVersion: request.version, expectedVersion: command.expectedVersion,
+        sourceSuperseded: Boolean(request.sourceEvidence.supersededByEvidence)
+      });
+      return { kind: "request-not-pending" as const };
+    }
     if (waiverEvidenceReplacementProposalDigest(request) !== command.expectedProposalDigest) {
       await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_APPROVAL_DENIED", actor, context, {
         companyId, replacementRequestId: request.id, denialReason: "PROPOSAL_DIGEST_MISMATCH"
@@ -324,12 +360,30 @@ async function finishWithoutEntry(
 ): Promise<Result> {
   const result = await runWaiverReplacementSerializable(async (tx) => {
     const companyId = await currentCompanyId(tx); await beginLocks(tx, companyId, context.idempotencyKey);
-    const replay = await replayMutation(tx, context, 200); if (replay) return replay;
+    const replay = await replayMutation(tx, context, 200);
+    const denialEvent = terminal === "REJECTED"
+      ? "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REJECTION_DENIED"
+      : "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_CANCELLATION_DENIED";
+    if (replay?.kind === "idempotency-conflict") await audit(tx, denialEvent, actor, context, {
+      companyId, requestIdHash: opaqueLookupHash(`${terminal.toLowerCase()}-idempotency`, requestId), denialReason: "IDEMPOTENCY_KEY_REUSED"
+    });
+    if (replay) return replay;
     if (await consumeRateLimit(tx, companyId, actor, terminal.toLowerCase(), context)) return { kind: "rate-limited" as const };
     await tx.$queryRaw`SELECT "id" FROM "accounting_waiver_evidence_replacement_requests" WHERE "id" = ${requestId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`;
     const request = await tx.accountingWaiverEvidenceReplacementRequest.findFirst({ where: { id: requestId, companyId }, select: { id: true, status: true, version: true, requestedById: true } });
-    if (!request) return { kind: "request-not-found" as const };
-    if (request.status !== "REQUESTED" || request.version !== expectedVersion) return { kind: "request-not-pending" as const };
+    if (!request) {
+      await audit(tx, denialEvent, actor, context, {
+        companyId, requestIdHash: opaqueLookupHash(terminal.toLowerCase(), requestId), denialReason: "REQUEST_NOT_FOUND_OR_NOT_VISIBLE"
+      });
+      return { kind: "request-not-found" as const };
+    }
+    if (request.status !== "REQUESTED" || request.version !== expectedVersion) {
+      await audit(tx, denialEvent, actor, context, {
+        companyId, replacementRequestId: request.id, denialReason: "REQUEST_NOT_PENDING",
+        currentStatus: request.status, currentVersion: request.version, expectedVersion
+      });
+      return { kind: "request-not-pending" as const };
+    }
     if (terminal === "REJECTED" && request.requestedById === actor.id) {
       await audit(tx, "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT_REJECTION_DENIED", actor, context, { companyId, replacementRequestId: request.id, denialReason: "SELF_REJECTION" });
       return { kind: "self-rejection" as const };
@@ -370,6 +424,7 @@ function mapResult(result: { kind: string; value?: WaiverEvidenceReplacementDto 
     result.kind === "review-not-found" ? "WAIVER_REVIEW_NOT_FOUND" : "WAIVER_REPLACEMENT_REQUEST_NOT_FOUND", "No se encontró el recurso solicitado.");
   const failures: Record<string, [FailureCode, string]> = {
     "not-replaceable": ["WAIVER_EVIDENCE_NOT_REPLACEABLE", "La evidencia vigente no admite una sustitución."],
+    "proposal-not-balanced": ["WAIVER_REPLACEMENT_PROPOSAL_NOT_BALANCED", "La propuesta debe estar cuadrada y contener debe y haber."],
     independence: ["WAIVER_REPLACEMENT_INDEPENDENCE_REQUIRED", "La solicitud requiere un actor independiente."],
     "year-not-open": ["WAIVER_REPLACEMENT_FISCAL_YEAR_NOT_OPEN", "El ejercicio contable debe estar abierto."],
     "account-not-postable": ["WAIVER_REPLACEMENT_ACCOUNT_NOT_POSTABLE", "La propuesta contiene cuentas no imputables."],
@@ -383,7 +438,7 @@ function mapResult(result: { kind: string; value?: WaiverEvidenceReplacementDto 
     "transaction-busy": ["WAIVER_REPLACEMENT_BUSY", "La sustitución contable está ocupada; vuelva a intentarlo."]
   };
   const [code, message] = failures[result.kind] ?? ["WAIVER_EVIDENCE_NOT_REPLACEABLE", "La operación no pudo completarse."];
-  return failure(result.kind === "rate-limited" ? 429 : result.kind === "transaction-busy" ? 503 : 409, code, message);
+  return failure(result.kind === "proposal-not-balanced" ? 422 : result.kind === "rate-limited" ? 429 : result.kind === "transaction-busy" ? 503 : 409, code, message);
 }
 async function currentCompanyId(tx: Prisma.TransactionClient): Promise<string> {
   const installation = await tx.installation.findFirstOrThrow({ where: { status: "INITIALIZED" }, select: { companyId: true } });
@@ -436,6 +491,9 @@ function isSerializableTransactionConflict(error: unknown): boolean {
     && (error.code === "P2034" || (error.code === "P2010" && error.meta?.code === "40001"));
 }
 function isUniqueConstraintError(error: unknown): boolean { return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"; }
+function opaqueLookupHash(scope: string, id: string): string {
+  return hashIdempotencyPayload("accounting-waiver-evidence-replacement-lookup:v1", { scope, id });
+}
 function waiverEvidenceReplacementProposalDigest(record: {
   id: string; version: number; accountingDate: Date; concept: string;
   lines: Array<{ accountId: string; position: number; concept: string; debit: Prisma.Decimal; credit: Prisma.Decimal }>;
@@ -451,4 +509,4 @@ function formatDateOnly(value: Date): string { return value.toISOString().slice(
 function isValidDateOnly(value: string): boolean {
   const parsed = parseDateOnly(value); return !Number.isNaN(parsed.getTime()) && formatDateOnly(parsed) === value;
 }
-function failure(status: 404 | 409 | 429 | 503, code: FailureCode, message: string): Result { return { ok: false, status, error: { code, message } }; }
+function failure(status: 404 | 409 | 422 | 429 | 503, code: FailureCode, message: string): Result { return { ok: false, status, error: { code, message } }; }
