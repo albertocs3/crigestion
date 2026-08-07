@@ -23,6 +23,10 @@ import { POST as waiverEvidenceReversalRequest } from "@/app/api/subscriptions/r
 import { POST as waiverEvidenceReversalApprove } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/approve/route";
 import { POST as waiverEvidenceReversalReject } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/reject/route";
 import { POST as waiverEvidenceReversalCancel } from "@/app/api/accounting/waiver-evidence-reversals/[requestId]/cancel/route";
+import { POST as waiverEvidenceReplacementRequest } from "@/app/api/subscriptions/renewal-waiver-fiscal-reviews/[reviewId]/accounting-replacements/route";
+import { POST as waiverEvidenceReplacementApprove } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/approve/route";
+import { POST as waiverEvidenceReplacementReject } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/reject/route";
+import { POST as waiverEvidenceReplacementCancel } from "@/app/api/accounting/waiver-evidence-replacements/[requestId]/cancel/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
@@ -34,8 +38,8 @@ const password = "Cambiar-esta-clave-2026";
 const initialization: InitializeCommand = { company: { legalName: "CriGestion Test SL", taxId: "B12345678", email: "admin@example.test" }, administrator: { displayName: "Administrador", userName: "admin", password } };
 
 describe("subscription HTTP contracts", () => {
-  beforeEach(async () => { process.env.APP_BASE_URL = "http://localhost:3000"; process.env.AUTH_COOKIE_SECURE = "false"; cookieMock.reset(); await reset(); await initialize(); });
-  afterAll(async () => { await reset(); await prisma.$disconnect(); });
+  beforeEach(async () => { process.env.APP_BASE_URL = "http://localhost:3000"; process.env.AUTH_COOKIE_SECURE = "false"; cookieMock.reset(); await reset(); await initialize(); }, 30_000);
+  afterAll(async () => { await reset(); await prisma.$disconnect(); }, 30_000);
 
   it("requires authentication, CSRF, origin and idempotency", async () => {
     expect((await subscriptionsGet(apiRequest("/api/subscriptions"))).status).toBe(401);
@@ -56,6 +60,18 @@ describe("subscription HTTP contracts", () => {
     expect((await waiverEvidenceReversalApprove(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/approve`, { expectedVersion: 1, unexpected: true }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReversalReject(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/reject`, { expectedVersion: 1, rejectionDetail: "corto" }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReversalCancel(jsonRequest(`/api/accounting/waiver-evidence-reversals/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
+    const replacementBody = { expectedReviewVersion: 4, reasonCode: "CORRECTED_AMOUNT", reasonDetail: "Corrección contable suficientemente justificada",
+      accountingDate: todayDate(), concept: "Sustitución propuesta", lines: [
+        { accountId: randomUUID(), concept: "Debe", debit: "1.00", credit: "0.00" },
+        { accountId: randomUUID(), concept: "Haber", debit: "0.00", credit: "1.00" }
+      ] };
+    expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, replacementBody, { csrf, origin: "https://evil.example" }), reviewContext)).status).toBe(403);
+    expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, replacementBody), reviewContext)).status).toBe(403);
+    expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, replacementBody, { csrf, idempotency: null }), reviewContext)).status).toBe(400);
+    expect((await waiverEvidenceReplacementRequest(jsonRequest(`/api/subscriptions/renewal-waiver-fiscal-reviews/${reviewId}/accounting-replacements`, { ...replacementBody, accountingDate: "2026-02-31" }, { csrf }), reviewContext)).status).toBe(422);
+    expect((await waiverEvidenceReplacementApprove(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/approve`, { expectedVersion: 1, unexpected: true }, { csrf }), reversalContext)).status).toBe(422);
+    expect((await waiverEvidenceReplacementReject(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/reject`, { expectedVersion: 1, rejectionDetail: "corto" }, { csrf }), reversalContext)).status).toBe(422);
+    expect((await waiverEvidenceReplacementCancel(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
   });
 
   it("creates, edits, lists, reads, activates and cancels a subscription", async () => {

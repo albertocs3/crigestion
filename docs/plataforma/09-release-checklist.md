@@ -118,6 +118,16 @@ reabrir tráfico, verificar que una solicitud pendiente no admite un asiento
 persistente y que una aprobación de prueba crea exactamente una inversión
 `POSTED` dentro del ejercicio abierto sin alterar factura ni VeriFactu.
 
+Las migraciones `20260806192000_expand_waiver_evidence_replacement_enums` a
+`20260806197000_fix_waiver_replacement_consistency_dispatch` deben desplegarse
+en orden, con mantenimiento y sin rolling deploy. Incorporan la cadena
+append-only de evidencias, el origen `WAIVER_REGULARIZATION_REPLACEMENT`, los
+permisos maker/checker y guards diferidos polimórficos. Antes de reabrir tráfico,
+verificar que una propuesta pendiente no produce asiento, que el solicitante no
+puede aprobarla y que la aprobación independiente crea exactamente un asiento
+`POSTED` y una nueva evidencia contigua sin modificar la revisión `CLOSED v4`,
+facturas, impuestos ni VeriFactu.
+
 ## 6. Despliegue
 
 Para el VPS Plesk de `gestion.crisoft.es`, aplicar ademas el runbook

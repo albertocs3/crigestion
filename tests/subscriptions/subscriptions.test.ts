@@ -12,6 +12,7 @@ import { completeRenewalWaiverFiscalReview, decideRenewalWaiverFiscalReview, has
 import { issueInvoice } from "@/modules/billing/application/invoices";
 import { createManualJournalEntry } from "@/modules/accounting/application/journal";
 import { approveWaiverEvidenceReversal, hashWaiverEvidenceReversalApproval, hashWaiverEvidenceReversalRequest, requestWaiverEvidenceReversal } from "@/modules/accounting/application/waiverEvidenceReversals";
+import { approveWaiverEvidenceReplacement, cancelWaiverEvidenceReplacement, hashWaiverEvidenceReplacementApproval, hashWaiverEvidenceReplacementCancellation, hashWaiverEvidenceReplacementRejection, hashWaiverEvidenceReplacementRequest, rejectWaiverEvidenceReplacement, requestWaiverEvidenceReplacement, requestWaiverEvidenceReplacementSchema } from "@/modules/accounting/application/waiverEvidenceReplacements";
 
 const password = "Cambiar-esta-clave-2026";
 const initialization: InitializeCommand = { company: { legalName: "CriGestion Test SL", taxId: "B12345678", email: "admin@example.test" }, administrator: { displayName: "Administrador", userName: "admin", password } };
@@ -766,6 +767,60 @@ describe("subscriptions application service", () => {
       status: "CLOSED", version: 4, accountingEvidenceReversal: { id: requestedReversal.value.id, status: "COMPLETED", version: 2 },
       accountingEvidenceFollowUpRequired: true
     } }] } });
+    expect(requestWaiverEvidenceReplacementSchema.safeParse({ expectedReviewVersion: 4, reasonCode: "CORRECTED_DATE",
+      reasonDetail: "Fecha imposible para la propuesta", accountingDate: "2026-02-31", concept: "Propuesta inválida", lines: [
+        { accountId: journalAccounts[0]!.id, concept: "Debe", debit: "1.00", credit: "0.00" },
+        { accountId: journalAccounts[1]!.id, concept: "Haber", debit: "0.00", credit: "1.00" }
+      ] }).success).toBe(false);
+    const replacementCommand = { expectedReviewVersion: 4 as const, reasonCode: "CORRECTED_AMOUNT" as const,
+      reasonDetail: "El importe correcto exige una nueva evidencia contable", accountingDate: todayDate(),
+      concept: "Sustitución controlada de la regularización", lines: [
+        { accountId: journalAccounts[0]!.id, concept: "Debe corregido", debit: "61.00", credit: "0.00" },
+        { accountId: journalAccounts[1]!.id, concept: "Haber corregido", debit: "0.00", credit: "61.00" }
+      ] };
+    const requestedReplacement = await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover,
+      waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand));
+    expect(requestedReplacement).toMatchObject({ ok: true, status: 201, value: { status: "REQUESTED", version: 1,
+      sourceEvidenceId: accountingEvidence.id, reversalRequestId: requestedReversal.value.id } });
+    if (!requestedReplacement.ok) throw new Error("WAIVER_REPLACEMENT_REQUEST_EXPECTED");
+    expect(await requestWaiverEvidenceReplacement(fiscalReview.id, replacementCommand, reversalApprover,
+      waiverReplacementRequestContext("request", fiscalReview.id, replacementCommand))).toEqual(requestedReplacement);
+    const rejectionCommand = { expectedVersion: 1 as const, rejectionDetail: "El solicitante no puede rechazar su propia propuesta" };
+    expect(await rejectWaiverEvidenceReplacement(requestedReplacement.value.id, rejectionCommand, reversalApprover,
+      waiverReplacementRejectionContext("self-reject", requestedReplacement.value.id, rejectionCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_SELF_REJECTION_FORBIDDEN" }
+    });
+    const cancellationCommand = { expectedVersion: 1 as const };
+    expect(await cancelWaiverEvidenceReplacement(requestedReplacement.value.id, cancellationCommand, otherReviewer,
+      waiverReplacementCancellationContext("third-party-cancel", requestedReplacement.value.id, cancellationCommand))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_NOT_CANCELLABLE" }
+    });
+    const replacementApproval = { expectedVersion: 1 as const };
+    expect(await approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, reversalApprover,
+      waiverReplacementApprovalContext("self-approve", requestedReplacement.value.id, replacementApproval))).toMatchObject({
+      ok: false, status: 409, error: { code: "WAIVER_REPLACEMENT_SELF_APPROVAL_FORBIDDEN" }
+    });
+    const approvedReplacement = await approveWaiverEvidenceReplacement(requestedReplacement.value.id, replacementApproval, otherReviewer,
+      waiverReplacementApprovalContext("approve", requestedReplacement.value.id, replacementApproval));
+    expect(approvedReplacement).toMatchObject({ ok: true, status: 200, value: { status: "COMPLETED", version: 2,
+      approvedById: otherReviewer.id, resultingEvidence: { sequence: 2 } } });
+    const replacementEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { waiverReplacementRequestId: requestedReplacement.value.id },
+      include: { lines: { orderBy: { position: "asc" } } } });
+    expect(replacementEntry).toMatchObject({ origin: "WAIVER_REGULARIZATION_REPLACEMENT", status: "POSTED", totalDebit: expect.anything(), totalCredit: expect.anything() });
+    expect(replacementEntry.lines.map((line) => [line.concept, line.debit.toFixed(2), line.credit.toFixed(2)])).toEqual([
+      ["Debe corregido", "61.00", "0.00"], ["Haber corregido", "0.00", "61.00"]
+    ]);
+    const evidenceChain = await prisma.subscriptionRenewalWaiverReviewEvidence.findMany({ where: { reviewId: fiscalReview.id }, orderBy: { sequence: "asc" } });
+    expect(evidenceChain).toHaveLength(2);
+    expect(evidenceChain[1]).toMatchObject({ sequence: 2, supersedesEvidenceId: accountingEvidence.id,
+      replacementRequestId: requestedReplacement.value.id, accountingJournalEntryId: replacementEntry.id, addedById: otherReviewer.id });
+    const reportAfterReplacement = await listSubscriptionRenewalWaivers({ limit: 25 }, actor);
+    expect(reportAfterReplacement).toMatchObject({ ok: true, value: { waivers: [{ fiscalReview: {
+      evidenceCount: 2, accountingEvidenceReversal: null, accountingEvidenceFollowUpRequired: false
+    } }] } });
+    const replacementAudit = JSON.stringify(await prisma.auditEvent.findMany({ where: { eventType: { startsWith: "ACCOUNTING_WAIVER_EVIDENCE_REPLACEMENT" } }, select: { payload: true } }));
+    expect(replacementAudit).not.toContain(replacementCommand.reasonDetail);
+    expect(replacementAudit).not.toContain("Debe corregido"); expect(replacementAudit).not.toContain("61.00");
     await expect(prisma.accountingJournalEntry.update({ where: { id: reversalEntry.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
     await expect(prisma.accountingJournalLine.update({ where: { id: reversalEntry.lines[0]!.id }, data: { concept: "Alteración prohibida" } })).rejects.toThrow();
     const ordinaryEntry = await createManualJournalEntry({ accountingDate: todayDate(), concept: "Asiento ordinario independiente", lines: [
@@ -791,7 +846,7 @@ describe("subscriptions application service", () => {
     await expect(prisma.subscriptionRenewalWaiverSnapshot.update({ where: { exclusionId: excluded.value.exclusionId }, data: { customerLegalNameSnapshot: "Alteracion" } })).rejects.toThrow();
     await expect(prisma.subscriptionRenewalWaiverTaxSummary.delete({ where: { id: snapshot.taxSummaries[0]!.id } })).rejects.toThrow();
     await expect(prisma.subscriptionRenewalExclusion.delete({ where: { id: excluded.value.exclusionId } })).rejects.toThrow();
-  });
+  }, 20_000);
 
   it("releases a reserved pending period, waives it and bills the following period", async () => {
     const actor = await admin(); const customerId = await customer(actor.id); await prisma.customer.update({ where: { id: customerId }, data: { code: "9" } });
@@ -999,6 +1054,10 @@ function fiscalReviewDecisionContext(key: string, reviewId: string, value: Param
 function fiscalReviewCompletionContext(key: string, reviewId: string, value: Parameters<typeof hashCompleteRenewalWaiverFiscalReview>[1]) { return { idempotencyKey: `subscription-renewal-waiver-fiscal-review-test:${key}`, requestHash: hashCompleteRenewalWaiverFiscalReview(reviewId, value), correlationId: `subscription-renewal-waiver-fiscal-review-${key}` }; }
 function waiverReversalRequestContext(key: string, reviewId: string, value: Parameters<typeof hashWaiverEvidenceReversalRequest>[1]) { return { idempotencyKey: `accounting-waiver-reversal-test:${key}`, requestHash: hashWaiverEvidenceReversalRequest(reviewId, value), correlationId: `accounting-waiver-reversal-${key}` }; }
 function waiverReversalApprovalContext(key: string, requestId: string, value: Parameters<typeof hashWaiverEvidenceReversalApproval>[1]) { return { idempotencyKey: `accounting-waiver-reversal-test:${key}`, requestHash: hashWaiverEvidenceReversalApproval(requestId, value), correlationId: `accounting-waiver-reversal-${key}` }; }
+function waiverReplacementRequestContext(key: string, reviewId: string, value: Parameters<typeof hashWaiverEvidenceReplacementRequest>[1]) { return { idempotencyKey: `accounting-waiver-replacement-test:${key}`, requestHash: hashWaiverEvidenceReplacementRequest(reviewId, value), correlationId: `accounting-waiver-replacement-${key}` }; }
+function waiverReplacementApprovalContext(key: string, requestId: string, value: Parameters<typeof hashWaiverEvidenceReplacementApproval>[1]) { return { idempotencyKey: `accounting-waiver-replacement-test:${key}`, requestHash: hashWaiverEvidenceReplacementApproval(requestId, value), correlationId: `accounting-waiver-replacement-${key}` }; }
+function waiverReplacementRejectionContext(key: string, requestId: string, value: Parameters<typeof hashWaiverEvidenceReplacementRejection>[1]) { return { idempotencyKey: `accounting-waiver-replacement-test:${key}`, requestHash: hashWaiverEvidenceReplacementRejection(requestId, value), correlationId: `accounting-waiver-replacement-${key}` }; }
+function waiverReplacementCancellationContext(key: string, requestId: string, value: Parameters<typeof hashWaiverEvidenceReplacementCancellation>[1]) { return { idempotencyKey: `accounting-waiver-replacement-test:${key}`, requestHash: hashWaiverEvidenceReplacementCancellation(requestId, value), correlationId: `accounting-waiver-replacement-${key}` }; }
 function updatePayload(subscription: { version: number; customer: { id: string }; name: string; periodicity: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL"; pricingMode: "FIXED" | "PER_LICENSE"; startDate: string; endDate: string | null; notes: string | null; lines: Array<{ catalogItemId: string; quantity: string }> }, overrides: Record<string, unknown> = {}) { return { expectedVersion: subscription.version, customerId: subscription.customer.id, name: subscription.name, periodicity: subscription.periodicity, pricingMode: subscription.pricingMode, startDate: subscription.startDate, endDate: subscription.endDate, notes: subscription.notes, lines: subscription.lines.map((line) => ({ catalogItemId: line.catalogItemId, quantity: line.quantity })), ...overrides }; }
 async function admin() { const result = await login({ userName: "admin", password }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }
 async function fiscalReviewer() { const role = await prisma.role.create({ data: { code: "WaiverFiscalReviewer", name: "Revision fiscal de condonaciones", permissions: { create: ["Subscriptions.ViewRenewalWaivers", "Subscriptions.ViewRenewalWaiverFiscalReviews", "Subscriptions.DecideRenewalWaiverFiscalReviews", "Subscriptions.CompleteRenewalWaiverFiscalReviews"].map((code) => ({ permission: { connect: { code } } })) } } }); await prisma.user.create({ data: { displayName: "Revisor Fiscal", userName: "waiver-fiscal-reviewer", normalizedUserName: "waiver-fiscal-reviewer", passwordHash: hashPassword("Cambiar-reviewer-2026"), roleId: role.id } }); const result = await login({ userName: "waiver-fiscal-reviewer", password: "Cambiar-reviewer-2026" }); if (!result.ok) throw new Error(result.error.code); return result.value.user; }

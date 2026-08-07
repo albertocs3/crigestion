@@ -79,6 +79,8 @@ const platformPermissions = [
   ["Subscriptions.CompleteRenewalWaiverFiscalReviews", "Completar revisiones fiscales de periodos condonados"],
   ["Accounting.RequestWaiverEvidenceReversals", "Solicitar reversión de evidencia contable de condonaciones"],
   ["Accounting.ApproveWaiverEvidenceReversals", "Aprobar reversión de evidencia contable de condonaciones"],
+  ["Accounting.RequestWaiverEvidenceReplacements", "Solicitar sustituciones de evidencia contable de condonaciones"],
+  ["Accounting.ApproveWaiverEvidenceReplacements", "Aprobar sustituciones de evidencia contable de condonaciones"],
   ["Treasury.ManagePayments", "Registrar cobros de clientes"],
   ["Treasury.ManageSupplierPayments", "Registrar pagos de proveedores"],
   ["Treasury.ViewSupplierPayments", "Consultar vencimientos y pagos de proveedores"],
