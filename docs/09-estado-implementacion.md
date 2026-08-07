@@ -200,7 +200,9 @@ La bandeja de Contabilidad muestra únicamente propuestas pendientes con un DTO
 reducido y cursor HMAC ligado a usuario y empresa; el motivo libre, el concepto
 y las líneas solo se entregan en el detalle protegido y auditado. Playwright
 cubre la bandeja y las dos decisiones terminales: la aprobación crea asiento y
-evidencia, mientras el rechazo no produce efectos contables.
+evidencia, mientras el rechazo no produce efectos contables. La regresión E2E
+completa posterior superó sus 13 escenarios en Chromium, incluida la
+importación Norma 43 con la precondición vigente de ejercicio abierto.
 
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el

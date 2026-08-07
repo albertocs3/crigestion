@@ -855,6 +855,7 @@ test("creates a customer remittance draft from the UI", async ({ page }) => {
 test("imports Norma 43, reconciles a payment, and undoes it from the UI", async ({ page }) => {
   test.setTimeout(120_000);
   await initializeAndLoginAdmin(page, "e2e-bank-reconciliation-setup");
+  await initializeAccountingForAdmin(page);
   const invoice = await createIssuedInvoiceForAdmin();
   const dueDate = await prisma.invoiceDueDate.findFirstOrThrow({ where: { invoiceId: invoice.id } });
   const admin = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: userName } });
