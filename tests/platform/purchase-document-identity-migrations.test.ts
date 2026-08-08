@@ -20,4 +20,16 @@ describe("purchase document identity migration boundaries", () => {
     );
     expect(finalize).toContain('CREATE TRIGGER "purchase_invoice_document_identity_guard"');
   });
+
+  it("commits the rectification mode backfill before indexing the populated table", () => {
+    const backfill = migrationSql("20260808113000_add_partial_purchase_rectifications");
+    const finalize = migrationSql("20260808113050_finalize_partial_purchase_rectifications");
+
+    expect(backfill).toContain('UPDATE "purchase_invoices"');
+    expect(backfill).toContain("PURCHASE_RECTIFICATION_MODE_BACKFILL_MISMATCH");
+    expect(backfill).not.toContain('CREATE UNIQUE INDEX "purchase_invoices_single_full_rectification_key"');
+    expect(finalize).not.toContain('UPDATE "purchase_invoices"');
+    expect(finalize).toContain("PURCHASE_RECTIFICATION_MODE_BACKFILL_MISMATCH");
+    expect(finalize).toContain('CREATE UNIQUE INDEX "purchase_invoices_single_full_rectification_key"');
+  });
 });
