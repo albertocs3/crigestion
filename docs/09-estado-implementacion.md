@@ -240,9 +240,10 @@ contraasienta la versión origen, crea y contabiliza la versión sustituta,
 revierte y regenera IVA y stock, cancela y recrea vencimientos y valida toda la
 cadena mediante constraints diferidas antes del commit. La primera versión
 conserva proveedor y número documental y limita el cuerpo HTTP a 256 KiB.
-Las 130 migraciones se aplicaron desde cero; las 18 pruebas dirigidas cubren
-VOID, REPLACE, replay HTTP, sustituciones sucesivas y pago posterior de la
-versión vigente. Prisma, TypeScript, ESLint, build, auditoría npm y smoke local
+Las 130 migraciones se aplicaron desde cero; las 19 pruebas dirigidas cubren
+VOID, REPLACE, replay HTTP, sustituciones sucesivas, carrera simultánea,
+agotamiento forzado de reintentos serializables y pago posterior de la versión
+vigente. Prisma, TypeScript, ESLint, build, auditoría npm y smoke local
 HTTP 200 finalizaron correctamente. Las revisiones independientes de datos y
 seguridad no dejaron hallazgos P0/P1 abiertos.
 
@@ -296,9 +297,9 @@ Prioridades pendientes despues de este corte:
    inmutable y repetir el drill desde esa copia. El drill local no sustituye
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
-4. Completar el ciclo avanzado de proveedor pendiente: rectificacion parcial y
-   sustitucion interna versionada. La anulación interna impagada ya está
-   implementada.
+4. Completar el ciclo avanzado de proveedor pendiente con la rectificacion
+   parcial. La anulación interna impagada y la sustitución interna versionada
+   ya están implementadas.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Completar Suscripciones con cambios programados, edicion controlada de la

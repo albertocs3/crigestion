@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
@@ -142,6 +143,31 @@ describe("purchase HTTP contracts", () => {
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "PURCHASE_CORRECTION_REPLACED", payload: { path: ["operationId"], equals: value.operationId } } });
     expect(JSON.stringify(audit.payload)).not.toContain("Servicio corregido"); expect(JSON.stringify(audit.payload)).not.toContain("145.20");
   });
+
+  it("returns a stable retryable 503 after exhausting serializable correction retries", async () => {
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken();
+    const purchaseId = randomUUID();
+    const body = { mode: "REPLACE", expectedVersion: 1, accountingDate: "2026-07-20", reasonCode: "WRONG_AMOUNT", reason: null, confirmation: "REPLACE_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY", replacement: { issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-20", notes: null, lines: [{ catalogItemId: null, description: "Servicio corregido", quantity: "1", unitPrice: "120", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: randomUUID() }], dueDates: [{ dueDate: "2026-08-15", amount: "145.20", paymentMethod: "BANK_TRANSFER" }] } };
+    const realTransaction = prisma.$transaction.bind(prisma);
+    let serializableAttempts = 0;
+    const transaction = vi.spyOn(prisma, "$transaction").mockImplementation((async (work: unknown, options?: { isolationLevel?: string }) => {
+      if (options?.isolationLevel === Prisma.TransactionIsolationLevel.Serializable) {
+        serializableAttempts += 1;
+        throw prismaError("P2034");
+      }
+      return Reflect.apply(realTransaction, prisma, options ? [work, options] : [work]);
+    }) as never);
+
+    try {
+      const response = await purchaseCorrectionPost(jsonRequest(`/api/purchases/${purchaseId}/corrections`, body, { csrf }), { params: Promise.resolve({ purchaseId }) });
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("3");
+      expect(await response.json()).toEqual({ code: "PURCHASE_TRANSACTION_RETRY_EXHAUSTED", message: "La operación no pudo completarse por concurrencia. Reinténtelo en unos segundos." });
+      expect(serializableAttempts).toBe(3);
+    } finally {
+      transaction.mockRestore();
+    }
+  });
 });
 
 function configure() { process.env.APP_BASE_URL = "http://localhost:3000"; process.env.AUTH_COOKIE_SECURE = "false"; process.env.SENSITIVE_DATA_ACTIVE_KEY_ID = "test-key"; process.env.SENSITIVE_DATA_KEYS = JSON.stringify({ "test-key": Buffer.alloc(32, 5).toString("base64") }); process.env.SENSITIVE_DATA_LOOKUP_SECRET = "supplier-lookup-secret-at-least-32-characters"; }
@@ -153,3 +179,4 @@ async function initialize() { const raw = JSON.stringify(initialization); const 
 async function createTestSupplier() { const command = { legalName: "Proveedor Demo SL", tradeName: null, taxId: "B12345674", fiscalAddressLine: "Calle Mayor 1", fiscalPostalCode: "28001", fiscalCity: "Madrid", fiscalProvince: null, fiscalCountry: "ES", contactName: null, email: null, phone: null, bankIban: null, bankBic: null, defaultPaymentMethod: "BANK_TRANSFER" as const, paymentTermsType: "IMMEDIATE" as const, paymentDays: null, paymentFixedDay: null, notes: null }; const supplier = await createSupplier(command, testActor, { idempotencyKey: randomUUID(), requestHash: supplierRequestHash(command), scope: "create" }); if (!supplier.ok) throw new Error(supplier.error.code); return supplier.value.id; }
 function purchaseContext(key: string, scope: string, value: unknown) { return { idempotencyKey: key, requestHash: purchaseRequestHash(value), correlationId: `route-${key}`, scope }; }
 async function reset() { await prisma.$executeRawUnsafe('TRUNCATE TABLE "companies", "roles", "permissions", "reserved_user_names", "idempotency_records" RESTART IDENTITY CASCADE'); }
+function prismaError(code: string) { return new Prisma.PrismaClientKnownRequestError("Database conflict", { code, clientVersion: "test" }); }

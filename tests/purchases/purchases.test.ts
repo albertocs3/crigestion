@@ -124,9 +124,18 @@ describe("supplier purchases and payments", () => {
     const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("replace-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
     const command = { mode: "REPLACE" as const, expectedVersion: registered.value.version, accountingDate: "2026-07-20", reasonCode: "WRONG_AMOUNT" as const, reason: "Cantidad recibida corregida", confirmation: "REPLACE_PURCHASE_WITHOUT_FINANCIAL_ACTIVITY" as const,
       replacement: { issueDate: "2026-07-01", receivedDate: "2026-07-02", operationDate: "2026-07-01", accountingDate: "2026-07-20", notes: "Versión corregida", lines: [{ catalogItemId: item.id, description: "Producto corregido", quantity: "5", unitPrice: "10", discountPercent: "0", discountAmount: "0", purchaseAccountCode: null, taxRateId: tax.id }], dueDates: [{ dueDate: "2026-08-15", amount: "60.50", paymentMethod: "BANK_TRANSFER" as const }] } };
-    const result = await createPurchaseCorrection(created.value.id, command, actor, context("replace", `correct:${created.value.id}`, command));
+    const replacementContexts = [
+      context("replace-race-a", `correct:${created.value.id}`, command),
+      context("replace-race-b", `correct:${created.value.id}`, command)
+    ];
+    const attempts = await Promise.all(replacementContexts.map((mutation) => createPurchaseCorrection(created.value.id, command, actor, mutation)));
+    const result = attempts.find((attempt) => attempt.ok);
+    const rejected = attempts.find((attempt) => !attempt.ok);
+    if (!result) throw new Error("Purchase replacement race did not produce a winner");
     expect(result).toMatchObject({ ok: true, status: 201, value: { mode: "REPLACE", purchaseInvoiceId: created.value.id, status: "SUPERSEDED", replacementVatRecordCount: 1, replacementStockMovementCount: 1 } });
-    if (!result.ok || !result.value.replacementPurchaseInvoiceId || !result.value.replacementEntry) throw new Error("replacement failed");
+    expect(rejected).toMatchObject({ ok: false, error: { code: "PURCHASE_VERSION_CONFLICT" } });
+    expect(await prisma.purchaseCorrectionOperation.count({ where: { sourcePurchaseInvoiceId: created.value.id, mode: "REPLACE" } })).toBe(1);
+    if (!result.value.replacementPurchaseInvoiceId || !result.value.replacementEntry) throw new Error("replacement failed");
     const [source, replacement] = await Promise.all([prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true } }), prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: result.value.replacementPurchaseInvoiceId }, include: { dueDates: true } })]);
     expect(source).toMatchObject({ status: "SUPERSEDED", paymentStatus: "NOT_APPLICABLE", documentIdentityId: replacement.documentIdentityId });
     expect(source.dueDates.every((due) => due.status === "CANCELLED")).toBe(true);
