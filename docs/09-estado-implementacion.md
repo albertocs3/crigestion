@@ -247,17 +247,18 @@ vigente. Prisma, TypeScript, ESLint, build, auditoría npm y smoke local
 HTTP 200 finalizaron correctamente. Las revisiones independientes de datos y
 seguridad no dejaron hallazgos P0/P1 abiertos.
 
-El siguiente corte añade la migración 131 y la devolución parcial de compras por
-cantidad de línea. Una compra puede recibir varias rectificativas `PARTIAL`; el
+El siguiente corte añade las migraciones 131 y 132 y la devolución parcial de
+compras por cantidad de línea. Una compra puede recibir varias rectificativas `PARTIAL`; el
 servidor reutiliza precio, descuentos, cuenta e IVA históricos, limita de forma
 transaccional el acumulado y el prorrateo, vincula cada parcial a la versión
 exacta del original, enlaza cada ajuste contable y salida de stock con su
 origen y crea un crédito de proveedor. El crédito compensa primero vencimientos
 pendientes y deja disponible cualquier exceso, por lo que el flujo admite
 compras impagadas, parcialmente pagadas o pagadas sin reescribir evidencias.
-La cadena completa de 131 migraciones se aplicó desde cero y las 25 pruebas
-dirigidas de compras cubren acumulación, carrera, redondeo, contrato HTTP,
-replay, cuota, auditoría opaca y agotamiento de reintentos serializables.
+La cadena completa de 132 migraciones se aplicó desde cero y las 26 pruebas
+dirigidas cubren el límite transaccional del backfill, acumulación, carrera,
+redondeo, contrato HTTP, replay, cuota, auditoría opaca y agotamiento de
+reintentos serializables.
 La regresión completa terminó con 76 archivos y 698 pruebas; Prisma Validate,
 TypeScript, ESLint, build optimizado y `npm audit` sin vulnerabilidades también
 finalizaron correctamente. Las revisiones independientes de datos y seguridad
