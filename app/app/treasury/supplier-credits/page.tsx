@@ -4,6 +4,7 @@ import { authorizePagePermission } from "@/modules/platform/presentation/pageAcc
 import { listBankAccounts } from "@/modules/treasury/application/banking";
 import { getSupplierCredit, listSupplierCredits, listSupplierCreditsSchema, type SupplierCreditDetail } from "@/modules/treasury/application/supplierCredits";
 import { SupplierCreditApplicationForm, SupplierCreditRefundAction, SupplierCreditRefundRequestForm } from "@/modules/treasury/presentation/SupplierCreditForms";
+import { normalizeOptionalCreditSearch } from "@/modules/treasury/presentation/creditFilters";
 
 export const dynamic = "force-dynamic";
 type Props = { searchParams: Promise<{ cursor?: string; status?: string; supplierId?: string; search?: string; creditId?: string }> };
@@ -12,7 +13,7 @@ const selectedSchema = z.string().uuid();
 export default async function SupplierCreditsPage({ searchParams }: Props) {
   const authorization = await authorizePagePermission("Treasury.ViewSupplierCredits"); const params = await searchParams;
   if (!authorization.ok) return unauthorized(authorization.message);
-  const query = listSupplierCreditsSchema.safeParse({ limit: 25, cursor: params.cursor, status: params.status, supplierId: params.supplierId, search: params.search });
+  const query = listSupplierCreditsSchema.safeParse({ limit: 25, cursor: params.cursor, status: params.status, supplierId: params.supplierId, search: normalizeOptionalCreditSearch(params.search) });
   const list = query.success ? await listSupplierCredits(query.data, authorization.user) : emptyList();
   const selectedId = selectedSchema.safeParse(params.creditId); const selected = selectedId.success ? await getSupplierCredit(selectedId.data, authorization.user) : null;
   const permissions = authorization.user.permissions; const canRequest = permissions.includes("Treasury.RequestSupplierRefunds");

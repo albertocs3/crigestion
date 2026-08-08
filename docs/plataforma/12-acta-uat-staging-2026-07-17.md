@@ -691,3 +691,54 @@ y listeners 3102/3103. Staging principal permanecio con 96 migraciones, 2026
 `OPEN` y cero solicitudes de cierre o reapertura. El health local mantuvo
 `database`, `verifactu` y `worker` en `ok`. Produccion no se consulto ni se
 modifico.
+
+## 21. Devoluciones parciales de compras en staging
+
+El 2026-08-08 se desplego la release inmutable
+`staging-2026.08.08-rc3`, commit
+`7d87c3f875898b398e8546d8094d854dcdf32b56`. El despliegue controlado dejo
+133 migraciones terminadas, ninguna incompleta y los health local y publico
+con `database`, `verifactu` y `worker` en estado `ok`. VeriFactu permanecio en
+AEAT TEST y produccion quedo fuera de alcance.
+
+La UAT desde navegador uso exclusivamente datos sinteticos. Se registro la
+compra `UAT-PARTIAL-20260808-01`, con 10 unidades a 10,00 EUR, base de
+100,00 EUR, IVA de 21,00 EUR y total de 121,00 EUR. El registro genero el
+asiento `2026/000020`, una entrada de 10 unidades de stock y un vencimiento
+pendiente por 121,00 EUR.
+
+Se ejecutaron dos devoluciones parciales acumuladas:
+
+| Documento | Unidades | Base | IVA | Total | Asiento |
+|---|---:|---:|---:|---:|---|
+| `UAT-PARTIAL-20260808-R1` | 4 | -40,00 EUR | -8,40 EUR | -48,40 EUR | `2026/000021` |
+| `UAT-PARTIAL-20260808-R2` | 6 | -60,00 EUR | -12,60 EUR | -72,60 EUR | `2026/000022` |
+
+Tras la primera devolucion se verifico que la compra original permanecia
+`REGISTERED`, el pago pasaba a `PARTIALLY_SETTLED`, el vencimiento pendiente
+quedaba en 72,60 EUR, la linea conservaba 6 unidades rectificables y el stock
+quedaba en 6 unidades. Tras la segunda, la compra paso a `RECTIFIED`, el pago
+a `SETTLED`, el vencimiento a cero y el stock a cero. La interfaz dejo de
+ofrecer nuevas devoluciones parciales al agotarse toda la cantidad original.
+
+El asiento `2026/000022` quedo cuadrado por 72,60 EUR: debe en la cuenta de
+proveedor por 72,60 EUR y haber en compra e IVA soportado por 60,00 EUR y
+12,60 EUR. Los dos creditos de proveedor se aplicaron completamente al
+vencimiento original, sin saldo disponible ni movimiento bancario.
+
+La auditoria genero dos eventos
+`PURCHASE_PARTIAL_RECTIFICATION_CREATED`. Cada payload conserva los
+identificadores tecnicos, el numero de lineas, un movimiento de stock y una
+aplicacion de credito, pero no incluye numero fiscal, descripcion, notas ni
+importes. No se observaron existencias negativas.
+
+El articulo sintetico quedo inactivo con stock cero. La compra, sus dos
+rectificativas, asientos, IVA, vencimiento, creditos, movimientos de stock y
+auditoria se conservan como evidencia trazable de staging.
+
+Durante la comprobacion de Tesoreria se detecto una regresion no bloqueante:
+los filtros `Agotados` y `Todos` de saldos de proveedor enviaban tambien
+`search=` y la pagina rechazaba el conjunto como invalido. La correccion
+normaliza la busqueda vacia a ausencia de filtro y se aplica asimismo a la
+pantalla equivalente de clientes. La correccion necesita una nueva identidad
+de release y smoke en staging antes de considerarse desplegada.

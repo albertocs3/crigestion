@@ -14,6 +14,7 @@ import {
   CustomerCreditRefundRequestForm
 } from "@/modules/treasury/presentation/CustomerCreditForms";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
+import { normalizeOptionalCreditSearch } from "@/modules/treasury/presentation/creditFilters";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,7 @@ export default async function CustomerCreditsPage({ searchParams }: CreditsPageP
   const params = await searchParams;
   if (!authorization.ok) return unauthorized(authorization.message);
 
-  const query = listCustomerCreditsSchema.safeParse({ limit: 25, cursor: params.cursor, status: params.status, customerId: params.customerId, search: params.search });
+  const query = listCustomerCreditsSchema.safeParse({ limit: 25, cursor: params.cursor, status: params.status, customerId: params.customerId, search: normalizeOptionalCreditSearch(params.search) });
   const creditList = query.success ? await listCustomerCredits(query.data, authorization.user) : emptyList();
   const selectedId = selectedCreditSchema.safeParse(params.creditId);
   const selectedCredit = selectedId.success ? await getCustomerCredit(selectedId.data) : null;
