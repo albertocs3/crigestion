@@ -19,6 +19,8 @@ describe("purchase rectification availability", () => {
   it("allows an unpaid purchase without settlement activity", () => {
     expect(getPurchaseRectificationAvailability(basePurchase)).toMatchObject({
       available: true,
+      fullAvailable: true,
+      partialAvailable: true,
       createsSupplierCredit: false
     });
   });
@@ -39,17 +41,22 @@ describe("purchase rectification availability", () => {
     });
   });
 
-  it("keeps partial and credit-settled purchases unavailable", () => {
+  it("keeps full rectification unavailable but permits partial returns after settlement activity", () => {
     expect(getPurchaseRectificationAvailability({
       ...basePurchase,
       paymentStatus: "PARTIALLY_PAID",
       dueDates: [{ ...basePurchase.dueDates[0], allocatedAmount: "10.00", pendingAmount: "26.30" }]
-    }).available).toBe(false);
+    })).toMatchObject({ fullAvailable: false, partialAvailable: true });
     expect(getPurchaseRectificationAvailability({
       ...basePurchase,
       paymentStatus: "SETTLED",
       dueDates: [{ ...basePurchase.dueDates[0], creditedAmount: "36.30", pendingAmount: "0.00", status: "SETTLED" }]
-    }).available).toBe(false);
+    })).toMatchObject({ fullAvailable: false, partialAvailable: true });
+  });
+
+  it("blocks partial returns after a full rectification or when all quantities are exhausted", () => {
+    expect(getPurchaseRectificationAvailability({ ...basePurchase, rectificationInvoices: [{ rectificationMode: "FULL" }] }).partialAvailable).toBe(false);
+    expect(getPurchaseRectificationAvailability({ ...basePurchase, lines: [{ remainingRectifiableQuantity: "0.000" }] }).partialAvailable).toBe(false);
   });
 });
 

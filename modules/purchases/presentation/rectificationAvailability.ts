@@ -2,7 +2,8 @@ type PurchaseRectificationState = {
   documentType: string;
   status: string;
   paymentStatus: string;
-  rectificationInvoices: unknown[];
+  rectificationInvoices: Array<{ rectificationMode?: string | null }>;
+  lines?: Array<{ remainingRectifiableQuantity?: string }>;
   dueDates: Array<{
     amount: string;
     allocatedAmount: string;
@@ -27,10 +28,19 @@ export function getPurchaseRectificationAvailability(purchase: PurchaseRectifica
   const isStructurallyRectifiable = purchase.documentType === "STANDARD"
     && purchase.status === "REGISTERED"
     && purchase.rectificationInvoices.length === 0;
+  const hasFullRectification = purchase.rectificationInvoices.some((invoice) => invoice.rectificationMode === "FULL");
+  const hasRemainingQuantity = purchase.lines?.some((line) => Number(line.remainingRectifiableQuantity ?? 0) > 0) ?? true;
   const isUnpaid = purchase.paymentStatus === "PENDING" && !hasSettlementActivity;
+  const fullAvailable = isStructurallyRectifiable && (isUnpaid || isFullyPaid);
+  const partialAvailable = purchase.documentType === "STANDARD"
+    && purchase.status === "REGISTERED"
+    && !hasFullRectification
+    && hasRemainingQuantity;
 
   return {
-    available: isStructurallyRectifiable && (isUnpaid || isFullyPaid),
+    available: fullAvailable,
+    fullAvailable,
+    partialAvailable,
     createsSupplierCredit: isStructurallyRectifiable && isFullyPaid,
     hasSettlementActivity
   };

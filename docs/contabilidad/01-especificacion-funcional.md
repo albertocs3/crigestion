@@ -393,6 +393,9 @@ Una factura registrada puede corregirse mientras el ejercicio esté abierto.
 > dentro de una operación append-only. La sustitución interna crea ya una nueva
 > versión registrada, contraasienta la anterior y regenera IVA, stock y
 > vencimientos sin reutilizar una rectificativa del proveedor.
+> La devolución parcial de proveedor también está disponible por cantidad de
+> línea. Conserva los valores históricos, admite operaciones acumuladas y
+> genera ajustes append-only de contabilidad, IVA, stock y crédito de proveedor.
 > La base de persistencia asigna a cada número de factura una identidad
 > documental estable, admite el estado histórico `SUPERSEDED` y garantiza en
 > PostgreSQL que solo exista una versión borrador o registrada por identidad.
@@ -422,6 +425,8 @@ La anulación:
 - La entrada se enlaza con factura y línea.
 - El coste de entrada actualiza el último coste.
 - Una rectificativa negativa reduce las unidades incorporadas.
+- Varias devoluciones parciales pueden consumir una entrada de forma acumulada,
+  sin superar la cantidad original y manteniendo el enlace de cada salida.
 - La operación contable y de inventario será transaccional.
 
 ## 16. Gastos sin factura

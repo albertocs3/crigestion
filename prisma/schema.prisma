@@ -105,6 +105,11 @@ enum PurchaseInvoiceDocumentType {
   RECTIFICATION
 }
 
+enum PurchaseRectificationMode {
+  FULL
+  PARTIAL
+}
+
 enum PurchasePaymentStatus {
   PENDING
   PARTIALLY_PAID
@@ -793,16 +798,16 @@ model Supplier {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  company            Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  createdBy          User                   @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy          User?                  @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  accounts           AccountingAccount[]
-  purchaseInvoices   PurchaseInvoice[]
+  company                    Company                            @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  createdBy                  User                               @relation("SuppliersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                  User?                              @relation("SuppliersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  accounts                   AccountingAccount[]
+  purchaseInvoices           PurchaseInvoice[]
   purchaseDocumentIdentities PurchaseSupplierDocumentIdentity[]
-  purchaseVatRecords PurchaseVatRecord[]
-  supplierPayments   SupplierPayment[]
-  credits            SupplierCredit[]
-  creditRefunds      SupplierCreditRefund[]
+  purchaseVatRecords         PurchaseVatRecord[]
+  supplierPayments           SupplierPayment[]
+  credits                    SupplierCredit[]
+  creditRefunds              SupplierCreditRefund[]
 
   @@unique([companyId, sequenceNumber])
   @@unique([companyId, code])
@@ -840,6 +845,8 @@ model PurchaseInvoice {
   total                           Decimal                     @default(0) @db.Decimal(14, 2)
   notes                           String?                     @db.VarChar(1000)
   rectificationReason             String?                     @db.VarChar(120)
+  rectificationMode               PurchaseRectificationMode?
+  rectifiesPurchaseVersion        Int?
   rectifiesPurchaseInvoiceId      String?                     @db.Uuid
   version                         Int                         @default(1)
   createdById                     String                      @db.Uuid
@@ -849,27 +856,28 @@ model PurchaseInvoice {
   createdAt                       DateTime                    @default(now()) @db.Timestamptz(3)
   updatedAt                       DateTime                    @updatedAt @db.Timestamptz(3)
 
-  company                  Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  supplier                 Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  documentIdentity         PurchaseSupplierDocumentIdentity @relation(fields: [documentIdentityId], references: [id], onDelete: Restrict)
-  createdBy                User                        @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy                User?                       @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  registeredBy             User?                       @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
-  lines                    PurchaseInvoiceLine[]
-  taxSummaries             PurchaseInvoiceTaxSummary[]
-  vatRecords               PurchaseVatRecord[]
-  dueDates                 PurchaseDueDate[]
-  allocations              SupplierPaymentAllocation[]
-  sourceSupplierCredit     SupplierCredit?             @relation("SupplierCreditSource")
-  creditApplications       SupplierCreditApplication[] @relation("SupplierCreditApplicationTargetPurchase")
-  accountingEntry          AccountingJournalEntry?     @relation("PurchaseInvoiceAccountingEntry")
-  sourceCorrectionOperation      PurchaseCorrectionOperation?  @relation("PurchaseCorrectionSource")
-  replacementCorrectionOperation PurchaseCorrectionOperation?  @relation("PurchaseCorrectionReplacement")
-  rectifiesPurchaseInvoice PurchaseInvoice?            @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
-  rectificationInvoices    PurchaseInvoice[]           @relation("PurchaseInvoiceRectifications")
+  company                        Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier                       Supplier                         @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  documentIdentity               PurchaseSupplierDocumentIdentity @relation(fields: [documentIdentityId], references: [id], onDelete: Restrict)
+  createdBy                      User                             @relation("PurchaseInvoicesCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                      User?                            @relation("PurchaseInvoicesUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  registeredBy                   User?                            @relation("PurchaseInvoicesRegisteredBy", fields: [registeredById], references: [id], onDelete: Restrict)
+  lines                          PurchaseInvoiceLine[]
+  taxSummaries                   PurchaseInvoiceTaxSummary[]
+  vatRecords                     PurchaseVatRecord[]
+  dueDates                       PurchaseDueDate[]
+  allocations                    SupplierPaymentAllocation[]
+  sourceSupplierCredit           SupplierCredit?                  @relation("SupplierCreditSource")
+  creditApplications             SupplierCreditApplication[]      @relation("SupplierCreditApplicationTargetPurchase")
+  accountingEntry                AccountingJournalEntry?          @relation("PurchaseInvoiceAccountingEntry")
+  sourceCorrectionOperation      PurchaseCorrectionOperation?     @relation("PurchaseCorrectionSource")
+  replacementCorrectionOperation PurchaseCorrectionOperation?     @relation("PurchaseCorrectionReplacement")
+  rectifiesPurchaseInvoice       PurchaseInvoice?                 @relation("PurchaseInvoiceRectifications", fields: [rectifiesPurchaseInvoiceId], references: [id], onDelete: Restrict)
+  rectificationInvoices          PurchaseInvoice[]                @relation("PurchaseInvoiceRectifications")
 
   @@unique([id, companyId])
   @@unique([id, companyId, supplierId], map: "purchase_invoices_id_company_supplier_key")
+  @@unique([rectifiesPurchaseInvoiceId, rectifiesPurchaseVersion], map: "purchase_invoices_partial_source_version_key")
   @@index([companyId, status, accountingDate, id])
   @@index([companyId, paymentStatus, accountingDate, id])
   @@index([supplierId, issueDate, id])
@@ -880,15 +888,15 @@ model PurchaseInvoice {
 }
 
 model PurchaseSupplierDocumentIdentity {
-  id                              String            @id @default(uuid()) @db.Uuid
-  companyId                       String            @db.Uuid
-  supplierId                      String            @db.Uuid
-  supplierInvoiceNumberNormalized String            @db.VarChar(80)
-  createdAt                       DateTime          @default(now()) @db.Timestamptz(3)
+  id                              String   @id @default(uuid()) @db.Uuid
+  companyId                       String   @db.Uuid
+  supplierId                      String   @db.Uuid
+  supplierInvoiceNumberNormalized String   @db.VarChar(80)
+  createdAt                       DateTime @default(now()) @db.Timestamptz(3)
 
-  company   Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  supplier  Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  invoices  PurchaseInvoice[]
+  company  Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  invoices PurchaseInvoice[]
 
   @@unique([companyId, supplierId, supplierInvoiceNumberNormalized], map: "purchase_supplier_document_identities_business_key")
   @@index([supplierId, createdAt, id])
@@ -896,37 +904,42 @@ model PurchaseSupplierDocumentIdentity {
 }
 
 model PurchaseInvoiceLine {
-  id                      String           @id @default(uuid()) @db.Uuid
-  purchaseInvoiceId       String           @db.Uuid
-  position                Int
-  catalogItemId           String?          @db.Uuid
-  catalogItemCodeSnapshot String?          @db.VarChar(20)
-  catalogItemKindSnapshot CatalogItemKind?
-  description             String           @db.VarChar(500)
-  quantity                Decimal          @db.Decimal(12, 3)
-  unitPrice               Decimal          @db.Decimal(12, 2)
-  discountPercent         Decimal          @default(0) @db.Decimal(5, 2)
-  discountAmount          Decimal          @default(0) @db.Decimal(12, 2)
-  purchaseAccountCode     String           @db.VarChar(9)
-  taxRateId               String           @db.Uuid
-  taxRateCodeSnapshot     String           @db.VarChar(40)
-  taxRateNameSnapshot     String           @db.VarChar(120)
-  taxRateSnapshot         Decimal          @db.Decimal(5, 2)
-  lineSubtotal            Decimal          @db.Decimal(14, 2)
-  lineDiscountTotal       Decimal          @db.Decimal(14, 2)
-  lineTaxableBase         Decimal          @db.Decimal(14, 2)
-  lineTaxAmount           Decimal          @db.Decimal(14, 2)
-  lineTotal               Decimal          @db.Decimal(14, 2)
-  createdAt               DateTime         @default(now()) @db.Timestamptz(3)
-  updatedAt               DateTime         @updatedAt @db.Timestamptz(3)
+  id                          String           @id @default(uuid()) @db.Uuid
+  purchaseInvoiceId           String           @db.Uuid
+  sourcePurchaseInvoiceLineId String?          @db.Uuid
+  position                    Int
+  catalogItemId               String?          @db.Uuid
+  catalogItemCodeSnapshot     String?          @db.VarChar(20)
+  catalogItemKindSnapshot     CatalogItemKind?
+  description                 String           @db.VarChar(500)
+  quantity                    Decimal          @db.Decimal(12, 3)
+  unitPrice                   Decimal          @db.Decimal(12, 2)
+  discountPercent             Decimal          @default(0) @db.Decimal(5, 2)
+  discountAmount              Decimal          @default(0) @db.Decimal(12, 2)
+  purchaseAccountCode         String           @db.VarChar(9)
+  taxRateId                   String           @db.Uuid
+  taxRateCodeSnapshot         String           @db.VarChar(40)
+  taxRateNameSnapshot         String           @db.VarChar(120)
+  taxRateSnapshot             Decimal          @db.Decimal(5, 2)
+  lineSubtotal                Decimal          @db.Decimal(14, 2)
+  lineDiscountTotal           Decimal          @db.Decimal(14, 2)
+  lineTaxableBase             Decimal          @db.Decimal(14, 2)
+  lineTaxAmount               Decimal          @db.Decimal(14, 2)
+  lineTotal                   Decimal          @db.Decimal(14, 2)
+  createdAt                   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt                   DateTime         @updatedAt @db.Timestamptz(3)
 
-  purchaseInvoice PurchaseInvoice       @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
-  catalogItem     CatalogItem?          @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
-  taxRate         CatalogTaxRate        @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
-  stockMovement   CatalogStockMovement?
+  purchaseInvoice           PurchaseInvoice       @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  sourcePurchaseInvoiceLine PurchaseInvoiceLine?  @relation("PurchaseInvoiceLineRectifications", fields: [sourcePurchaseInvoiceLineId], references: [id], onDelete: Restrict)
+  rectificationLines        PurchaseInvoiceLine[] @relation("PurchaseInvoiceLineRectifications")
+  catalogItem               CatalogItem?          @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  taxRate                   CatalogTaxRate        @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+  stockMovement             CatalogStockMovement?
 
   @@unique([purchaseInvoiceId, position])
+  @@unique([purchaseInvoiceId, sourcePurchaseInvoiceLineId], map: "purchase_invoice_lines_partial_source_key")
   @@index([catalogItemId])
+  @@index([sourcePurchaseInvoiceLineId])
   @@index([taxRateId])
   @@index([purchaseAccountCode])
   @@map("purchase_invoice_lines")
@@ -973,14 +986,14 @@ model PurchaseVatRecord {
   total                          Decimal                 @db.Decimal(14, 2)
   createdAt                      DateTime                @default(now()) @db.Timestamptz(3)
 
-  company         Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  supplier        Supplier                  @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  purchaseInvoice PurchaseInvoice           @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
-  taxSummary      PurchaseInvoiceTaxSummary? @relation(fields: [taxSummaryId], references: [id], onDelete: Restrict)
-  accountingEntry AccountingJournalEntry    @relation(fields: [accountingEntryId], references: [id], onDelete: Restrict)
+  company             Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  supplier            Supplier                     @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  purchaseInvoice     PurchaseInvoice              @relation(fields: [purchaseInvoiceId], references: [id], onDelete: Restrict)
+  taxSummary          PurchaseInvoiceTaxSummary?   @relation(fields: [taxSummaryId], references: [id], onDelete: Restrict)
+  accountingEntry     AccountingJournalEntry       @relation(fields: [accountingEntryId], references: [id], onDelete: Restrict)
   correctionOperation PurchaseCorrectionOperation? @relation(fields: [correctionOperationId], references: [id], onDelete: Restrict)
-  reversesVatRecord PurchaseVatRecord?       @relation("PurchaseVatRecordReversals", fields: [reversesVatRecordId], references: [id], onDelete: Restrict)
-  reversedByVatRecord PurchaseVatRecord?     @relation("PurchaseVatRecordReversals")
+  reversesVatRecord   PurchaseVatRecord?           @relation("PurchaseVatRecordReversals", fields: [reversesVatRecordId], references: [id], onDelete: Restrict)
+  reversedByVatRecord PurchaseVatRecord?           @relation("PurchaseVatRecordReversals")
 
   @@index([companyId, status, accountingDate, id])
   @@index([supplierId, issueDate, id])
@@ -1003,13 +1016,13 @@ model PurchaseCorrectionOperation {
   createdById                  String                       @db.Uuid
   createdAt                    DateTime                     @default(now()) @db.Timestamptz(3)
 
-  company                    Company                  @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  sourcePurchaseInvoice      PurchaseInvoice          @relation("PurchaseCorrectionSource", fields: [sourcePurchaseInvoiceId], references: [id], onDelete: Restrict)
-  replacementPurchaseInvoice PurchaseInvoice?         @relation("PurchaseCorrectionReplacement", fields: [replacementPurchaseInvoiceId], references: [id], onDelete: Restrict)
+  company                    Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  sourcePurchaseInvoice      PurchaseInvoice         @relation("PurchaseCorrectionSource", fields: [sourcePurchaseInvoiceId], references: [id], onDelete: Restrict)
+  replacementPurchaseInvoice PurchaseInvoice?        @relation("PurchaseCorrectionReplacement", fields: [replacementPurchaseInvoiceId], references: [id], onDelete: Restrict)
   reversalAccountingEntry    AccountingJournalEntry?
   vatAdjustments             PurchaseVatRecord[]
   stockReversals             CatalogStockMovement[]
-  createdBy                  User                     @relation("PurchaseCorrectionOperationsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdBy                  User                    @relation("PurchaseCorrectionOperationsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([companyId, createdAt, id])
   @@index([createdById, createdAt, id])
@@ -1203,7 +1216,7 @@ model User {
   createdPurchaseInvoices                 PurchaseInvoice[]                            @relation("PurchaseInvoicesCreatedBy")
   updatedPurchaseInvoices                 PurchaseInvoice[]                            @relation("PurchaseInvoicesUpdatedBy")
   registeredPurchaseInvoices              PurchaseInvoice[]                            @relation("PurchaseInvoicesRegisteredBy")
-  createdPurchaseCorrectionOperations      PurchaseCorrectionOperation[]                @relation("PurchaseCorrectionOperationsCreatedBy")
+  createdPurchaseCorrectionOperations     PurchaseCorrectionOperation[]                @relation("PurchaseCorrectionOperationsCreatedBy")
   createdSupplierPayments                 SupplierPayment[]                            @relation("SupplierPaymentsCreatedBy")
   createdCustomerAddresses                CustomerAddress[]                            @relation("CustomerAddressesCreatedBy")
   updatedCustomerAddresses                CustomerAddress[]                            @relation("CustomerAddressesUpdatedBy")
@@ -1323,29 +1336,33 @@ model CatalogItem {
 }
 
 model CatalogStockMovement {
-  id                    String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  itemId                String                   @db.Uuid
-  purchaseInvoiceLineId String?                  @unique @db.Uuid
-  purchaseCorrectionOperationId String?            @db.Uuid
-  reversesMovementId    String?                  @unique @db.Uuid
-  type                  CatalogStockMovementType @default(ADJUSTMENT)
-  quantity              Decimal                  @db.Decimal(12, 3)
-  previousStock         Decimal                  @db.Decimal(12, 3)
-  newStock              Decimal                  @db.Decimal(12, 3)
-  reason                String                   @db.VarChar(500)
-  createdById           String                   @db.Uuid
-  createdAt             DateTime                 @default(now()) @db.Timestamptz(3)
+  id                            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  itemId                        String                   @db.Uuid
+  purchaseInvoiceLineId         String?                  @unique @db.Uuid
+  purchaseCorrectionOperationId String?                  @db.Uuid
+  reversesMovementId            String?                  @unique @db.Uuid
+  sourceMovementId              String?                  @db.Uuid
+  type                          CatalogStockMovementType @default(ADJUSTMENT)
+  quantity                      Decimal                  @db.Decimal(12, 3)
+  previousStock                 Decimal                  @db.Decimal(12, 3)
+  newStock                      Decimal                  @db.Decimal(12, 3)
+  reason                        String                   @db.VarChar(500)
+  createdById                   String                   @db.Uuid
+  createdAt                     DateTime                 @default(now()) @db.Timestamptz(3)
 
-  item                CatalogItem           @relation(fields: [itemId], references: [id], onDelete: Restrict)
-  purchaseInvoiceLine PurchaseInvoiceLine?  @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
+  item                        CatalogItem                  @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  purchaseInvoiceLine         PurchaseInvoiceLine?         @relation(fields: [purchaseInvoiceLineId], references: [id], onDelete: Restrict)
   purchaseCorrectionOperation PurchaseCorrectionOperation? @relation(fields: [purchaseCorrectionOperationId], references: [id], onDelete: Restrict)
-  reversesMovement    CatalogStockMovement? @relation("CatalogStockMovementReversals", fields: [reversesMovementId], references: [id], onDelete: Restrict)
-  reversedByMovement  CatalogStockMovement? @relation("CatalogStockMovementReversals")
-  createdBy           User                  @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  reversesMovement            CatalogStockMovement?        @relation("CatalogStockMovementReversals", fields: [reversesMovementId], references: [id], onDelete: Restrict)
+  reversedByMovement          CatalogStockMovement?        @relation("CatalogStockMovementReversals")
+  sourceMovement              CatalogStockMovement?        @relation("CatalogStockMovementAdjustments", fields: [sourceMovementId], references: [id], onDelete: Restrict)
+  adjustmentMovements         CatalogStockMovement[]       @relation("CatalogStockMovementAdjustments")
+  createdBy                   User                         @relation("CatalogStockMovementsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
 
   @@index([itemId, createdAt, id])
   @@index([createdById, createdAt])
   @@index([purchaseCorrectionOperationId])
+  @@index([sourceMovementId])
   @@map("catalog_stock_movements")
 }
 
@@ -2659,34 +2676,35 @@ model AccountingFiscalYearReopenRequest {
 }
 
 model AccountingJournalEntry {
-  id                         String                @id @default(uuid()) @db.Uuid
-  fiscalYearId               String                @db.Uuid
-  invoiceId                  String?               @unique @db.Uuid
-  customerPaymentId          String?               @unique @db.Uuid
-  customerPaymentReturnId    String?               @unique @db.Uuid
-  customerCreditRefundId     String?               @unique @db.Uuid
-  supplierCreditRefundId     String?               @unique @db.Uuid
-  purchaseInvoiceId          String?               @unique @db.Uuid
-  supplierPaymentId          String?               @unique @db.Uuid
-  voidsInvoiceId             String?               @unique @db.Uuid
-  purchaseCorrectionOperationId String?             @unique @db.Uuid
-  reversesEntryId            String?               @unique @db.Uuid
-  waiverReviewId             String?               @unique @db.Uuid
-  waiverReversalRequestId    String?               @unique @db.Uuid
-  waiverReplacementRequestId String?               @unique @db.Uuid
-  year                       Int
-  sequence                   Int
-  number                     String                @unique @db.VarChar(20)
-  accountingDate             DateTime              @db.Date
-  concept                    String                @db.VarChar(240)
-  origin                     AccountingEntryOrigin @default(MANUAL)
-  status                     AccountingEntryStatus @default(POSTED)
-  totalDebit                 Decimal               @db.Decimal(14, 2)
-  totalCredit                Decimal               @db.Decimal(14, 2)
-  createdById                String                @db.Uuid
-  updatedById                String?               @db.Uuid
-  createdAt                  DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt                  DateTime              @updatedAt @db.Timestamptz(3)
+  id                            String                @id @default(uuid()) @db.Uuid
+  fiscalYearId                  String                @db.Uuid
+  invoiceId                     String?               @unique @db.Uuid
+  customerPaymentId             String?               @unique @db.Uuid
+  customerPaymentReturnId       String?               @unique @db.Uuid
+  customerCreditRefundId        String?               @unique @db.Uuid
+  supplierCreditRefundId        String?               @unique @db.Uuid
+  purchaseInvoiceId             String?               @unique @db.Uuid
+  supplierPaymentId             String?               @unique @db.Uuid
+  voidsInvoiceId                String?               @unique @db.Uuid
+  purchaseCorrectionOperationId String?               @unique @db.Uuid
+  reversesEntryId               String?               @unique @db.Uuid
+  adjustsEntryId                String?               @db.Uuid
+  waiverReviewId                String?               @unique @db.Uuid
+  waiverReversalRequestId       String?               @unique @db.Uuid
+  waiverReplacementRequestId    String?               @unique @db.Uuid
+  year                          Int
+  sequence                      Int
+  number                        String                @unique @db.VarChar(20)
+  accountingDate                DateTime              @db.Date
+  concept                       String                @db.VarChar(240)
+  origin                        AccountingEntryOrigin @default(MANUAL)
+  status                        AccountingEntryStatus @default(POSTED)
+  totalDebit                    Decimal               @db.Decimal(14, 2)
+  totalCredit                   Decimal               @db.Decimal(14, 2)
+  createdById                   String                @db.Uuid
+  updatedById                   String?               @db.Uuid
+  createdAt                     DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt                     DateTime              @updatedAt @db.Timestamptz(3)
 
   fiscalYear                     AccountingFiscalYear                        @relation(fields: [fiscalYearId], references: [id], onDelete: Restrict)
   invoice                        Invoice?                                    @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
@@ -2700,6 +2718,8 @@ model AccountingJournalEntry {
   purchaseCorrectionOperation    PurchaseCorrectionOperation?                @relation(fields: [purchaseCorrectionOperationId], references: [id], onDelete: Restrict)
   reversesEntry                  AccountingJournalEntry?                     @relation("AccountingEntryReversal", fields: [reversesEntryId], references: [id], onDelete: Restrict)
   reversedByEntry                AccountingJournalEntry?                     @relation("AccountingEntryReversal")
+  adjustsEntry                   AccountingJournalEntry?                     @relation("AccountingEntryAdjustments", fields: [adjustsEntryId], references: [id], onDelete: Restrict)
+  adjustmentEntries              AccountingJournalEntry[]                    @relation("AccountingEntryAdjustments")
   waiverReview                   SubscriptionRenewalWaiverReview?            @relation(fields: [waiverReviewId], references: [id], onDelete: Restrict)
   waiverReviewEvidence           SubscriptionRenewalWaiverReviewEvidence?
   waiverReversalTargetRequests   AccountingWaiverReversalRequest[]           @relation("AccountingWaiverReversalTarget")
@@ -2720,6 +2740,7 @@ model AccountingJournalEntry {
   @@index([fiscalYearId, accountingDate, id])
   @@index([status, accountingDate, id])
   @@index([origin, accountingDate, id])
+  @@index([adjustsEntryId])
   @@map("accounting_journal_entries")
 }
 

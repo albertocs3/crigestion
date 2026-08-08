@@ -28,7 +28,9 @@ describe("purchase HTTP contracts", () => {
   afterAll(async () => { await reset(); await prisma.$disconnect(); });
 
   it("requires authentication, origin, CSRF, JSON and idempotency", async () => {
-    expect((await purchasesGet(request("/api/purchases"))).status).toBe(401); expect((await supplierCreditsGet(request("/api/treasury/supplier-credits"))).status).toBe(401); await loginHttp(); const csrf = await csrfToken();
+    expect((await purchasesGet(request("/api/purchases"))).status).toBe(401); expect((await supplierCreditsGet(request("/api/treasury/supplier-credits"))).status).toBe(401);
+    expect([401, 403]).toContain((await purchaseRectificationPost(jsonRequest("/api/purchases/not-a-uuid/rectifications", {}), { params: Promise.resolve({ purchaseId: "not-a-uuid" }) })).status);
+    await loginHttp(); const csrf = await csrfToken();
     expect((await purchasesPost(jsonRequest("/api/purchases", {}, { csrf: null }))).status).toBe(403);
     expect((await purchasesPost(new Request("http://localhost/api/purchases", { method: "POST", headers: { Origin: "https://evil.example", "Content-Type": "application/json", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID() }, body: "{}" }))).status).toBe(403);
     expect((await purchasesPost(jsonRequest("/api/purchases", {}, { csrf, idempotency: null }))).status).toBe(400);
@@ -74,6 +76,31 @@ describe("purchase HTTP contracts", () => {
     const replay = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, body, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(replay.status).toBe(201);
     const conflict = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, { ...body, notes: "otro cuerpo" }, { csrf, idempotency: key }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(conflict.status).toBe(409); expect(await conflict.json()).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED" });
     const invalid = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, { ...body, unexpected: true }, { csrf }), { params: Promise.resolve({ purchaseId: created.value.id }) }); expect(invalid.status).toBe(422);
+  });
+
+  it("creates a partial supplier return through the protected HTTP contract", async () => {
+    const supplierId = await createTestSupplier(); const actor = testActor;
+    const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const created = await createPurchase({ supplierId, supplierInvoiceNumber: "HTTP-PARTIAL", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, purchaseContext("http-partial-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const lines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio retornable", quantity: "4", unitPrice: "25", discountPercent: "0", discountAmount: "0", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, lines, actor, purchaseContext("http-partial-lines", "lines", lines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, purchaseContext("http-partial-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, purchaseContext("http-partial-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken(); const key = randomUUID();
+    const body = { mode: "PARTIAL", expectedVersion: registered.value.version, supplierInvoiceNumber: "HTTP-PARTIAL-R1", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN", notes: null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED", lines: [{ sourcePurchaseInvoiceLineId: registered.value.lines[0]!.id, quantity: "1" }] };
+    const routeContext = { params: Promise.resolve({ purchaseId: created.value.id }) };
+    const response = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, body, { csrf, idempotency: key }), routeContext);
+    expect(response.status).toBe(201); const responseValue = await response.json(); expect(responseValue).toMatchObject({ documentType: "RECTIFICATION", rectificationMode: "PARTIAL", total: "-30.25" });
+    expect((await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, body, { csrf, idempotency: key }), routeContext)).status).toBe(201);
+    const replayRecord = await prisma.idempotencyRecord.findFirstOrThrow({ where: { requestHash: purchaseRequestHash(body) } });
+    const { total: omittedTotal, ...incompleteReplay } = responseValue; void omittedTotal;
+    await prisma.idempotencyRecord.update({ where: { key: replayRecord.key }, data: { responseBody: incompleteReplay } });
+    const invalidReplay = await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, body, { csrf, idempotency: key }), routeContext);
+    expect(invalidReplay.status).toBe(409); expect(await invalidReplay.json()).toMatchObject({ code: "IDEMPOTENCY_REPLAY_INVALID" });
+    expect((await purchaseRectificationPost(jsonRequest(`/api/purchases/${created.value.id}/rectifications`, { ...body, confirmation: "WRONG" }, { csrf }), routeContext)).status).toBe(422);
+    const original = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true } });
+    expect(original).toMatchObject({ status: "REGISTERED", paymentStatus: "PARTIALLY_SETTLED" }); expect(original.dueDates[0]).toMatchObject({ status: "PENDING" });
   });
 
   it("voids and replays an unpaid purchase through the protected correction contract", async () => {
@@ -123,6 +150,17 @@ describe("purchase HTTP contracts", () => {
     expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_CORRECTION_RATE_LIMITED", payload: { path: ["purchaseInvoiceId"], equals: limitedId } } })).toBe(0);
   });
 
+  it("rate limits repeated purchase rectification attempts and audits an opaque target", async () => {
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken();
+    const body = { mode: "PARTIAL", expectedVersion: 1, supplierInvoiceNumber: "R-LIMIT", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN", notes: null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED", lines: [{ sourcePurchaseInvoiceLineId: randomUUID(), quantity: "1" }] };
+    for (let attempt = 0; attempt < 5; attempt += 1) { const purchaseId = randomUUID(); expect((await purchaseRectificationPost(jsonRequest(`/api/purchases/${purchaseId}/rectifications`, body, { csrf }), { params: Promise.resolve({ purchaseId }) })).status).toBe(404); }
+    const limitedId = randomUUID(); const limited = await purchaseRectificationPost(jsonRequest(`/api/purchases/${limitedId}/rectifications`, body, { csrf }), { params: Promise.resolve({ purchaseId: limitedId }) });
+    expect(limited.status).toBe(429); expect(limited.headers.get("Retry-After")).toBe("900");
+    const fingerprint = createHash("sha256").update(`purchase-rectification:${limitedId}`).digest("hex");
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_RECTIFICATION_RATE_LIMITED", payload: { path: ["targetFingerprint"], equals: fingerprint } } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "PURCHASE_RECTIFICATION_RATE_LIMITED", payload: { path: ["purchaseInvoiceId"], equals: limitedId } } })).toBe(0);
+  });
+
   it("replaces an unpaid purchase through the protected correction contract", async () => {
     const supplierId = await createTestSupplier(); const actor = testActor; const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
     const created = await createPurchase({ supplierId, supplierInvoiceNumber: "HTTP-REPLACE", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, purchaseContext("http-replace-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
@@ -167,6 +205,21 @@ describe("purchase HTTP contracts", () => {
     } finally {
       transaction.mockRestore();
     }
+  });
+
+  it("returns a stable retryable 503 after exhausting serializable rectification retries", async () => {
+    cookieMock.reset(); await loginHttp(); const csrf = await csrfToken(); const purchaseId = randomUUID();
+    const body = { mode: "PARTIAL", expectedVersion: 1, supplierInvoiceNumber: "R-RETRY", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN", notes: null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED", lines: [{ sourcePurchaseInvoiceLineId: randomUUID(), quantity: "1" }] };
+    const realTransaction = prisma.$transaction.bind(prisma); let attempts = 0;
+    const transaction = vi.spyOn(prisma, "$transaction").mockImplementation((async (work: unknown, options?: { isolationLevel?: string }) => {
+      if (options?.isolationLevel === Prisma.TransactionIsolationLevel.Serializable) { attempts += 1; throw prismaError("P2034"); }
+      return Reflect.apply(realTransaction, prisma, options ? [work, options] : [work]);
+    }) as never);
+    try {
+      const response = await purchaseRectificationPost(jsonRequest(`/api/purchases/${purchaseId}/rectifications`, body, { csrf }), { params: Promise.resolve({ purchaseId }) });
+      expect(response.status).toBe(503); expect(response.headers.get("Retry-After")).toBe("3");
+      expect(await response.json()).toEqual({ code: "PURCHASE_TRANSACTION_RETRY_EXHAUSTED", message: "La operación no pudo completarse por concurrencia. Reinténtelo en unos segundos." }); expect(attempts).toBe(3);
+    } finally { transaction.mockRestore(); }
   });
 });
 

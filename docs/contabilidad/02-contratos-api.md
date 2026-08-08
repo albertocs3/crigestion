@@ -8,7 +8,7 @@ No incluye todavia adjuntos ni modificacion directa de asientos. La emision de f
 asiento automatico. Los cobros manuales crean tambien su asiento; las
 devoluciones y cobros de remesas se incorporan en cortes posteriores. El corte
 de compras incorpora ya facturas de proveedor, vencimientos, pagos manuales y
-rectificaciones totales recibidas del proveedor.
+rectificaciones totales y devoluciones parciales recibidas del proveedor.
 
 Permisos:
 
@@ -25,7 +25,7 @@ Permisos:
 | `Purchases.View` | Consultar facturas de compra y vencimientos de proveedor. |
 | `Purchases.ManageDrafts` | Crear y editar borradores, lineas y vencimientos. |
 | `Purchases.Register` | Registrar definitivamente una compra. |
-| `Purchases.Rectify` | Registrar una rectificacion total de proveedor. |
+| `Purchases.Rectify` | Registrar rectificaciones totales o devoluciones parciales de proveedor. |
 | `Purchases.Correct` | Anular internamente una compra impagada con evidencias inversas. |
 | `Treasury.ManageSupplierPayments` | Registrar pagos parciales o totales de proveedor. |
 | `Treasury.ViewSupplierPayments` | Consultar vencimientos y pagos de proveedor. |
@@ -72,7 +72,8 @@ Errores funcionales principales: `SUPPLIER_NOT_FOUND`,
   compra y genera, en una transaccion, asiento, IVA soportado y entradas de
   stock.
 - `POST /api/purchases/{purchaseId}/rectifications`: registra una factura
-  rectificativa total del proveedor, enlazada a la compra original.
+  rectificativa total o una devolución parcial por cantidades, enlazada a la
+  compra y a sus líneas originales.
 - `POST /api/purchases/{purchaseId}/corrections`: anula internamente una compra
   ordinaria impagada sin simular un documento del proveedor.
 - `GET /api/treasury/supplier-due-dates`: lista vencimientos y saldos pagados y
@@ -88,9 +89,9 @@ No se devuelven NIF, IBAN ni datos de contacto completos del proveedor.
 Las compras registradas permanecen inmutables. La rectificativa es un documento
 nuevo, tambien inmutable, y nunca reescribe lineas, IVA, asiento o stock del
 original. La anulación interna conserva igualmente el documento y añade una
-operación append-only con evidencias inversas. El reemplazo versionado, PDF adjunto, gastos sin factura,
-anticipos, devoluciones de pagos y remesas de pago quedan para cortes
-posteriores. El reembolso de un saldo nacido de una rectificativa pagada sí
+operación append-only con evidencias inversas. El reemplazo versionado también
+está disponible. PDF adjunto, gastos sin factura, anticipos, devoluciones de
+pagos y remesas de pago quedan para cortes posteriores. El reembolso de un saldo nacido de una rectificativa pagada sí
 forma parte del sublibro de créditos de proveedor descrito en 1.f.
 El pago con tarjeta se difiere hasta definir y configurar su subcuenta de
 tesoreria; este corte admite transferencia, domiciliacion y caja.
@@ -104,6 +105,9 @@ POST /api/purchases/{purchaseId}/rectifications
 ```
 
 Requiere origen permitido, cookie de sesion, CSRF, JSON e `Idempotency-Key`.
+La cuota es de cinco intentos por usuario cada quince minutos; los excesos y
+las denegaciones se auditan con una huella opaca del objetivo, sin números,
+descripciones ni importes.
 
 ```json
 {
@@ -145,8 +149,9 @@ cambiado.
 Solo se admite una rectificacion total por compra ordinaria registrada en uno
 de dos estados limpios: completamente impagada y sin actividad, o completamente
 pagada con todos los vencimientos `PAID` y asignaciones `POSTED` por el total.
-Las compras parcialmente pagadas o incoherentes, las rectificaciones parciales,
-incrementales o de varias compras quedan bloqueadas. La correccion interna
+Las compras parcialmente pagadas o incoherentes quedan bloqueadas para el modo
+`FULL`; las devoluciones parciales usan el modo `PARTIAL` descrito a
+continuación. Las rectificaciones de varias compras quedan bloqueadas. La correccion interna
 de datos mediante versiones es un flujo distinto y no forma parte de este
 endpoint. La fecha no puede preceder al original y ambos asientos deben quedar
 en el mismo ejercicio abierto.
@@ -163,6 +168,45 @@ Errores funcionales principales:
 | `409` | `PURCHASE_VERSION_CONFLICT` | La version visible quedo obsoleta. |
 | `409` | `PURCHASE_FISCAL_YEAR_NOT_OPEN` | La fecha contable no pertenece a un ejercicio abierto. |
 | `409` | `PURCHASE_RECTIFICATION_FISCAL_YEAR_MISMATCH` | El original y la rectificativa no pertenecen al mismo ejercicio abierto. |
+
+### Devolución parcial por cantidades
+
+El mismo endpoint admite `mode: "PARTIAL"`, motivo `RETURN`, confirmación
+literal `PARTIAL_PURCHASE_RETURN_CONFIRMED` y entre una y 200 líneas únicas:
+
+```json
+{
+  "mode": "PARTIAL",
+  "expectedVersion": 5,
+  "supplierInvoiceNumber": "R-2026-0043",
+  "issueDate": "2026-07-24",
+  "receivedDate": "2026-07-24",
+  "operationDate": "2026-07-24",
+  "accountingDate": "2026-07-24",
+  "reason": "RETURN",
+  "notes": null,
+  "confirmation": "PARTIAL_PURCHASE_RETURN_CONFIRMED",
+  "lines": [{ "sourcePurchaseInvoiceLineId": "00000000-0000-0000-0000-000000000000", "quantity": "2.000" }]
+}
+```
+
+El servidor conserva precio, descuento, cuenta e IVA históricos de cada línea,
+prorratea los importes y absorbe el redondeo residual al agotar la cantidad. Se
+permiten varias devoluciones acumuladas de una única compra, nunca por encima de
+la cantidad o los importes originales. Cada operación crea documento, asiento
+de ajuste, IVA soportado negativo, salida de stock y crédito append-only. El
+crédito compensa primero los vencimientos pendientes más tardíos; el remanente
+queda disponible para aplicar o reembolsar. Por ello se admiten compras
+impagadas, parcialmente pagadas o pagadas. La compra original incrementa su
+versión y solo pasa a `RECTIFIED` cuando se agotan todas sus cantidades.
+PostgreSQL refuerza la unicidad de cada línea origen por rectificativa, el
+prorrateo y residual exactos, la versión origen, los enlaces de asiento y stock
+y la aplicación prioritaria del crédito a la deuda original.
+
+Errores específicos: `PURCHASE_RECTIFICATION_LINE_NOT_FOUND`,
+`PURCHASE_RECTIFICATION_QUANTITY_EXCEEDS_REMAINING` y
+`PURCHASE_RECTIFICATION_ROUNDING_CONFLICT`. Las carreras agotadas devuelven
+`503 PURCHASE_TRANSACTION_RETRY_EXHAUSTED` con `Retry-After: 3`.
 
 ## 1.e Anulación interna de una compra
 

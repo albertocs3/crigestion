@@ -156,6 +156,68 @@ describe("supplier purchases and payments", () => {
     expect((await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: current.id } })).paymentStatus).toBe("PARTIALLY_PAID");
   });
 
+  it("accumulates partial supplier returns and applies their credits to the original pending amount", async () => {
+    const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
+    const item = await prisma.catalogItem.create({ data: { code: "PARTIAL-RECT-1", kind: "PRODUCT", name: "Producto parcialmente retornable", unitName: "Unidades", salePrice: "20", costPrice: "10", taxRateId: tax.id, taxRate: tax.rate, purchaseAccountCode: "600000000", stockTracked: true, stockCurrent: "2", stockMinimum: "0", createdById: actor.id } });
+    const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-PARTIAL-01", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, context("partial-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const sourceLines = { expectedVersion: created.value.version, lines: [{ catalogItemId: item.id, description: "Producto parcialmente retornable", quantity: "10", unitPrice: "10", discountPercent: "0", discountAmount: "0", purchaseAccountCode: null, taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, sourceLines, actor, context("partial-lines", "lines", sourceLines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, context("partial-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("partial-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    const sourceLineId = registered.value.lines[0]!.id; const sourceEntryId = registered.value.accountingEntry!.id;
+    const payment = { supplierId: supplier.id, paymentDate: "2026-07-10", paymentMethod: "BANK_TRANSFER" as const, reference: "PARTIAL-PAID", notes: null, allocations: [{ dueDateId: registered.value.dueDates[0]!.id, amount: "40.00" }] };
+    expect((await registerSupplierPayment(payment, actor, context("partial-payment", "pay", payment))).ok).toBe(true);
+    const firstCommand = { mode: "PARTIAL" as const, expectedVersion: registered.value.version, supplierInvoiceNumber: "R-PARTIAL-01-A", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN" as const, notes: null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED" as const, lines: [{ sourcePurchaseInvoiceLineId: sourceLineId, quantity: "5" }] };
+    const competingCommand = { ...firstCommand, supplierInvoiceNumber: "R-PARTIAL-01-RACE" };
+    const raced = await Promise.all([
+      createPurchaseRectification(created.value.id, firstCommand, actor, context("partial-first", `rectify:${created.value.id}`, firstCommand)),
+      createPurchaseRectification(created.value.id, competingCommand, actor, context("partial-race", `rectify:${created.value.id}`, competingCommand))
+    ]);
+    expect(raced.filter((result) => result.ok)).toHaveLength(1); expect(raced.filter((result) => !result.ok)).toHaveLength(1);
+    expect(raced.find((result) => !result.ok)).toMatchObject({ error: { code: "PURCHASE_VERSION_CONFLICT" } });
+    const first = raced.find((result) => result.ok)!;
+    expect(first).toMatchObject({ ok: true, status: 201, value: { rectificationMode: "PARTIAL", total: "-60.50" } }); if (!first.ok) throw new Error("first partial rectification failed");
+    const afterFirst = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true } });
+    expect(afterFirst).toMatchObject({ status: "REGISTERED", paymentStatus: "PARTIALLY_SETTLED", version: registered.value.version + 1 });
+    expect(afterFirst.dueDates[0]).toMatchObject({ status: "PENDING" });
+    const firstCredit = await prisma.supplierCredit.findFirstOrThrow({ where: { sourceRectificationPurchaseInvoiceId: first.value.id } });
+    expect(firstCredit.originalAmount.toFixed(2)).toBe("60.50");
+    expect((await prisma.supplierCreditApplication.aggregate({ where: { creditId: firstCredit.id }, _sum: { amount: true } }))._sum.amount?.toFixed(2)).toBe("60.50");
+    const firstEntry = await prisma.accountingJournalEntry.findUniqueOrThrow({ where: { purchaseInvoiceId: first.value.id } }); expect(firstEntry).toMatchObject({ adjustsEntryId: sourceEntryId, reversesEntryId: null });
+    const partialAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "PURCHASE_PARTIAL_RECTIFICATION_CREATED", payload: { path: ["rectificationPurchaseInvoiceId"], equals: first.value.id } } });
+    const auditText = JSON.stringify(partialAudit.payload); expect(auditText).not.toContain("Producto parcialmente retornable"); expect(auditText).not.toContain(first.value.supplierInvoiceNumber); expect(auditText).not.toContain("60.50");
+
+    const secondCommand = { ...firstCommand, expectedVersion: afterFirst.version, supplierInvoiceNumber: "R-PARTIAL-01-B", accountingDate: "2026-07-21", issueDate: "2026-07-21", receivedDate: "2026-07-21", operationDate: "2026-07-21" };
+    const second = await createPurchaseRectification(created.value.id, secondCommand, actor, context("partial-second", `rectify:${created.value.id}`, secondCommand));
+    expect(second).toMatchObject({ ok: true, value: { rectificationMode: "PARTIAL", total: "-60.50" } }); if (!second.ok) throw new Error(second.error.code);
+    const exhausted = await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id }, include: { dueDates: true, rectificationInvoices: true } });
+    expect(exhausted).toMatchObject({ status: "RECTIFIED", paymentStatus: "SETTLED", version: afterFirst.version + 1 }); expect(exhausted.dueDates[0]).toMatchObject({ status: "SETTLED" }); expect(exhausted.rectificationInvoices).toHaveLength(2);
+    const secondCredit = await prisma.supplierCredit.findFirstOrThrow({ where: { sourceRectificationPurchaseInvoiceId: second.value.id } });
+    expect(secondCredit.originalAmount.toFixed(2)).toBe("60.50");
+    expect((await prisma.supplierCreditApplication.aggregate({ where: { creditId: secondCredit.id }, _sum: { amount: true } }))._sum.amount?.toFixed(2)).toBe("20.50");
+    expect((await prisma.catalogItem.findUniqueOrThrow({ where: { id: item.id } })).stockCurrent.toFixed(3)).toBe("2.000");
+    expect(await createPurchaseRectification(created.value.id, secondCommand, actor, context("partial-exhausted", `rectify:${created.value.id}`, secondCommand))).toMatchObject({ ok: false, error: { code: "PURCHASE_NOT_RECTIFIABLE" } });
+  });
+
+  it("rejects a non-final partial return that rounds to zero and permits exhausting the quantity", async () => {
+    const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_0" } });
+    const created = await createPurchase({ supplierId: supplier.id, supplierInvoiceNumber: "F-PARTIAL-ROUND", issueDate: "2026-07-01", receivedDate: "2026-07-01", operationDate: "2026-07-01", accountingDate: "2026-07-01", notes: null }, actor, context("partial-round-create", "create", {})); if (!created.ok) throw new Error(created.error.code);
+    const sourceLines = { expectedVersion: created.value.version, lines: [{ catalogItemId: null, description: "Servicio de importe mínimo", quantity: "3", unitPrice: "0.01", discountPercent: "0", discountAmount: "0.02", purchaseAccountCode: "600000000", taxRateId: tax.id }] };
+    const withLines = await replacePurchaseLines(created.value.id, sourceLines, actor, context("partial-round-lines", "lines", sourceLines)); if (!withLines.ok) throw new Error(withLines.error.code);
+    const dues = { expectedVersion: withLines.value.version, dueDates: [{ dueDate: "2026-07-31", amount: withLines.value.total, paymentMethod: "BANK_TRANSFER" as const }] };
+    const scheduled = await replacePurchaseDueDates(created.value.id, dues, actor, context("partial-round-dues", "dues", dues)); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const registered = await registerPurchase(created.value.id, { expectedVersion: scheduled.value.version }, actor, context("partial-round-register", "register", {})); if (!registered.ok) throw new Error(registered.error.code);
+    const base = { mode: "PARTIAL" as const, expectedVersion: registered.value.version, supplierInvoiceNumber: "R-PARTIAL-ROUND", issueDate: "2026-07-20", receivedDate: "2026-07-20", operationDate: "2026-07-20", accountingDate: "2026-07-20", reason: "RETURN" as const, notes: null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED" as const };
+    const roundedToZero = { ...base, lines: [{ sourcePurchaseInvoiceLineId: registered.value.lines[0]!.id, quantity: "1" }] };
+    expect(await createPurchaseRectification(created.value.id, roundedToZero, actor, context("partial-round-zero", `rectify:${created.value.id}`, roundedToZero))).toMatchObject({ ok: false, error: { code: "PURCHASE_RECTIFICATION_ROUNDING_CONFLICT" } });
+    const consumesValueEarly = { ...base, lines: [{ sourcePurchaseInvoiceLineId: registered.value.lines[0]!.id, quantity: "2" }] };
+    expect(await createPurchaseRectification(created.value.id, consumesValueEarly, actor, context("partial-round-early", `rectify:${created.value.id}`, consumesValueEarly))).toMatchObject({ ok: false, error: { code: "PURCHASE_RECTIFICATION_ROUNDING_CONFLICT" } });
+    const exhausted = { ...base, lines: [{ sourcePurchaseInvoiceLineId: registered.value.lines[0]!.id, quantity: "3" }] };
+    expect(await createPurchaseRectification(created.value.id, exhausted, actor, context("partial-round-all", `rectify:${created.value.id}`, exhausted))).toMatchObject({ ok: true, value: { total: "-0.01" } });
+    expect(await prisma.purchaseInvoice.findUniqueOrThrow({ where: { id: created.value.id } })).toMatchObject({ status: "RECTIFIED" });
+  });
+
   it("creates an append-only full supplier rectification and reverses accounting, VAT, stock and due dates", async () => {
     const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });
     const item = await prisma.catalogItem.create({ data: { code: "RECT-1", kind: "PRODUCT", name: "Producto rectificable", unitName: "Unidades", salePrice: "20", costPrice: "8", taxRateId: tax.id, taxRate: tax.rate, purchaseAccountCode: "600000000", stockTracked: true, stockCurrent: "2", stockMinimum: "0", createdById: actor.id } });

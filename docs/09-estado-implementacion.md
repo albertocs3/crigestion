@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-08-06.
+Fecha de corte: 2026-08-08.
 
 ## 2. Rebanadas disponibles
 
@@ -16,7 +16,7 @@ Fecha de corte: 2026-08-06.
 | Adjuntos seguros | Operativa inicial | Primera rebanada de logotipo empresarial desplegada en staging: cuarentena, ClamAV fail-closed, normalizacion, almacenamiento privado, integridad, RBAC, auditoria y bundle cifrado con drill de coherencia. |
 | Clientes | Operativa inicial | Maestro fiscal, direcciones, tiendas, condiciones comerciales y cuentas contables de cliente. |
 | Proveedores | Operativa inicial | Maestro fiscal desplegado y aceptado en staging: alta, edicion, baja logica, subcuenta 400, idempotencia, concurrencia optimista, RBAC, auditoria y datos sensibles cifrados. |
-| Compras | Operativa inicial en staging | Borradores, lineas, vencimientos, registro contable, IVA soportado, stock, pagos y rectificacion total impagada o totalmente pagada. El caso pagado crea credito append-only, compensable o reembolsable por banco/caja con maker-checker. |
+| Compras | Operativa inicial en staging | Borradores, lineas, vencimientos, registro contable, IVA soportado, stock, pagos, rectificación total y devoluciones parciales acumulables. Las rectificativas crean crédito append-only, compensable o reembolsable por banco/caja con maker-checker. |
 | Catalogo | Operativo inicial | Categorias, articulos, impuestos y movimientos de stock. |
 | Facturacion | Operativa inicial | Borradores, lineas, emision, vencimientos, cobros, devoluciones, impagos, rectificativas y PDF. |
 | Contabilidad | Operativa inicial en staging | PGC PYMES, cuentas, asientos manuales, ejercicios y ciclo maker-checker de cierre y reapertura mediante contraasientos append-only. |
@@ -247,6 +247,22 @@ vigente. Prisma, TypeScript, ESLint, build, auditoría npm y smoke local
 HTTP 200 finalizaron correctamente. Las revisiones independientes de datos y
 seguridad no dejaron hallazgos P0/P1 abiertos.
 
+El siguiente corte añade la migración 131 y la devolución parcial de compras por
+cantidad de línea. Una compra puede recibir varias rectificativas `PARTIAL`; el
+servidor reutiliza precio, descuentos, cuenta e IVA históricos, limita de forma
+transaccional el acumulado y el prorrateo, vincula cada parcial a la versión
+exacta del original, enlaza cada ajuste contable y salida de stock con su
+origen y crea un crédito de proveedor. El crédito compensa primero vencimientos
+pendientes y deja disponible cualquier exceso, por lo que el flujo admite
+compras impagadas, parcialmente pagadas o pagadas sin reescribir evidencias.
+La cadena completa de 131 migraciones se aplicó desde cero y las 25 pruebas
+dirigidas de compras cubren acumulación, carrera, redondeo, contrato HTTP,
+replay, cuota, auditoría opaca y agotamiento de reintentos serializables.
+La regresión completa terminó con 76 archivos y 698 pruebas; Prisma Validate,
+TypeScript, ESLint, build optimizado y `npm audit` sin vulnerabilidades también
+finalizaron correctamente. Las revisiones independientes de datos y seguridad
+no dejaron hallazgos P0/P1/P2 abiertos.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
@@ -297,9 +313,9 @@ Prioridades pendientes despues de este corte:
    inmutable y repetir el drill desde esa copia. El drill local no sustituye
    todavia un runner de aplicacion total que reinstale release, configuracion,
    base y adjuntos ante perdida completa.
-4. Completar el ciclo avanzado de proveedor pendiente con la rectificacion
-   parcial. La anulación interna impagada y la sustitución interna versionada
-   ya están implementadas.
+4. Ampliar el ciclo avanzado de proveedor con rectificaciones parciales por
+   importe, portes o descuentos cuando exista un requisito funcional confirmado;
+   la devolución parcial por cantidad ya está implementada.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Completar Suscripciones con cambios programados, edicion controlada de la

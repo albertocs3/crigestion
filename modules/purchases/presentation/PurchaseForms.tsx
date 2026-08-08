@@ -78,6 +78,41 @@ export function PurchaseRectificationForm({ purchaseId, version, originalNumber,
   </form>;
 }
 
+type PartialRectificationLine = { id: string; position: number; description: string; quantity: string; rectifiedQuantity: string; remainingRectifiableQuantity: string; total: string };
+
+export function PurchasePartialRectificationForm({ purchaseId, version, originalNumber, lines }: { purchaseId: string; version: number; originalNumber: string; lines: PartialRectificationLine[] }) {
+  const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" });
+  const available = lines.filter((line) => Number(line.remainingRectifiableQuantity) > 0);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [quantities, setQuantities] = useState<Record<string, string>>(() => Object.fromEntries(available.map((line) => [line.id, line.remainingRectifiableQuantity])));
+  const selectedLines = available.filter((line) => selected[line.id]);
+  const selectedQuantity = selectedLines.reduce((sum, line) => sum + Number(quantities[line.id] ?? 0), 0);
+  const estimatedCredit = selectedLines.reduce((sum, line) => sum + Number(line.total) * Number(quantities[line.id] ?? 0) / Number(line.quantity), 0);
+  async function submit(formData: FormData) {
+    const requestedLines = selectedLines.map((line) => ({ sourcePurchaseInvoiceLineId: line.id, quantity: quantities[line.id] ?? "" }));
+    if (!requestedLines.length) { setState({ kind: "error", message: "Selecciona al menos una línea para devolver." }); return; }
+    if (!window.confirm(`¿Registrar la devolución parcial de ${originalNumber}? Has seleccionado ${requestedLines.length} líneas y ${selectedQuantity.toFixed(3)} unidades, con un crédito estimado de ${estimatedCredit.toFixed(2)} EUR. Se crearán ajustes de contabilidad, IVA y stock.`)) return;
+    setState({ kind: "pending" });
+    const result = await mutate(`/api/purchases/${purchaseId}/rectifications`, "POST", {
+      mode: "PARTIAL", expectedVersion: version, supplierInvoiceNumber: String(formData.get("supplierInvoiceNumber")),
+      issueDate: String(formData.get("issueDate")), receivedDate: String(formData.get("receivedDate")), operationDate: String(formData.get("operationDate")), accountingDate: String(formData.get("accountingDate")),
+      reason: "RETURN", notes: String(formData.get("notes") || "").trim() || null, confirmation: "PARTIAL_PURCHASE_RETURN_CONFIRMED", lines: requestedLines
+    }, key.get());
+    if (!result.ok) { if (result.status < 500) key.clear(); setState({ kind: "error", message: result.message }); return; }
+    key.clear(); const created = result.value as { id: string }; router.push(`/app/purchases/${created.id}`); router.refresh();
+  }
+  return <form className="stack" action={submit}>
+    <h2>Devolución parcial al proveedor</h2>
+    <p className="muted">Selecciona cantidades de las líneas originales. Se mantienen sus precios, descuentos, IVA y subcuentas históricas. Las cantidades ya devueltas no pueden volver a rectificarse.</p>
+    <div className="form-grid"><label>Número de la rectificativa<input name="supplierInvoiceNumber" required maxLength={80}/></label><label>Fecha emisión<input name="issueDate" type="date" required/></label><label>Fecha recepción<input name="receivedDate" type="date" required/></label><label>Fecha operación<input name="operationDate" type="date" required/></label><label>Fecha contable<input name="accountingDate" type="date" required/></label></div>
+    <fieldset className="stack"><legend>Líneas devueltas</legend><div className="table-wrap"><table><thead><tr><th>Seleccionar</th><th>Línea</th><th className="numeric">Original</th><th className="numeric">Ya devuelta</th><th className="numeric">Disponible</th><th className="numeric">A devolver</th></tr></thead><tbody>{available.map((line) => <tr key={line.id}><td><input type="checkbox" aria-label={`Seleccionar ${line.description}`} checked={Boolean(selected[line.id])} onChange={(event) => setSelected((current) => ({ ...current, [line.id]: event.target.checked }))}/></td><td>{line.position}. {line.description}</td><td className="numeric">{line.quantity}</td><td className="numeric">{line.rectifiedQuantity}</td><td className="numeric">{line.remainingRectifiableQuantity}</td><td className="numeric"><input type="number" aria-label={`Cantidad a devolver de ${line.description}`} value={quantities[line.id] ?? ""} inputMode="decimal" min="0.001" step="0.001" max={line.remainingRectifiableQuantity} required={Boolean(selected[line.id])} disabled={!selected[line.id]} onChange={(event) => setQuantities((current) => ({ ...current, [line.id]: event.target.value }))}/></td></tr>)}</tbody></table></div></fieldset>
+    <p className="message" role="status">Resumen previo: {selectedLines.length} líneas, {selectedQuantity.toFixed(3)} unidades y crédito estimado {estimatedCredit.toFixed(2)} EUR. El servidor calculará el importe fiscal definitivo.</p>
+    <label>Notas<textarea name="notes" maxLength={1000}/></label>
+    <button className="button button-danger" disabled={state.kind === "pending" || !available.length}>{state.kind === "pending" ? "Rectificando…" : "Registrar devolución parcial"}</button>
+    {state.message ? <p className={`message ${state.kind === "error" ? "error" : "success"}`} role="status">{state.message}</p> : null}
+  </form>;
+}
+
 export function PurchaseCorrectionVoidForm({ purchaseId, version, originalNumber, issueDate }: { purchaseId: string; version: number; originalNumber: string; issueDate: string }) {
   const router = useRouter(); const key = useMutationKey(); const [state, setState] = useState<State>({ kind: "idle" });
   async function submit(formData: FormData) {
