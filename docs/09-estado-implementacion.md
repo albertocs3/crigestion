@@ -259,7 +259,7 @@ La cadena completa de 133 migraciones se aplicó desde cero y las 27 pruebas
 dirigidas cubren el límite transaccional del backfill, acumulación, carrera,
 redondeo, contrato HTTP, replay, cuota, auditoría opaca y agotamiento de
 reintentos serializables.
-La regresión completa terminó con 76 archivos y 698 pruebas; Prisma Validate,
+La regresión completa terminó con 77 archivos y 700 pruebas; Prisma Validate,
 TypeScript, ESLint, build optimizado y `npm audit` sin vulnerabilidades también
 finalizaron correctamente. Las revisiones independientes de datos y seguridad
 no dejaron hallazgos P0/P1/P2 abiertos.

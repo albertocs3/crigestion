@@ -5,7 +5,7 @@
 Este runbook cubre exclusivamente `https://gestion-test.crisoft.es` en el VPS
 Ubuntu 22.04 administrado con Plesk.
 
-Estado verificado el 2026-07-17:
+Estado verificado el 2026-08-08:
 
 - VPS `93.93.116.238`.
 - Node.js `22.23.1` en `/opt/plesk/node/22/bin/node`.
@@ -14,11 +14,11 @@ Estado verificado el 2026-07-17:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extension `btree_gist` instalada.
-- Release activa `staging-2026.07.17-rc2`.
-- Commit `ddfc6ce037b68683755d160d53b79fbadab0a011`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.07.17-rc2` y
+- Release activa `staging-2026.08.08-rc3`.
+- Commit `7d87c3f875898b398e8546d8094d854dcdf32b56`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.08-rc3` y
   enlace `/opt/crigestion-staging/current`.
-- 79 migraciones aplicadas y 0 incompletas.
+- 133 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
 - Health local y publico en estado `ok` con HTTP 200.
 - Backup PostgreSQL diario y health cada cinco minutos activos mediante timers.
@@ -619,6 +619,29 @@ que solo permanecia activa la sesion administradora y se verifico el evento
 `USER_DEACTIVATED` sin secretos. La decision, los riesgos aceptados y el
 siguiente ciclo funcional se registran en
 `docs/plataforma/12-acta-uat-staging-2026-07-17.md`.
+
+### 8.3 Despliegue acumulativo del 2026-08-08
+
+La release `staging-2026.08.08-rc3` promovio el entorno desde 96 hasta 133
+migraciones. Antes de cada cambio persistente se creo un dump custom, se
+verifico su SHA-256 y se valido su catalogo con `pg_restore --list`; se
+preservaron ademas copias identificadas con `rc1`, el estado intermedio de
+`rc2` y `rc3`.
+
+El primer intento detecto eventos de constraint triggers diferidos pendientes
+entre el backfill y el endurecimiento de identidades documentales. El segundo
+confirmo el mismo patron en el backfill del modo de rectificacion. Ambos
+intentos se revirtieron transaccionalmente, se inventariaron sus objetos
+fisicos antes de usar `prisma migrate resolve --rolled-back`, y se corrigieron
+en tags posteriores sin mover los tags ya publicados. Las migraciones finales
+se separaron por limites de commit y la unidad controlada de `rc3` termino con
+`Result=success` y endurecimiento de privilegios aplicado.
+
+La conmutacion del enlace fue atomica. Web y worker se arrancaron en ese orden;
+los health local y publico devolvieron HTTP 200 con aplicacion, PostgreSQL,
+VeriFactu TEST y worker en `ok`, y el monitor canonico registro
+`CRIGESTION_STAGING_HEALTH_OK`. Produccion no se modifico. La UAT funcional de
+las devoluciones parciales queda documentada por separado cuando finalice.
 
 ## 9. Rollback y recuperacion
 
