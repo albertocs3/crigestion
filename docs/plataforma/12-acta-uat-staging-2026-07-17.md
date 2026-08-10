@@ -757,3 +757,58 @@ Los cuatro casos conservaron el estado seleccionado, mostraron sus resultados
 y no presentaron el mensaje de filtros invalidos. La regresion queda cerrada
 en staging. El archivo temporal de publicacion se elimino y la clave SSH
 temporal se retiro; un intento posterior con esa identidad fue rechazado.
+
+## 22. Reactivacion controlada de suscripciones en staging
+
+El 2026-08-10 se promovio la release inmutable
+`staging-2026.08.10-rc1`, commit
+`a588f33d0f4cebc900c4a66316d4255900d4d6ec`, con BUILD_ID
+`B9Aaq7PhN6ZHdB-pdh8Eb`. Antes del corte se genero y verifico el backup
+`crigestion_staging-staging-2026.08.10-rc1-predeploy-20260810T160107Z.dump`,
+SHA-256
+`bdc4d58e45897f5f5c216f5b2e9fff9ecfcfa19a4f6a84d91fd13619c817bd02`.
+
+Con aplicacion, worker y health timer detenidos se ejecuto una unica unidad
+migradora controlada. La migracion
+`20260810143000_add_subscription_reactivations` termino correctamente y el
+catalogo quedo con 134 migraciones finalizadas y cero fallos activos. Se
+comprobaron la tabla append-only, las funciones y triggers de consistencia y
+el permiso `Subscriptions.Reactivate` antes de conmutar `current` de forma
+atomica.
+
+Tras el arranque, aplicacion, worker y health timer quedaron activos. La
+unidad de health emitio `CRIGESTION_STAGING_HEALTH_OK` y la sonda publica
+de cierre devolvio HTTP 200 con `status`, `database`, `verifactu` y `worker`
+en estado `ok`. No aparecieron warnings en los journals desde la conmutacion
+ni errores o warnings en la consola del navegador durante la UAT.
+
+La prueba funcional uso exclusivamente datos sinteticos:
+
+- servicio `Servicio UAT reactivacion RC1`, codigo interno `2`, por 10,00 EUR
+  sin IVA;
+- suscripcion `SUS-2026-00001`, UUID
+  `f8c0cd7a-e70d-4006-9d4e-03e7506c76e2`, asociada al cliente de pruebas
+  `CLIENTE PRUEBAS AEAT TEST`;
+- motivo de baja y reactivacion `UAT reactivacion controlada RC1`.
+
+Desde la interfaz se completo el ciclo
+`DRAFT -> ACTIVE -> CANCELLED -> ACTIVE`. La baja inmediata quedo fechada el
+2026-08-10 y conservada como evidencia. La reactivacion fijo la proxima
+renovacion en 2026-08-11 y mostro en el historial la fecha efectiva, la fecha
+anterior, el motivo y la baja previa. Una recarga completa confirmo la
+persistencia del estado `ACTIVE`, la nueva fecha y el historial. El producto
+auxiliar de compras usado durante la preparacion se devolvio a su estado
+inactivo original; el servicio y la suscripcion permanecen identificados como
+fixtures trazables de staging.
+
+La suite previa a la publicacion completo 708 pruebas Vitest y 13 pruebas E2E,
+ademas de typecheck, lint, build, smoke local y auditoria npm sin
+vulnerabilidades. Esa suite cubre tenant isolation, RBAC, CSRF, idempotencia,
+concurrencia, rate limiting y auditoria sin motivo ni claves sensibles. La UAT
+de navegador no leyo directamente la tabla de auditoria.
+
+Al terminar se retiro exclusivamente la clave SSH temporal con huella
+`SHA256:pZR19luvoeYMqpXzlqbqmTXcESc+bye75Cv6ap3vdj0`; una conexion nueva con
+esa identidad fue rechazada. Produccion no se modifico. El archivo de
+publicacion sin secretos conservado en `incoming` puede eliminarse en la
+proxima ventana operativa autorizada; no afecta a la release activa.
