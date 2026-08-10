@@ -1,3 +1,5 @@
+BEGIN;
+
 CREATE TYPE "SubscriptionReactivationScheduleStatus" AS ENUM ('PENDING', 'APPLIED', 'REVOKED');
 
 CREATE TABLE "subscription_reactivation_schedules" (
@@ -517,3 +519,5 @@ FROM "roles" role
 JOIN "permissions" permission ON permission."code" = 'Subscriptions.ScheduleReactivations'
 WHERE role."code" IN ('Administrator', 'Administrador') AND role."isProtected" = true
 ON CONFLICT ("roleId", "permissionId") DO NOTHING;
+
+COMMIT;
