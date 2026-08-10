@@ -732,7 +732,8 @@ identificadores tecnicos, el numero de lineas, un movimiento de stock y una
 aplicacion de credito, pero no incluye numero fiscal, descripcion, notas ni
 importes. No se observaron existencias negativas.
 
-El articulo sintetico quedo inactivo con stock cero. La compra, sus dos
+El articulo sintetico quedo inactivo con stock cero. Tras el smoke de cierre,
+el proveedor sintetico `PROV00001` tambien quedo inactivo. La compra, sus dos
 rectificativas, asientos, IVA, vencimiento, creditos, movimientos de stock y
 auditoria se conservan como evidencia trazable de staging.
 
