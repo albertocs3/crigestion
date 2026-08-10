@@ -812,3 +812,68 @@ Al terminar se retiro exclusivamente la clave SSH temporal con huella
 esa identidad fue rechazada. Produccion no se modifico. El archivo de
 publicacion sin secretos conservado en `incoming` puede eliminarse en la
 proxima ventana operativa autorizada; no afecta a la release activa.
+
+## 23. Reactivacion programada supervisada en staging
+
+El 2026-08-10 se promovio la release inmutable
+`staging-2026.08.10-rc2`, commit
+`be74a54451714f9110e6f8c49c13099878ccab7c`, con BUILD_ID
+`TaxBypqZfvbjjXynfOVRL`. El artefacto publicado se verifico con SHA-256
+`61636554641e1bdaf7567a7e23f4f38bf8ce75f5b448d19484e90024c12a1d7d`.
+
+Antes del corte se genero y valido con `pg_restore --list` el backup
+`crigestion_staging-auto-20260810T192641Z.dump`. Se conservo la copia ligada a
+la release
+`crigestion_staging-pre-staging-2026.08.10-rc2-20260810T192641Z.dump`, con
+SHA-256
+`de56f491a8f8cacfc35443078efd0b1272dc07526588384711c430949b549cca`.
+Aplicacion, worker y health timer se detuvieron antes de migrar y no quedaron
+sesiones de aplicacion abiertas contra PostgreSQL.
+
+La unidad migradora controlada aplico
+`20260810150000_add_subscription_reactivation_schedules`. El catalogo quedo
+con 135 migraciones finalizadas y cero fallos activos. Se comprobaron la tabla,
+los nueve indices validos, los triggers habilitados, el permiso
+`Subscriptions.ScheduleReactivations` y el endurecimiento de los roles runtime
+y migrador. La migracion tambien se habia validado previamente desde cero en
+PostgreSQL 14 y PostgreSQL 16.
+
+Hubo dos incidencias operativas antes del arranque, ambas sin impacto en datos:
+
+- el primer intento de la unidad migradora no alcanzo Prisma porque `npm ci`
+  habia recreado `node_modules` sin lectura para el grupo de release; se
+  confirmo que no existia fila ni objeto parcial y se normalizo la propiedad;
+- el primer arranque web no podia leer `.next/BUILD_ID` por el mismo patron de
+  permisos; se normalizo toda la release a `root:crigestion-staging-release`
+  con lectura y ejecucion para el grupo y sin acceso para otros usuarios.
+
+La segunda ejecucion migradora termino con `Result=success` y
+`ExecMainStatus=0`. Tras la conmutacion atomica, aplicacion, worker y health
+timer quedaron activos. Los health local y publico devolvieron HTTP 200 con
+`status`, `database`, `verifactu` y `worker` en `ok`; el journal no registro
+errores durante la UAT.
+
+La UAT de navegador uso la suscripcion sintetica `SUS-2026-00001`, UUID
+`f8c0cd7a-e70d-4006-9d4e-03e7506c76e2`. Se completo este ciclo:
+
+1. baja inmediata de la suscripcion activa;
+2. programacion de reactivacion para el 2026-08-11, manteniendo el estado
+   `CANCELLED`;
+3. comprobacion de que la orden pendiente ocultaba y bloqueaba la reactivacion
+   inmediata;
+4. retirada supervisada de la programacion, conservandola como `REVOKED`;
+5. reactivacion inmediata para devolver el fixture a `ACTIVE`, con proxima
+   renovacion el 2026-08-11.
+
+La lectura posterior en PostgreSQL confirmo una unica orden `REVOKED`, version
+2, y la suscripcion `ACTIVE`, version 8. Los eventos
+`SUBSCRIPTION_REACTIVATION_SCHEDULED`,
+`SUBSCRIPTION_REACTIVATION_SCHEDULE_REVOKED` y
+`SUBSCRIPTION_REACTIVATED` quedaron registrados; sus payloads no contenian las
+claves `reason`, `idempotencyKey`, `token` ni `secret`. Una ultima sonda publica
+mantuvo todos los componentes en `ok`. No se consulto ni modifico produccion.
+
+El rollback exclusivamente de aplicacion a rc1 deja de considerarse seguro
+despues de crear una orden programada. A partir de esta UAT, cualquier
+incidencia requiere forward-fix, retirada mediante rc2 o restauracion del
+backup aprobado; no basta con cambiar el symlink al binario anterior.
