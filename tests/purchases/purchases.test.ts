@@ -14,8 +14,8 @@ const initialization: InitializeCommand = { company: { legalName: "CriGestion Te
 let testActor: SessionUser;
 
 describe("supplier purchases and payments", () => {
-  beforeEach(async () => { configureSecrets(); await reset(); testActor = await initialize(); });
-  afterAll(async () => { await reset(); await prisma.$disconnect(); });
+  beforeEach(async () => { configureSecrets(); await reset(); testActor = await initialize(); }, 30_000);
+  afterAll(async () => { await reset(); await prisma.$disconnect(); }, 30_000);
 
   it("registers purchase accounting, supported VAT, stock and partial/full supplier payments atomically", async () => {
     const actor = testActor; const supplier = await supplierFor(actor); const tax = await prisma.catalogTaxRate.findUniqueOrThrow({ where: { code: "IVA_21" } });

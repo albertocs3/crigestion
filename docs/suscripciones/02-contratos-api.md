@@ -7,7 +7,8 @@ activacion manual, cancelacion inmediata y registro o retirada de una baja
 futura. Incluye tambien el runner manual de renovaciones: consulta agrupada,
 reserva de borrador, confirmacion atomica y liberacion trazable. Todavia no
 incluye planes, cambios contractuales programados, edicion de lineas en la
-vista previa, gestion avanzada de exclusiones ni reactivacion.
+vista previa ni gestion avanzada de exclusiones. La reactivacion inmediata de
+una suscripcion cancelada si forma parte del contrato.
 
 Las suscripciones consumen clientes y conceptos del catalogo comunes. Al crear
 una suscripcion se congelan codigo, tipo, descripcion, precio e impuesto de cada
@@ -28,6 +29,7 @@ linea para que cambios posteriores del catalogo no alteren el contrato creado.
 | `Subscriptions.Manage` | Crear y activar suscripciones. |
 | `Subscriptions.ManageEconomics` | Informar precios o descuentos distintos de los valores del catalogo. |
 | `Subscriptions.Cancel` | Cancelar inmediatamente o registrar y retirar una baja futura. |
+| `Subscriptions.Reactivate` | Reactivar una suscripcion cancelada sin recuperar periodos omitidos. |
 | `Subscriptions.RunRenewals` | Consultar candidatos, preparar reservas y liberarlas. |
 | `Subscriptions.ConfirmRenewals` | Confirmar una reserva de renovacion. |
 | `Subscriptions.ManageRenewalExclusions` | Excluir renovaciones y consultar sus motivos. |
@@ -183,6 +185,35 @@ actor e instante de registro, incrementa la version y audita
 La operacion es inmediata. Una fecha programada o retroactiva requiere el
 futuro flujo versionado de cancelaciones y no se simula cambiando antes el
 estado a `CANCELLED`.
+
+## 8.1. `POST /api/subscriptions/{subscriptionId}/reactivate`
+
+Permisos requeridos: `Subscriptions.Reactivate` y `Subscriptions.View`, porque
+la respuesta contiene el detalle actualizado de la suscripcion.
+
+```json
+{
+  "expectedVersion": 6,
+  "nextRenewalDate": "2026-09-01",
+  "reason": "El cliente solicita reanudar el servicio"
+}
+```
+
+Solo admite una suscripcion `CANCELLED`, con cliente activo, configuracion
+economica coherente y sin reserva u exclusion abierta. La reactivacion es
+inmediata según la fecha de negocio de `Europe/Madrid`; una reactivacion futura
+requiere otro flujo y no se simula dejando la suscripcion activa antes de
+tiempo. `nextRenewalDate` debe ser posterior a la baja, no anterior a la fecha
+de negocio, no superar la fecha final contractual y no reutilizar ni solapar un
+periodo reservado, facturado o excluido.
+
+La operacion conserva el inicio contractual y archiva en un historial
+append-only la cancelacion cerrada, sus versiones y la nueva fecha de
+renovacion. No reabre exclusiones, reservas, facturas ni bajas programadas
+historicas. Responde `200` con el DTO actualizado, exige idempotencia y limita
+el cuerpo a 2 KiB y diez intentos por actor y empresa cada quince minutos. El
+evento `SUBSCRIPTION_REACTIVATED` no copia el motivo libre ni la clave de
+idempotencia.
 
 ## 9. `POST /api/subscriptions/{subscriptionId}/cancellation-schedules`
 
@@ -632,17 +663,18 @@ cuota adicional.
 | `401` | `UNAUTHENTICATED` | No hay sesion valida. |
 | `403` | `FORBIDDEN`, `CSRF_TOKEN_INVALID`, `ORIGIN_NOT_ALLOWED` o `SUBSCRIPTION_ECONOMICS_PERMISSION_REQUIRED` | Falta autorizacion o una defensa de mutacion. |
 | `404` | `SUBSCRIPTION_NOT_FOUND` o `CUSTOMER_NOT_FOUND` | El recurso no existe. |
-| `409` | `IDEMPOTENCY_KEY_REUSED`, `SUBSCRIPTION_VERSION_CONFLICT`, `SUBSCRIPTION_NOT_EDITABLE`, `SUBSCRIPTION_NOT_ACTIVATABLE` o `SUBSCRIPTION_NOT_CANCELLABLE` | Conflicto idempotente, concurrente o de estado. |
+| `409` | `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_REPLAY_INVALID`, `SUBSCRIPTION_VERSION_CONFLICT`, `SUBSCRIPTION_NOT_EDITABLE`, `SUBSCRIPTION_NOT_ACTIVATABLE`, `SUBSCRIPTION_NOT_CANCELLABLE` o `SUBSCRIPTION_NOT_REACTIVATABLE` | Conflicto idempotente, concurrente o de estado. |
+| `409` | `SUBSCRIPTION_RENEWAL_RESERVED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_OPEN` | Una evidencia abierta impide reactivar. |
 | `409` | `SUBSCRIPTION_PENDING_CANCELLATION_EXISTS` o `SUBSCRIPTION_CANCELLATION_SCHEDULE_NOT_PENDING` | Conflicto del ciclo de una baja futura. |
 | `409` | `SUBSCRIPTION_RENEWAL_ALREADY_RESERVED`, `SUBSCRIPTION_RENEWAL_RESERVED` o `INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | El periodo ya esta reservado, la reserva bloquea otra mutacion o falta ejercicio abierto. |
 | `409` | `SUBSCRIPTION_RENEWAL_INVOICE_NOT_CONFIRMABLE` o `SUBSCRIPTION_RENEWAL_RESERVATION_STALE` | El borrador ya no puede confirmarse o la suscripcion cambio desde la reserva. |
 | `409` | `SUBSCRIPTION_RENEWAL_NOT_EXCLUDABLE`, `SUBSCRIPTION_RENEWAL_ALREADY_EXCLUDED`, `SUBSCRIPTION_RENEWAL_PENDING_SELECTION_REQUIRED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_STALE` | La exclusion o seleccion pendiente no coincide con el estado, periodo o expediente vigente. |
 | `422` | `SUBSCRIPTION_RENEWAL_NOT_DUE` o `SUBSCRIPTION_RENEWAL_GROUP_INVALID` | La seleccion aun no vence o no puede formar una factura agrupada. |
 | `415` | `UNSUPPORTED_MEDIA_TYPE` | El cuerpo no es JSON. |
-| `413` | `PAYLOAD_TOO_LARGE` | El cuerpo supera 16 KiB al preparar, 4 KiB al excluir o 2 KiB al confirmar/liberar. |
-| `422` | `VALIDATION_ERROR` y errores de referencias no activas | El contrato o una invariante funcional no se cumple. |
+| `413` | `PAYLOAD_TOO_LARGE` | El cuerpo supera 16 KiB al preparar, 4 KiB al excluir o 2 KiB al confirmar, liberar o reactivar. |
+| `422` | `VALIDATION_ERROR`, `SUBSCRIPTION_REACTIVATION_DATE_INVALID`, `SUBSCRIPTION_REACTIVATION_AFTER_END`, `SUBSCRIPTION_REACTIVATION_PERIOD_OVERLAP` y errores de referencias no activas | El contrato o una invariante funcional no se cumple. |
 | `423` | `MAINTENANCE_MODE_ACTIVE` | La plataforma esta en mantenimiento. |
-| `429` | `SUBSCRIPTION_RENEWAL_RATE_LIMITED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_RATE_LIMITED` | Se supero el limite persistente; incluye `Retry-After: 900`. |
+| `429` | `SUBSCRIPTION_RENEWAL_RATE_LIMITED`, `SUBSCRIPTION_RENEWAL_EXCLUSION_RATE_LIMITED` o `SUBSCRIPTION_REACTIVATION_RATE_LIMITED` | Se supero el limite persistente; incluye `Retry-After: 900`. |
 | `503` | `INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE` o `SUBSCRIPTION_RENEWAL_BUSY` | Fallo fiscal o contencion transaccional reintentable. |
 
 ## 14. Limites deliberados
@@ -655,7 +687,9 @@ cuota adicional.
   aceptada (`CUSTOMER_NOT_ACTIVE` y ejercicio contable no abierto). Otros
   fallos conservan el estado contractual y solo usan la evidencia que les
   corresponda.
-- No se admite reactivacion.
+- La reactivacion implementada es inmediata y exige una nueva fecha de proxima
+  renovacion; no existe todavia reactivacion programada ni recuperacion
+  automatica de periodos omitidos.
 - `nextRenewalDate` se inicializa con la fecha de inicio, identifica la reserva
   y solo avanza durante la confirmacion atomica correctamente facturada.
 - Suscripciones no escribe directamente en tablas de facturacion: delega la

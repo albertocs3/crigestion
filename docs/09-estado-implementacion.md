@@ -264,6 +264,19 @@ TypeScript, ESLint, build optimizado y `npm audit` sin vulnerabilidades también
 finalizaron correctamente. Las revisiones independientes de datos y seguridad
 no dejaron hallazgos P0/P1/P2 abiertos.
 
+El siguiente corte añade la migración 134 y la reactivación inmediata de
+suscripciones canceladas. Un permiso específico combinado con consulta de
+suscripciones, versión optimista, idempotencia y cuota persistente protege el
+endpoint. Cada ciclo archiva la baja previa en historial append-only, conserva
+facturas, reservas, exclusiones y bajas programadas históricas, exige cliente y
+configuración vigentes y fija una nueva renovación sin recuperar periodos
+omitidos. PostgreSQL refuerza la transición, el reloj de negocio, las versiones
+y la inmutabilidad del historial. La cadena de 134 migraciones se aplicó desde
+cero; la regresión completa terminó con 78 archivos y 708 pruebas. TypeScript,
+ESLint, build optimizado y `npm audit` sin vulnerabilidades finalizaron
+correctamente, y las revisiones independientes de datos y seguridad no dejaron
+hallazgos P0/P1 abiertos.
+
 La aceptacion funcional acumulada, incluidas las pruebas de autenticacion,
 RBAC, sesiones, tesoreria, compras, contabilidad y auditoria, se conserva en el
 [acta UAT de staging](plataforma/12-acta-uat-staging-2026-07-17.md).
@@ -321,7 +334,7 @@ Prioridades pendientes despues de este corte:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Completar Suscripciones con cambios programados, edicion controlada de la
    vista previa, ampliar de forma controlada el catalogo de bloqueos
-   automaticos, reactivacion y
+   automaticos, reactivacion programada y
    paginacion navegable entre cortes de grupos. Despues, abordar Atencion al
    cliente y Presupuestos.
 7. Revisar ADR-0016 y sustituir los restos documentales de escritorio por una

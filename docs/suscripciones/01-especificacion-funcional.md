@@ -29,7 +29,9 @@ historial append-only, inmutabilidad PostgreSQL y auditoria. El contrato
 autoritativo esta en [Contratos HTTP](02-contratos-api.md).
 
 Planes, cambios contractuales programados, edicion economica de la vista previa,
-gestion avanzada de exclusiones y reactivacion siguen pendientes. El runner
+gestion avanzada de exclusiones y reactivacion programada siguen pendientes.
+La reactivacion inmediata conserva cada ciclo de baja en historial append-only,
+usa una nueva fecha de proxima renovacion y no recupera periodos omitidos. El runner
 manual ya aplica
 la baja vencida antes de reservar y delega en Facturacion la creacion de factura,
 lineas, impuestos y vencimiento usando snapshots contractuales. El ledger

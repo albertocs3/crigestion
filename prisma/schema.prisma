@@ -660,6 +660,7 @@ model Company {
   subscriptionSequences                   SubscriptionNumberSequence[]
   subscriptions                           Subscription[]
   subscriptionCancellationSchedules       SubscriptionCancellationSchedule[]
+  subscriptionReactivations               SubscriptionReactivation[]
   subscriptionRenewalReservations         SubscriptionRenewalReservation[]
   subscriptionRenewalExclusions           SubscriptionRenewalExclusion[]
   subscriptionRenewalWaiverSnapshots      SubscriptionRenewalWaiverSnapshot[]
@@ -1270,6 +1271,8 @@ model User {
   cancelledSubscriptions                  Subscription[]                               @relation("SubscriptionsCancelledBy")
   requestedSubscriptionCancellations      SubscriptionCancellationSchedule[]           @relation("SubscriptionCancellationsRequestedBy")
   revokedSubscriptionCancellations        SubscriptionCancellationSchedule[]           @relation("SubscriptionCancellationsRevokedBy")
+  reactivatedSubscriptions                SubscriptionReactivation[]                   @relation("SubscriptionReactivationsReactivatedBy")
+  cancelledSubscriptionReactivationCycles SubscriptionReactivation[]                   @relation("SubscriptionReactivationsCancelledBySnapshot")
   reservedSubscriptionRenewals            SubscriptionRenewalReservation[]             @relation("SubscriptionRenewalsReservedBy")
   releasedSubscriptionRenewals            SubscriptionRenewalReservation[]             @relation("SubscriptionRenewalsReleasedBy")
   openedSubscriptionRenewalExclusions     SubscriptionRenewalExclusion[]               @relation("SubscriptionRenewalExclusionsOpenedBy")
@@ -1462,6 +1465,7 @@ model Subscription {
   cancelledBy           User?                              @relation("SubscriptionsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
   lines                 SubscriptionLine[]
   cancellationSchedules SubscriptionCancellationSchedule[]
+  reactivations         SubscriptionReactivation[]
   renewalReservations   SubscriptionRenewalReservation[]
   renewalExclusions     SubscriptionRenewalExclusion[]
   renewalAttemptMembers SubscriptionRenewalAttemptMember[]
@@ -1504,6 +1508,37 @@ model SubscriptionCancellationSchedule {
   @@index([companyId, status, effectiveDate, id])
   @@index([subscriptionId, requestedAt, id])
   @@map("subscription_cancellation_schedules")
+}
+
+model SubscriptionReactivation {
+  id                                String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                         String                       @db.Uuid
+  subscriptionId                    String                       @db.Uuid
+  reactivatedById                   String                       @db.Uuid
+  reactivatedAt                     DateTime                     @default(now()) @db.Timestamptz(3)
+  reason                            String                       @db.VarChar(500)
+  effectiveDate                     DateTime                     @db.Date
+  nextRenewalDate                   DateTime                     @db.Date
+  previousNextRenewalDate           DateTime                     @db.Date
+  createdAgainstVersion             Int
+  reactivatedSubscriptionVersion    Int
+  cancelledByIdSnapshot             String                       @db.Uuid
+  cancelledAtSnapshot               DateTime                     @db.Timestamptz(3)
+  cancellationEffectiveDateSnapshot DateTime                     @db.Date
+  cancellationReasonSnapshot        String                       @db.VarChar(500)
+  cancellationModeSnapshot          SubscriptionCancellationMode
+
+  company             Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  subscription        Subscription @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
+  reactivatedBy       User         @relation("SubscriptionReactivationsReactivatedBy", fields: [reactivatedById], references: [id], onDelete: Restrict)
+  cancelledBySnapshot User         @relation("SubscriptionReactivationsCancelledBySnapshot", fields: [cancelledByIdSnapshot], references: [id], onDelete: Restrict)
+
+  @@unique([subscriptionId, reactivatedSubscriptionVersion])
+  @@index([companyId, reactivatedAt, id])
+  @@index([subscriptionId, reactivatedAt, id])
+  @@index([reactivatedById, reactivatedAt, id])
+  @@index([cancelledByIdSnapshot, cancelledAtSnapshot, id])
+  @@map("subscription_reactivations")
 }
 
 model SubscriptionLine {

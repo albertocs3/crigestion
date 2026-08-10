@@ -6,6 +6,7 @@ import { GET as subscriptionsGet, POST as subscriptionsPost } from "@/app/api/su
 import { GET as subscriptionGet, PUT as subscriptionPut } from "@/app/api/subscriptions/[subscriptionId]/route";
 import { POST as subscriptionActivate } from "@/app/api/subscriptions/[subscriptionId]/activate/route";
 import { POST as subscriptionCancel } from "@/app/api/subscriptions/[subscriptionId]/cancel/route";
+import { POST as subscriptionReactivate } from "@/app/api/subscriptions/[subscriptionId]/reactivate/route";
 import { POST as subscriptionSchedule } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/route";
 import { POST as subscriptionScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/[scheduleId]/cancel/route";
 import { GET as renewalsGet, POST as renewalsPost } from "@/app/api/subscriptions/renewals/route";
@@ -45,6 +46,7 @@ describe("subscription HTTP contracts", () => {
 
   it("requires authentication, CSRF, origin and idempotency", async () => {
     expect((await subscriptionsGet(apiRequest("/api/subscriptions"))).status).toBe(401);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${randomUUID()}/reactivate`, { expectedVersion: 1, nextRenewalDate: futureDate(), reason: "Sin sesion" }), { params: Promise.resolve({ subscriptionId: randomUUID() }) })).status).toBe(401);
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(401);
     expect((await waiverEvidenceReplacementGet(apiRequest(`/api/accounting/waiver-evidence-replacements/${randomUUID()}`),
       { params: Promise.resolve({ requestId: randomUUID() }) })).status).toBe(401);
@@ -53,6 +55,16 @@ describe("subscription HTTP contracts", () => {
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references), { origin: "https://evil.example" }))).status).toBe(403);
     expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references)))).status).toBe(403);
     const csrf = await csrfToken(); expect((await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references), { csrf, idempotency: null }))).status).toBe(400);
+    const subscriptionId = randomUUID(); const reactivationBody = { expectedVersion: 1, nextRenewalDate: futureDate(), reason: "Reactivacion controlada" };
+    const reactivationContext = { params: Promise.resolve({ subscriptionId }) };
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, reactivationBody, { csrf, origin: "https://evil.example" }), reactivationContext)).status).toBe(403);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, reactivationBody), reactivationContext)).status).toBe(403);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, reactivationBody, { csrf, idempotency: null }), reactivationContext)).status).toBe(400);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, { ...reactivationBody, unexpected: true }, { csrf }), reactivationContext)).status).toBe(422);
+    const oversized = new Request(`http://localhost/api/subscriptions/${subscriptionId}/reactivate`, { method: "POST", headers: {
+      Origin: "http://localhost:3000", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID(), "Content-Type": "application/json"
+    }, body: JSON.stringify({ ...reactivationBody, padding: "x".repeat(2_048) }) });
+    expect((await subscriptionReactivate(oversized, reactivationContext)).status).toBe(413);
     expect((await subscriptionsPost(new Request("http://localhost/api/subscriptions", { method: "POST", headers: { Origin: "http://localhost:3000", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID(), "Content-Type": "text/plain" }, body: "{}" }))).status).toBe(415);
     expect((await subscriptionGet(apiRequest("/api/subscriptions/no"), { params: Promise.resolve({ subscriptionId: "no" }) })).status).toBe(422);
     const reviewId = randomUUID(); const requestId = randomUUID();
@@ -96,6 +108,22 @@ describe("subscription HTTP contracts", () => {
     expect((await waiverEvidenceReplacementApprove(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/approve`, { expectedVersion: 1, expectedProposalDigest: "invalid" }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReplacementReject(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/reject`, { expectedVersion: 1, rejectionDetail: "corto" }, { csrf }), reversalContext)).status).toBe(422);
     expect((await waiverEvidenceReplacementCancel(jsonRequest(`/api/accounting/waiver-evidence-replacements/${requestId}/cancel`, { expectedVersion: 1 }, { csrf, origin: "https://evil.example" }), reversalContext)).status).toBe(403);
+  });
+
+  it("rate-limits subscription reactivation before tenant lookup and audits once", async () => {
+    await login(); const csrf = await csrfToken(); const subscriptionId = randomUUID();
+    const body = { expectedVersion: 1, nextRenewalDate: futureDate(), reason: "Reactivacion inexistente" };
+    const context = { params: Promise.resolve({ subscriptionId }) };
+    for (let index = 0; index < 10; index += 1) {
+      expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, body, { csrf }), context)).status).toBe(404);
+    }
+    const limited = await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, body, { csrf }), context);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("900");
+    expect(await limited.json()).toMatchObject({ code: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED" });
+    const audits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED" }, select: { payload: true } });
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits)).not.toContain(subscriptionId);
   });
 
   it("rate-limits sensitive replacement detail reads and suppresses repeated lookup audits", async () => {
@@ -144,7 +172,7 @@ describe("subscription HTTP contracts", () => {
       AND: [{ payload: { path: ["companyId"], equals: companyId } }, { payload: { path: ["action"], equals: "list" } }] } })).toBe(1);
   });
 
-  it("creates, edits, lists, reads, activates and cancels a subscription", async () => {
+  it("creates, edits, lists, reads, activates, cancels and reactivates a subscription", async () => {
     await login(); const csrf = await csrfToken(); const references = await createReferences(); const effectiveDate = futureDate();
     const creation = await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, effectiveDate), { csrf })); expect(creation.status).toBe(201); const created = await creation.json() as { id: string; version: number; status: string };
     expect(created).toMatchObject({ version: 1, status: "DRAFT" }); expect((await subscriptionsGet(apiRequest("/api/subscriptions"))).status).toBe(200);
@@ -155,6 +183,21 @@ describe("subscription HTTP contracts", () => {
     const scheduledResponse = await subscriptionSchedule(jsonRequest(`/api/subscriptions/${created.id}/cancellation-schedules`, { expectedVersion: 3, effectiveDate, reason: "Baja futura" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) }); expect(scheduledResponse.status).toBe(201); const scheduled = await scheduledResponse.json() as { subscriptionVersion: number; schedule: { id: string; version: number } }; expect(scheduled).toMatchObject({ subscriptionVersion: 4, schedule: { version: 1 } });
     const revokedResponse = await subscriptionScheduleCancel(jsonRequest(`/api/subscriptions/${created.id}/cancellation-schedules/${scheduled.schedule.id}/cancel`, { expectedSubscriptionVersion: 4, expectedScheduleVersion: 1, reason: "Continua el servicio" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id, scheduleId: scheduled.schedule.id }) }); expect(revokedResponse.status).toBe(200); expect(await revokedResponse.json()).toMatchObject({ subscriptionVersion: 5, schedule: { status: "REVOKED", version: 2 } });
     const cancellation = await subscriptionCancel(jsonRequest(`/api/subscriptions/${created.id}/cancel`, { expectedVersion: 5, reason: "Baja solicitada" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) }); expect(cancellation.status).toBe(200); expect(await cancellation.json()).toMatchObject({ status: "CANCELLED", version: 6, cancellation: { reason: "Baja solicitada" } });
+    const reactivationKey = randomUUID(); const reactivationBody = { expectedVersion: 6, nextRenewalDate: effectiveDate, reason: "El cliente solicita reanudar el servicio" };
+    const reactivation = await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, reactivationBody, { csrf, idempotency: reactivationKey }), { params: Promise.resolve({ subscriptionId: created.id }) });
+    const reactivationReplay = await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, reactivationBody, { csrf, idempotency: reactivationKey }), { params: Promise.resolve({ subscriptionId: created.id }) });
+    expect(reactivation.status).toBe(200); const reactivated = await reactivation.json(); expect(reactivated).toMatchObject({ status: "ACTIVE", version: 7, cancellation: null, reactivations: [{ reason: reactivationBody.reason }] });
+    expect(await reactivationReplay.json()).toEqual(reactivated);
+    for (let index = 0; index < 9; index += 1) {
+      const missingId = randomUUID();
+      expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${missingId}/reactivate`, reactivationBody, { csrf }), { params: Promise.resolve({ subscriptionId: missingId }) })).status).toBe(404);
+    }
+    const limitedId = randomUUID();
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${limitedId}/reactivate`, reactivationBody, { csrf }), { params: Promise.resolve({ subscriptionId: limitedId }) })).status).toBe(429);
+    const replayAfterLimit = await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, reactivationBody, { csrf, idempotency: reactivationKey }), { params: Promise.resolve({ subscriptionId: created.id }) });
+    expect(replayAfterLimit.status).toBe(200);
+    expect(replayAfterLimit.headers.get("Cache-Control")).toContain("private, no-store");
+    expect(await replayAfterLimit.json()).toEqual(reactivated);
   });
 
   it("replays creation and rejects unknown fields and invalid ids", async () => {
@@ -173,6 +216,8 @@ describe("subscription HTTP contracts", () => {
     expect((await subscriptionPut(putRequest(`/api/subscriptions/${created.id}`, updateBody, { csrf, idempotency: null }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(400);
     const activation = await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: created.version }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) }); expect(activation.status).toBe(200);
     expect((await subscriptionCancel(jsonRequest(`/api/subscriptions/${created.id}/cancel`, { expectedVersion: 2, reason: "Baja segura" }, { csrf, idempotency: null }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(400);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, { expectedVersion: 2, nextRenewalDate: futureDate(), reason: "Reactivar" }, { csrf, idempotency: null }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(400);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, { expectedVersion: 2, nextRenewalDate: futureDate(), reason: "Reactivar", unexpected: true }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(422);
     expect((await subscriptionSchedule(jsonRequest(`/api/subscriptions/${created.id}/cancellation-schedules`, { expectedVersion: 2, effectiveDate: futureDate(), reason: "Baja futura" }, { csrf, idempotency: null }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(400);
   });
 
@@ -185,7 +230,15 @@ describe("subscription HTTP contracts", () => {
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", { subscriptions: [{ subscriptionId: created.id, expectedVersion: created.version }], issueDate: todayDate() }, { csrf }))).status).toBe(403);
     expect((await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: created.version }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(403);
     expect((await subscriptionCancel(jsonRequest(`/api/subscriptions/${created.id}/cancel`, { expectedVersion: created.version, reason: "Sin permiso" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(403);
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${created.id}/reactivate`, { expectedVersion: created.version, nextRenewalDate: futureDate(), reason: "Sin permiso" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(403);
     expect((await subscriptionSchedule(jsonRequest(`/api/subscriptions/${created.id}/cancellation-schedules`, { expectedVersion: created.version, effectiveDate: futureDate(), reason: "Sin permiso" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(403);
+  });
+
+  it("does not expose subscription detail to a reactivator without view permission", async () => {
+    await createReactivateOnlyUser(); await login("reactivator", "Cambiar-reactivator-2026"); const csrf = await csrfToken(); const subscriptionId = randomUUID();
+    expect((await subscriptionReactivate(jsonRequest(`/api/subscriptions/${subscriptionId}/reactivate`, {
+      expectedVersion: 1, nextRenewalDate: futureDate(), reason: "Sin permiso de consulta"
+    }, { csrf }), { params: Promise.resolve({ subscriptionId }) })).status).toBe(403);
   });
 
   it("protects renewal preview, preparation and release with the runner permission", async () => {
@@ -354,6 +407,7 @@ async function csrfToken() { const response = await csrfGet(apiRequest("/api/aut
 async function initialize() { const raw = JSON.stringify(initialization); const result = await initializePlatform(initialization, randomUUID(), hashRequestBody(raw)); if (!result.ok) throw new Error(result.error.code); }
 async function createReferences() { const actor = await prisma.user.findFirstOrThrow(); const suffix = randomUUID().replaceAll("-", "").slice(0, 12); const customer = await prisma.customer.create({ data: { code: `C${suffix.slice(0, 8)}`, type: "COMPANY", legalName: "Cliente API SL", taxId: `VAT-${suffix}`, normalizedTaxId: `VAT${suffix}`, fiscalTreatment: "DOMESTIC", fiscalAddressLine: "Calle Test 1", fiscalPostalCode: "28001", fiscalCity: "Madrid", fiscalCountry: "ES", createdById: actor.id } }); const tax = await prisma.catalogTaxRate.findFirstOrThrow({ where: { code: "IVA_21" } }); const item = await prisma.catalogItem.create({ data: { code: `S${suffix.slice(0, 8)}`, kind: "SERVICE", name: `Servicio API ${suffix}`, salePrice: "20.00", taxRateId: tax.id, taxRate: tax.rate, createdById: actor.id } }); return { customerId: customer.id, itemId: item.id, actorId: actor.id }; }
 async function createViewOnlyUser() { const role = await prisma.role.create({ data: { code: "SubscriptionViewer", name: "Consulta suscripciones", permissions: { create: { permission: { connect: { code: "Subscriptions.View" } } } } } }); await prisma.user.create({ data: { displayName: "Consulta", userName: "viewer", normalizedUserName: "viewer", passwordHash: hashPassword("Cambiar-viewer-2026"), roleId: role.id } }); }
+async function createReactivateOnlyUser() { const role = await prisma.role.create({ data: { code: "SubscriptionReactivator", name: "Reactiva suscripciones", permissions: { create: { permission: { connect: { code: "Subscriptions.Reactivate" } } } } } }); await prisma.user.create({ data: { displayName: "Reactivador", userName: "reactivator", normalizedUserName: "reactivator", passwordHash: hashPassword("Cambiar-reactivator-2026"), roleId: role.id } }); }
 async function createRenewalConfirmerWithoutBilling() { const role = await prisma.role.create({ data: { code: "RenewalConfirmer", name: "Confirma renovaciones", permissions: { create: { permission: { connect: { code: "Subscriptions.ConfirmRenewals" } } } } } }); await prisma.user.create({ data: { displayName: "Confirmador", userName: "renewal-confirmer", normalizedUserName: "renewal-confirmer", passwordHash: hashPassword("Cambiar-confirmer-2026"), roleId: role.id } }); }
 async function createRenewalRunnerWithoutExclusions() { const role = await prisma.role.create({ data: { code: "RenewalRunner", name: "Ejecuta renovaciones", permissions: { create: { permission: { connect: { code: "Subscriptions.RunRenewals" } } } } } }); await prisma.user.create({ data: { displayName: "Operador", userName: "renewal-runner", normalizedUserName: "renewal-runner", passwordHash: hashPassword("Cambiar-runner-2026"), roleId: role.id } }); }
 async function createRenewalExclusionManagerWithoutRunner() { const role = await prisma.role.create({ data: { code: "RenewalExclusionManager", name: "Gestiona exclusiones", permissions: { create: { permission: { connect: { code: "Subscriptions.ManageRenewalExclusions" } } } } } }); await prisma.user.create({ data: { displayName: "Gestor de exclusiones", userName: "renewal-exclusion-manager", normalizedUserName: "renewal-exclusion-manager", passwordHash: hashPassword("Cambiar-exclusion-manager-2026"), roleId: role.id } }); }

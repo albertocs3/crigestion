@@ -98,6 +98,11 @@ export const cancelSubscriptionSchema = z.object({
   expectedVersion: z.number().int().positive(),
   reason: z.string().trim().min(3).max(500)
 }).strict();
+export const reactivateSubscriptionSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+  nextRenewalDate: dateOnlySchema,
+  reason: z.string().trim().min(3).max(500)
+}).strict();
 export const scheduleSubscriptionCancellationSchema = z.object({
   expectedVersion: z.number().int().positive(),
   effectiveDate: dateOnlySchema,
@@ -116,6 +121,7 @@ export type CreateSubscriptionCommand = z.infer<typeof createSubscriptionSchema>
 export type ActivateSubscriptionCommand = z.infer<typeof activateSubscriptionSchema>;
 export type UpdateSubscriptionCommand = z.infer<typeof updateSubscriptionSchema>;
 export type CancelSubscriptionCommand = z.infer<typeof cancelSubscriptionSchema>;
+export type ReactivateSubscriptionCommand = z.infer<typeof reactivateSubscriptionSchema>;
 export type ScheduleSubscriptionCancellationCommand = z.infer<typeof scheduleSubscriptionCancellationSchema>;
 export type CancelScheduledSubscriptionCancellationCommand = z.infer<typeof cancelScheduledSubscriptionCancellationSchema>;
 
@@ -156,9 +162,22 @@ export type SubscriptionDto = {
   estimatedTotal: string;
   activatedAt: string | null;
   cancellation: { effectiveDate: string; reason: string; cancelledAt: string; mode: "IMMEDIATE" | "SCHEDULED" } | null;
+  reactivations: SubscriptionReactivationDto[];
   cancellationSchedules: SubscriptionCancellationScheduleDto[];
   createdAt: string;
   updatedAt: string;
+};
+
+export type SubscriptionReactivationDto = {
+  id: string;
+  effectiveDate: string;
+  nextRenewalDate: string;
+  previousNextRenewalDate: string;
+  reason: string;
+  reactivatedAt: string;
+  createdAgainstVersion: number;
+  reactivatedSubscriptionVersion: number;
+  cancellation: { effectiveDate: string; reason: string; cancelledAt: string; mode: "IMMEDIATE" | "SCHEDULED" };
 };
 
 export type SubscriptionCancellationScheduleDto = {
@@ -181,6 +200,40 @@ export type SubscriptionCancellationScheduleMutationDto = {
   schedule: SubscriptionCancellationScheduleDto;
 };
 
+const cancellationSnapshotReplaySchema = z.object({
+  effectiveDate: dateOnlySchema, reason: z.string(), cancelledAt: z.string().datetime(), mode: z.enum(["IMMEDIATE", "SCHEDULED"])
+}).strict();
+const subscriptionReactivationReplaySchema = z.object({
+  id: z.string().uuid(), effectiveDate: dateOnlySchema, nextRenewalDate: dateOnlySchema,
+  previousNextRenewalDate: dateOnlySchema, reason: z.string(), reactivatedAt: z.string().datetime(),
+  createdAgainstVersion: z.number().int().positive(), reactivatedSubscriptionVersion: z.number().int().positive(),
+  cancellation: cancellationSnapshotReplaySchema
+}).strict();
+const subscriptionCancellationScheduleReplaySchema = z.object({
+  id: z.string().uuid(), status: z.enum(["PENDING", "REVOKED", "APPLIED"]), effectiveDate: dateOnlySchema,
+  reason: z.string(), version: z.number().int().positive(), requestedAt: z.string().datetime(),
+  revokedAt: z.string().datetime().nullable(), revocationReason: z.string().nullable(),
+  appliedAt: z.string().datetime().nullable(), appliedBusinessDate: dateOnlySchema.nullable(),
+  appliedAgainstVersion: z.number().int().positive().nullable(), appliedSubscriptionVersion: z.number().int().positive().nullable()
+}).strict();
+const subscriptionDtoReplaySchema: z.ZodType<SubscriptionDto> = z.object({
+  id: z.string().uuid(), number: z.string(), name: z.string(),
+  status: z.enum(["DRAFT", "ACTIVE", "RENEWAL_PENDING", "CANCELLED"]),
+  periodicity: z.enum(["MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL"]),
+  pricingMode: z.enum(["FIXED", "PER_LICENSE"]), paymentMethod: z.enum(["BANK_TRANSFER", "CASH", "DIRECT_DEBIT"]),
+  startDate: dateOnlySchema, nextRenewalDate: dateOnlySchema, endDate: dateOnlySchema.nullable(), notes: z.string().nullable(),
+  version: z.number().int().positive(), customer: z.object({ id: z.string().uuid(), code: z.string(), legalName: z.string() }).strict(),
+  lines: z.array(z.object({
+    id: z.string().uuid(), position: z.number().int().positive(), catalogItemId: z.string().uuid(),
+    catalogItemCode: z.string(), catalogItemKind: z.enum(["SERVICE", "SOFTWARE", "LICENSE"]), description: z.string(),
+    quantity: z.string(), unitPrice: z.string(), discountPercent: z.string(), discountAmount: z.string(),
+    taxRateCode: z.string(), taxRate: z.string(), total: z.string()
+  }).strict()), estimatedTotal: z.string(), activatedAt: z.string().datetime().nullable(),
+  cancellation: cancellationSnapshotReplaySchema.nullable(), reactivations: z.array(subscriptionReactivationReplaySchema),
+  cancellationSchedules: z.array(subscriptionCancellationScheduleReplaySchema),
+  createdAt: z.string().datetime(), updatedAt: z.string().datetime()
+}).strict();
+
 export type ResolveScheduledCancellationBeforeRenewalCommand = {
   companyId: string;
   subscriptionId: string;
@@ -197,7 +250,7 @@ export type ScheduledCancellationResolution =
   | { outcome: "CANCELLED"; scheduleId: string | null; subscriptionVersion: number; applied: boolean };
 
 export type SubscriptionList = {
-  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "cancellationSchedules"> & { lineCount: number }>;
+  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "reactivations" | "cancellationSchedules"> & { lineCount: number }>;
   nextCursor: string | null;
 };
 
@@ -208,7 +261,7 @@ export type SubscriptionReferences = {
 
 type SubscriptionFailure = {
   ok: false;
-  status: 403 | 404 | 409 | 422;
+  status: 403 | 404 | 409 | 422 | 429;
   error: { code: string; message: string };
 };
 
@@ -677,6 +730,118 @@ export async function cancelSubscription(
   });
 }
 
+export async function reactivateSubscription(
+  subscriptionId: string,
+  command: ReactivateSubscriptionCommand,
+  actor: SessionUser,
+  context: MutationContext
+): Promise<SubscriptionResult<SubscriptionDto>> {
+  const storedReplay = validateSubscriptionDtoReplay(await prisma.$transaction((tx) => replayMutation<unknown>(tx, context)));
+  if (storedReplay) return storedReplay;
+  const companyId = await currentCompanyId(prisma);
+  if (!companyId) return failure(404, "SUBSCRIPTION_NOT_FOUND", "La suscripcion no existe.");
+  if (await consumeSubscriptionReactivationRateLimit(actor, companyId, context.correlationId)) {
+    return failure(429, "SUBSCRIPTION_REACTIVATION_RATE_LIMITED", "Demasiadas reactivaciones. Espere quince minutos.");
+  }
+
+  return executeMutation(actor, context, async (tx) => {
+    const replay = await replayMutation<unknown>(tx, context);
+    if (replay) return validateSubscriptionDtoReplay(replay)!;
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "subscriptions" WHERE "id" = ${subscriptionId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
+    const existing = await tx.subscription.findFirst({
+      where: { id: subscriptionId, companyId },
+      select: {
+        id: true, number: true, status: true, version: true, pricingMode: true,
+        nextRenewalDate: true, endDate: true, cancelledById: true, cancelledAt: true,
+        cancellationEffectiveDate: true, cancellationReason: true, cancellationMode: true,
+        customer: { select: { status: true } },
+        lines: { select: { catalogItemId: true, quantity: true } }
+      }
+    });
+    if (!existing) return failure(404, "SUBSCRIPTION_NOT_FOUND", "La suscripcion no existe.");
+    if (existing.version !== command.expectedVersion) return failure(409, "SUBSCRIPTION_VERSION_CONFLICT", "La suscripcion ha cambiado; recargue los datos.");
+    if (existing.status !== "CANCELLED") return failure(409, "SUBSCRIPTION_NOT_REACTIVATABLE", "Solo se puede reactivar una suscripcion cancelada.");
+    if (!existing.cancelledById || !existing.cancelledAt || !existing.cancellationEffectiveDate || !existing.cancellationReason || !existing.cancellationMode) {
+      throw new Error("SUBSCRIPTION_CANCELLATION_EVIDENCE_INCOMPLETE");
+    }
+    if (existing.customer.status !== "ACTIVE") return failure(422, "CUSTOMER_NOT_ACTIVE", "El cliente debe estar activo.");
+    if (existing.lines.length === 0 || new Set(existing.lines.map((line) => line.catalogItemId)).size !== existing.lines.length
+      || (existing.pricingMode === "FIXED" && existing.lines.some((line) => !line.quantity.equals(1)))) {
+      return failure(422, "SUBSCRIPTION_CONFIGURATION_INVALID", "La configuracion economica de la suscripcion no es valida.");
+    }
+    if (await tx.subscriptionRenewalReservation.count({ where: { subscriptionId, companyId, status: "RESERVED" } })) {
+      return failure(409, "SUBSCRIPTION_RENEWAL_RESERVED", "La renovacion esta reservada; debe liberarse antes de reactivar la suscripcion.");
+    }
+    if (await tx.subscriptionRenewalExclusion.count({ where: { subscriptionId, companyId, status: "OPEN" } })) {
+      return failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_OPEN", "La renovacion pendiente debe resolverse antes de reactivar la suscripcion.");
+    }
+
+    const clock = (await tx.$queryRaw<Array<{ reactivatedAt: Date; effectiveDate: Date }>>(Prisma.sql`
+      WITH current_clock AS (
+        SELECT date_trunc('milliseconds', clock_timestamp()) AS instant
+      )
+      SELECT instant AS "reactivatedAt",
+        (instant AT TIME ZONE 'Europe/Madrid')::date AS "effectiveDate"
+      FROM current_clock
+    `))[0];
+    if (!clock) throw new Error("SUBSCRIPTION_REACTIVATION_CLOCK_UNAVAILABLE");
+    const nextRenewalDate = parseDateOnly(command.nextRenewalDate);
+    if (nextRenewalDate < clock.effectiveDate || nextRenewalDate <= existing.cancellationEffectiveDate) {
+      return failure(422, "SUBSCRIPTION_REACTIVATION_DATE_INVALID", "La proxima renovacion debe ser posterior a la baja y no anterior a la fecha de negocio.");
+    }
+    if (existing.endDate && nextRenewalDate > existing.endDate) {
+      return failure(422, "SUBSCRIPTION_REACTIVATION_AFTER_END", "La proxima renovacion no puede ser posterior a la fecha final del contrato.");
+    }
+    const latestBilled = await tx.subscriptionRenewalReservation.findFirst({
+      where: { subscriptionId, companyId, status: "BILLED" },
+      orderBy: [{ periodEndExclusive: "desc" }, { id: "desc" }],
+      select: { periodEndExclusive: true }
+    });
+    if (latestBilled && nextRenewalDate < latestBilled.periodEndExclusive) {
+      return failure(422, "SUBSCRIPTION_REACTIVATION_PERIOD_OVERLAP", "La proxima renovacion se solapa con un periodo ya facturado.");
+    }
+    const periodAlreadyUsed = await tx.subscriptionRenewalReservation.count({
+      where: { subscriptionId, companyId, periodStart: nextRenewalDate, status: { in: ["RESERVED", "BILLED"] } }
+    }) || await tx.subscriptionRenewalExclusion.count({ where: { subscriptionId, companyId, periodStart: nextRenewalDate } });
+    if (periodAlreadyUsed) {
+      return failure(422, "SUBSCRIPTION_REACTIVATION_PERIOD_OVERLAP", "La fecha elegida ya pertenece al historial de renovaciones.");
+    }
+
+    const resultingVersion = existing.version + 1;
+    await tx.subscriptionReactivation.create({
+      data: {
+        companyId, subscriptionId, reactivatedById: actor.id, reactivatedAt: clock.reactivatedAt,
+        reason: command.reason, effectiveDate: clock.effectiveDate, nextRenewalDate,
+        previousNextRenewalDate: existing.nextRenewalDate, createdAgainstVersion: existing.version,
+        reactivatedSubscriptionVersion: resultingVersion, cancelledByIdSnapshot: existing.cancelledById,
+        cancelledAtSnapshot: existing.cancelledAt, cancellationEffectiveDateSnapshot: existing.cancellationEffectiveDate,
+        cancellationReasonSnapshot: existing.cancellationReason, cancellationModeSnapshot: existing.cancellationMode
+      }
+    });
+    const reactivated = await tx.subscription.update({
+      where: { id: subscriptionId },
+      data: {
+        status: "ACTIVE", nextRenewalDate, version: { increment: 1 }, updatedById: actor.id,
+        cancelledById: null, cancelledAt: null, cancellationEffectiveDate: null,
+        cancellationReason: null, cancellationMode: null
+      },
+      select: subscriptionSelect
+    });
+    const dto = mapSubscription(reactivated);
+    await tx.auditEvent.create({ data: {
+      eventType: "SUBSCRIPTION_REACTIVATED", actorType: "USER",
+      payload: {
+        actorUserId: actor.id, companyId, subscriptionId, number: existing.number,
+        previousVersion: existing.version, version: dto.version, effectiveDate: formatDateOnly(clock.effectiveDate),
+        nextRenewalDate: command.nextRenewalDate, hasReason: true,
+        ...(context.correlationId ? { correlationId: context.correlationId } : {})
+      }
+    } });
+    await storeMutation(tx, context, 200, dto);
+    return { ok: true, status: 200, value: dto };
+  });
+}
+
 export async function scheduleSubscriptionCancellation(
   subscriptionId: string,
   command: ScheduleSubscriptionCancellationCommand,
@@ -938,6 +1103,14 @@ async function replayMutation<T>(tx: Prisma.TransactionClient, context: Mutation
   return { ok: true, status: row.responseStatus as 200 | 201, value: row.responseBody as unknown as T };
 }
 
+function validateSubscriptionDtoReplay(replay: SubscriptionResult<unknown> | null): SubscriptionResult<SubscriptionDto> | null {
+  if (!replay || !replay.ok) return replay;
+  const parsed = subscriptionDtoReplaySchema.safeParse(replay.value);
+  return replay.status === 200 && parsed.success
+    ? { ...replay, value: parsed.data }
+    : failure(409, "IDEMPOTENCY_REPLAY_INVALID", "La respuesta idempotente almacenada no es compatible con el contrato actual.");
+}
+
 async function storeMutation<T>(tx: Prisma.TransactionClient, context: MutationContext, status: 200 | 201, value: T): Promise<void> {
   await tx.idempotencyRecord.create({
     data: { key: context.idempotencyKey, requestHash: context.requestHash, responseStatus: status, responseBody: value as Prisma.InputJsonValue }
@@ -995,6 +1168,7 @@ function mapSubscription(row: Prisma.SubscriptionGetPayload<{ select: typeof sub
       effectiveDate: formatDateOnly(row.cancellationEffectiveDate), reason: row.cancellationReason,
       cancelledAt: row.cancelledAt.toISOString(), mode: row.cancellationMode
     } : null,
+    reactivations: row.reactivations.map(mapReactivation),
     cancellationSchedules: row.cancellationSchedules.map(mapCancellationSchedule),
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString()
   };
@@ -1005,6 +1179,13 @@ const cancellationScheduleSelect = {
   requestedAt: true, revokedAt: true, revocationReason: true, appliedAt: true,
   appliedBusinessDate: true, appliedAgainstVersion: true, appliedSubscriptionVersion: true
 } satisfies Prisma.SubscriptionCancellationScheduleSelect;
+
+const reactivationSelect = {
+  id: true, effectiveDate: true, nextRenewalDate: true, previousNextRenewalDate: true,
+  reason: true, reactivatedAt: true, createdAgainstVersion: true, reactivatedSubscriptionVersion: true,
+  cancelledAtSnapshot: true, cancellationEffectiveDateSnapshot: true,
+  cancellationReasonSnapshot: true, cancellationModeSnapshot: true
+} satisfies Prisma.SubscriptionReactivationSelect;
 
 const subscriptionSelect = {
   id: true, number: true, name: true, status: true, periodicity: true, pricingMode: true,
@@ -1020,8 +1201,22 @@ const subscriptionSelect = {
       discountPercent: true, discountAmount: true, taxRateCodeSnapshot: true, taxRateSnapshot: true
     }
   },
+  reactivations: { orderBy: [{ reactivatedAt: "desc" as const }, { id: "desc" as const }], take: 20, select: reactivationSelect },
   cancellationSchedules: { orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 20, select: cancellationScheduleSelect }
 } satisfies Prisma.SubscriptionSelect;
+
+function mapReactivation(row: Prisma.SubscriptionReactivationGetPayload<{ select: typeof reactivationSelect }>): SubscriptionReactivationDto {
+  return {
+    id: row.id, effectiveDate: formatDateOnly(row.effectiveDate), nextRenewalDate: formatDateOnly(row.nextRenewalDate),
+    previousNextRenewalDate: formatDateOnly(row.previousNextRenewalDate), reason: row.reason,
+    reactivatedAt: row.reactivatedAt.toISOString(), createdAgainstVersion: row.createdAgainstVersion,
+    reactivatedSubscriptionVersion: row.reactivatedSubscriptionVersion,
+    cancellation: {
+      effectiveDate: formatDateOnly(row.cancellationEffectiveDateSnapshot), reason: row.cancellationReasonSnapshot,
+      cancelledAt: row.cancelledAtSnapshot.toISOString(), mode: row.cancellationModeSnapshot
+    }
+  };
+}
 
 function mapCancellationSchedule(row: Prisma.SubscriptionCancellationScheduleGetPayload<{ select: typeof cancellationScheduleSelect }>): SubscriptionCancellationScheduleDto {
   return {
@@ -1067,6 +1262,35 @@ async function auditEconomicsDenied(actor: SessionUser, context: Pick<RequestCon
       eventType: "ACCESS_DENIED", actorType: "USER",
       payload: { userId: actor.id, permission: "Subscriptions.ManageEconomics", ...(companyId ? { companyId } : {}), ...(context.correlationId ? { correlationId: context.correlationId } : {}) }
     }
+  });
+}
+
+async function consumeSubscriptionReactivationRateLimit(
+  actor: SessionUser,
+  companyId: string,
+  correlationId?: string
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const key = `subscription-reactivate:${companyId}:${actor.id}`;
+    const rows = await tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+      ON CONFLICT ("key") DO UPDATE SET
+        "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes'
+          THEN 1 ELSE "rate_limit_buckets"."count" + 1 END,
+        "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes'
+          THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
+        "updatedAt" = clock_timestamp()
+      RETURNING "count"
+    `);
+    const count = rows[0]?.count ?? 0;
+    if (count === 11) {
+      await tx.auditEvent.create({ data: {
+        eventType: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED", actorType: "USER",
+        payload: { actorUserId: actor.id, companyId, ...(correlationId ? { correlationId } : {}) }
+      } });
+    }
+    return count > 10;
   });
 }
 
