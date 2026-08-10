@@ -215,6 +215,84 @@ el cuerpo a 2 KiB y diez intentos por actor y empresa cada quince minutos. El
 evento `SUBSCRIPTION_REACTIVATED` no copia el motivo libre ni la clave de
 idempotencia.
 
+## 8.2. `POST /api/subscriptions/{subscriptionId}/reactivation-schedules`
+
+Permisos requeridos: `Subscriptions.ScheduleReactivations` y
+`Subscriptions.View`.
+
+```json
+{
+  "expectedVersion": 7,
+  "effectiveDate": "2026-10-01",
+  "nextRenewalDate": "2026-10-01",
+  "reason": "Reanudacion acordada para el inicio del nuevo trimestre"
+}
+```
+
+Registra una orden `PENDING` y responde `201` con
+`{ "subscriptionVersion": 8, "schedule": { ... } }`. La suscripcion debe
+continuar `CANCELLED`; crear la orden no la activa ni modifica por adelantado
+su proxima renovacion. La fecha efectiva debe ser estrictamente futura segun
+`Europe/Madrid`, posterior a la baja vigente y no superar la fecha final del
+contrato. `nextRenewalDate` no puede ser anterior a `effectiveDate` ni
+reutilizar o solapar evidencia de renovacion previa.
+
+Solo puede existir una orden pendiente por suscripcion. Su creacion conserva
+motivo, actor, instante y version base, incrementa una vez la version de la
+suscripcion y es idempotente. Una orden pendiente bloquea la reactivacion
+inmediata: debe aplicarse o retirarse expresamente.
+
+## 8.3. `POST /api/subscriptions/{subscriptionId}/reactivation-schedules/{scheduleId}/cancel`
+
+Permisos requeridos: `Subscriptions.ScheduleReactivations` y
+`Subscriptions.View`.
+
+```json
+{
+  "expectedSubscriptionVersion": 8,
+  "expectedScheduleVersion": 1,
+  "reason": "El cliente aplaza la reanudacion"
+}
+```
+
+Realiza `PENDING -> REVOKED`, incrementa las versiones de orden y suscripcion y
+responde `200` con `{ "subscriptionVersion": 9, "schedule": { ... } }`. La
+suscripcion permanece cancelada. La retirada y su motivo se conservan como
+evidencia inmutable; el motivo libre no se copia a auditoria.
+
+## 8.4. `POST /api/subscriptions/{subscriptionId}/reactivation-schedules/{scheduleId}/apply`
+
+Permisos requeridos: `Subscriptions.ScheduleReactivations` y
+`Subscriptions.View`.
+
+```json
+{
+  "expectedSubscriptionVersion": 8,
+  "expectedScheduleVersion": 1
+}
+```
+
+Solo admite una orden `PENDING` cuya fecha efectiva haya llegado y cuya
+`nextRenewalDate` no sea anterior al dia de negocio. Si esta ultima fecha quedo
+atras, la orden debe retirarse y reprogramarse. Revalida bajo bloqueo la empresa,
+versiones, cancelacion vigente, cliente, configuracion, fecha final, reservas,
+exclusiones y periodos ya usados. En una unica
+transaccion realiza `PENDING -> APPLIED`, crea la evidencia append-only de
+reactivacion programada, cambia la suscripcion a `ACTIVE`, limpia la
+cancelacion vigente y establece la nueva `nextRenewalDate`.
+
+Responde `200` con `subscriptionVersion`, `status: "ACTIVE"`,
+`nextRenewalDate`, `reactivationId` y `schedule`. La aplicacion es supervisada:
+no se ejecuta desde un `GET`, al cargar una pantalla ni mediante un proceso
+desatendido. Una orden vencida permanece pendiente y visible hasta que un
+operador la aplica o retira; si la renovacion quedo atras, la UI solo ofrece
+retirarla y reprogramarla. La automatizacion futura requerira un ejecutor
+monitorizado y no forma parte de este contrato.
+
+Las tres mutaciones exigen Origin, CSRF, JSON estricto, mantenimiento inactivo,
+`Idempotency-Key`, cuerpo acotado, rate limit persistente y auditoria sin
+motivos libres ni claves idempotentes.
+
 ## 9. `POST /api/subscriptions/{subscriptionId}/cancellation-schedules`
 
 Permiso requerido: `Subscriptions.Cancel`.
@@ -666,6 +744,8 @@ cuota adicional.
 | `409` | `IDEMPOTENCY_KEY_REUSED`, `IDEMPOTENCY_REPLAY_INVALID`, `SUBSCRIPTION_VERSION_CONFLICT`, `SUBSCRIPTION_NOT_EDITABLE`, `SUBSCRIPTION_NOT_ACTIVATABLE`, `SUBSCRIPTION_NOT_CANCELLABLE` o `SUBSCRIPTION_NOT_REACTIVATABLE` | Conflicto idempotente, concurrente o de estado. |
 | `409` | `SUBSCRIPTION_RENEWAL_RESERVED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_OPEN` | Una evidencia abierta impide reactivar. |
 | `409` | `SUBSCRIPTION_PENDING_CANCELLATION_EXISTS` o `SUBSCRIPTION_CANCELLATION_SCHEDULE_NOT_PENDING` | Conflicto del ciclo de una baja futura. |
+| `409` | `SUBSCRIPTION_NOT_SCHEDULABLE_FOR_REACTIVATION`, `SUBSCRIPTION_PENDING_REACTIVATION_EXISTS`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_NOT_PENDING`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_VERSION_CONFLICT` o `SUBSCRIPTION_REACTIVATION_SCHEDULE_STALE` | Conflicto del ciclo, estado o evidencia de una reactivacion programada. |
+| `404` | `SUBSCRIPTION_REACTIVATION_SCHEDULE_NOT_FOUND` | La orden, la suscripcion o su pertenencia a empresa no son visibles para el actor. |
 | `409` | `SUBSCRIPTION_RENEWAL_ALREADY_RESERVED`, `SUBSCRIPTION_RENEWAL_RESERVED` o `INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | El periodo ya esta reservado, la reserva bloquea otra mutacion o falta ejercicio abierto. |
 | `409` | `SUBSCRIPTION_RENEWAL_INVOICE_NOT_CONFIRMABLE` o `SUBSCRIPTION_RENEWAL_RESERVATION_STALE` | El borrador ya no puede confirmarse o la suscripcion cambio desde la reserva. |
 | `409` | `SUBSCRIPTION_RENEWAL_NOT_EXCLUDABLE`, `SUBSCRIPTION_RENEWAL_ALREADY_EXCLUDED`, `SUBSCRIPTION_RENEWAL_PENDING_SELECTION_REQUIRED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_STALE` | La exclusion o seleccion pendiente no coincide con el estado, periodo o expediente vigente. |
@@ -673,9 +753,10 @@ cuota adicional.
 | `415` | `UNSUPPORTED_MEDIA_TYPE` | El cuerpo no es JSON. |
 | `413` | `PAYLOAD_TOO_LARGE` | El cuerpo supera 16 KiB al preparar, 4 KiB al excluir o 2 KiB al confirmar, liberar o reactivar. |
 | `422` | `VALIDATION_ERROR`, `SUBSCRIPTION_REACTIVATION_DATE_INVALID`, `SUBSCRIPTION_REACTIVATION_AFTER_END`, `SUBSCRIPTION_REACTIVATION_PERIOD_OVERLAP` y errores de referencias no activas | El contrato o una invariante funcional no se cumple. |
+| `422` | `SUBSCRIPTION_REACTIVATION_SCHEDULE_DATE_NOT_FUTURE`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_NOT_DUE`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_RENEWAL_DATE_PASSED`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_NEXT_RENEWAL_DATE_INVALID`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_AFTER_END` o `SUBSCRIPTION_REACTIVATION_SCHEDULE_PERIOD_OVERLAP` | La programacion o su aplicacion no cumplen las reglas temporales. |
 | `423` | `MAINTENANCE_MODE_ACTIVE` | La plataforma esta en mantenimiento. |
-| `429` | `SUBSCRIPTION_RENEWAL_RATE_LIMITED`, `SUBSCRIPTION_RENEWAL_EXCLUSION_RATE_LIMITED` o `SUBSCRIPTION_REACTIVATION_RATE_LIMITED` | Se supero el limite persistente; incluye `Retry-After: 900`. |
-| `503` | `INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE` o `SUBSCRIPTION_RENEWAL_BUSY` | Fallo fiscal o contencion transaccional reintentable. |
+| `429` | `SUBSCRIPTION_RENEWAL_RATE_LIMITED`, `SUBSCRIPTION_RENEWAL_EXCLUSION_RATE_LIMITED`, `SUBSCRIPTION_REACTIVATION_RATE_LIMITED` o `SUBSCRIPTION_REACTIVATION_SCHEDULE_RATE_LIMITED` | Se supero el limite persistente; incluye `Retry-After: 900`. |
+| `503` | `INVOICE_VERIFACTU_PREPARATION_UNAVAILABLE`, `SUBSCRIPTION_RENEWAL_BUSY` o `SUBSCRIPTION_REACTIVATION_SCHEDULE_BUSY` | Fallo fiscal o contencion transaccional reintentable. |
 
 ## 14. Limites deliberados
 
@@ -687,9 +768,10 @@ cuota adicional.
   aceptada (`CUSTOMER_NOT_ACTIVE` y ejercicio contable no abierto). Otros
   fallos conservan el estado contractual y solo usan la evidencia que les
   corresponda.
-- La reactivacion implementada es inmediata y exige una nueva fecha de proxima
-  renovacion; no existe todavia reactivacion programada ni recuperacion
-  automatica de periodos omitidos.
+- La reactivacion inmediata exige una nueva fecha de proxima renovacion. La
+  programada es supervisada: una orden vencida no se aplica hasta que un
+  operador lo confirma. No existe recuperacion automatica de periodos omitidos
+  ni un ejecutor desatendido de reactivaciones.
 - `nextRenewalDate` se inicializa con la fecha de inicio, identifica la reserva
   y solo avanza durante la confirmacion atomica correctamente facturada.
 - Suscripciones no escribe directamente en tablas de facturacion: delega la

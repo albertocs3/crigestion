@@ -6,6 +6,11 @@ import { prisma } from "@/lib/prisma";
 import { calculateInvoiceLine } from "@/modules/billing/application/calculations";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
+import {
+  mapSubscriptionReactivationSchedule,
+  subscriptionReactivationScheduleSelect,
+  type SubscriptionReactivationScheduleDto
+} from "@/modules/subscriptions/application/reactivationSchedules";
 
 const defaultLimit = 25;
 const maxLimit = 100;
@@ -163,6 +168,7 @@ export type SubscriptionDto = {
   activatedAt: string | null;
   cancellation: { effectiveDate: string; reason: string; cancelledAt: string; mode: "IMMEDIATE" | "SCHEDULED" } | null;
   reactivations: SubscriptionReactivationDto[];
+  reactivationSchedules: SubscriptionReactivationScheduleDto[];
   cancellationSchedules: SubscriptionCancellationScheduleDto[];
   createdAt: string;
   updatedAt: string;
@@ -216,7 +222,15 @@ const subscriptionCancellationScheduleReplaySchema = z.object({
   appliedAt: z.string().datetime().nullable(), appliedBusinessDate: dateOnlySchema.nullable(),
   appliedAgainstVersion: z.number().int().positive().nullable(), appliedSubscriptionVersion: z.number().int().positive().nullable()
 }).strict();
-const subscriptionDtoReplaySchema: z.ZodType<SubscriptionDto> = z.object({
+const subscriptionReactivationScheduleReplaySchema = z.object({
+  id: z.string().uuid(), status: z.enum(["PENDING", "APPLIED", "REVOKED"]),
+  effectiveDate: dateOnlySchema, nextRenewalDate: dateOnlySchema, previousNextRenewalDate: dateOnlySchema,
+  reason: z.string(), version: z.number().int().positive(), requestedAt: z.string().datetime(),
+  revokedAt: z.string().datetime().nullable(), revocationReason: z.string().nullable(),
+  appliedAt: z.string().datetime().nullable(), appliedBusinessDate: dateOnlySchema.nullable(),
+  reactivationId: z.string().uuid().nullable()
+}).strict();
+const subscriptionDtoReplaySchema = z.object({
   id: z.string().uuid(), number: z.string(), name: z.string(),
   status: z.enum(["DRAFT", "ACTIVE", "RENEWAL_PENDING", "CANCELLED"]),
   periodicity: z.enum(["MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL"]),
@@ -230,6 +244,7 @@ const subscriptionDtoReplaySchema: z.ZodType<SubscriptionDto> = z.object({
     taxRateCode: z.string(), taxRate: z.string(), total: z.string()
   }).strict()), estimatedTotal: z.string(), activatedAt: z.string().datetime().nullable(),
   cancellation: cancellationSnapshotReplaySchema.nullable(), reactivations: z.array(subscriptionReactivationReplaySchema),
+  reactivationSchedules: z.array(subscriptionReactivationScheduleReplaySchema).default([]),
   cancellationSchedules: z.array(subscriptionCancellationScheduleReplaySchema),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).strict();
@@ -250,7 +265,7 @@ export type ScheduledCancellationResolution =
   | { outcome: "CANCELLED"; scheduleId: string | null; subscriptionVersion: number; applied: boolean };
 
 export type SubscriptionList = {
-  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "reactivations" | "cancellationSchedules"> & { lineCount: number }>;
+  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "reactivations" | "reactivationSchedules" | "cancellationSchedules"> & { lineCount: number }>;
   nextCursor: string | null;
 };
 
@@ -764,6 +779,10 @@ export async function reactivateSubscription(
     if (!existing.cancelledById || !existing.cancelledAt || !existing.cancellationEffectiveDate || !existing.cancellationReason || !existing.cancellationMode) {
       throw new Error("SUBSCRIPTION_CANCELLATION_EVIDENCE_INCOMPLETE");
     }
+    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "subscription_reactivation_schedules" WHERE "companyId" = ${companyId}::uuid AND "subscriptionId" = ${subscriptionId}::uuid ORDER BY "id" FOR UPDATE`);
+    if (await tx.subscriptionReactivationSchedule.count({ where: { companyId, subscriptionId, status: "PENDING" } })) {
+      return failure(409, "SUBSCRIPTION_PENDING_REACTIVATION_EXISTS", "Ya existe una reactivacion programada pendiente.");
+    }
     if (existing.customer.status !== "ACTIVE") return failure(422, "CUSTOMER_NOT_ACTIVE", "El cliente debe estar activo.");
     if (existing.lines.length === 0 || new Set(existing.lines.map((line) => line.catalogItemId)).size !== existing.lines.length
       || (existing.pricingMode === "FIXED" && existing.lines.some((line) => !line.quantity.equals(1)))) {
@@ -1169,6 +1188,7 @@ function mapSubscription(row: Prisma.SubscriptionGetPayload<{ select: typeof sub
       cancelledAt: row.cancelledAt.toISOString(), mode: row.cancellationMode
     } : null,
     reactivations: row.reactivations.map(mapReactivation),
+    reactivationSchedules: row.reactivationSchedules.map(mapSubscriptionReactivationSchedule),
     cancellationSchedules: row.cancellationSchedules.map(mapCancellationSchedule),
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString()
   };
@@ -1202,6 +1222,11 @@ const subscriptionSelect = {
     }
   },
   reactivations: { orderBy: [{ reactivatedAt: "desc" as const }, { id: "desc" as const }], take: 20, select: reactivationSelect },
+  reactivationSchedules: {
+    orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }],
+    take: 20,
+    select: subscriptionReactivationScheduleSelect
+  },
   cancellationSchedules: { orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 20, select: cancellationScheduleSelect }
 } satisfies Prisma.SubscriptionSelect;
 

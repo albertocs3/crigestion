@@ -7,6 +7,9 @@ import { GET as subscriptionGet, PUT as subscriptionPut } from "@/app/api/subscr
 import { POST as subscriptionActivate } from "@/app/api/subscriptions/[subscriptionId]/activate/route";
 import { POST as subscriptionCancel } from "@/app/api/subscriptions/[subscriptionId]/cancel/route";
 import { POST as subscriptionReactivate } from "@/app/api/subscriptions/[subscriptionId]/reactivate/route";
+import { POST as subscriptionReactivationScheduleCreate } from "@/app/api/subscriptions/[subscriptionId]/reactivation-schedules/route";
+import { POST as subscriptionReactivationScheduleApply } from "@/app/api/subscriptions/[subscriptionId]/reactivation-schedules/[scheduleId]/apply/route";
+import { POST as subscriptionReactivationScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/reactivation-schedules/[scheduleId]/cancel/route";
 import { POST as subscriptionSchedule } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/route";
 import { POST as subscriptionScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/[scheduleId]/cancel/route";
 import { GET as renewalsGet, POST as renewalsPost } from "@/app/api/subscriptions/renewals/route";
@@ -112,6 +115,7 @@ describe("subscription HTTP contracts", () => {
 
   it("rate-limits subscription reactivation before tenant lookup and audits once", async () => {
     await login(); const csrf = await csrfToken(); const subscriptionId = randomUUID();
+    const auditCountBefore = await prisma.auditEvent.count({ where: { eventType: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED" } });
     const body = { expectedVersion: 1, nextRenewalDate: futureDate(), reason: "Reactivacion inexistente" };
     const context = { params: Promise.resolve({ subscriptionId }) };
     for (let index = 0; index < 10; index += 1) {
@@ -122,7 +126,7 @@ describe("subscription HTTP contracts", () => {
     expect(limited.headers.get("Retry-After")).toBe("900");
     expect(await limited.json()).toMatchObject({ code: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED" });
     const audits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_REACTIVATION_RATE_LIMITED" }, select: { payload: true } });
-    expect(audits).toHaveLength(1);
+    expect(audits).toHaveLength(auditCountBefore + 1);
     expect(JSON.stringify(audits)).not.toContain(subscriptionId);
   });
 
@@ -198,6 +202,40 @@ describe("subscription HTTP contracts", () => {
     expect(replayAfterLimit.status).toBe(200);
     expect(replayAfterLimit.headers.get("Cache-Control")).toContain("private, no-store");
     expect(await replayAfterLimit.json()).toEqual(reactivated);
+  });
+
+  it("creates and revokes a supervised reactivation schedule through protected routes", async () => {
+    await login(); const csrf = await csrfToken(); const references = await createReferences();
+    const created = await (await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, todayDate()), { csrf }))).json() as { id: string; version: number };
+    expect((await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: 1 }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(200);
+    expect((await subscriptionCancel(jsonRequest(`/api/subscriptions/${created.id}/cancel`, { expectedVersion: 2, reason: "Baja previa a programacion" }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(200);
+    const path = `/api/subscriptions/${created.id}/reactivation-schedules`;
+    const routeContext = { params: Promise.resolve({ subscriptionId: created.id }) };
+    const body = { expectedVersion: 3, effectiveDate: futureDate(), nextRenewalDate: futureDate(), reason: "Reanudacion supervisada" };
+    const hostileOrigin = await subscriptionReactivationScheduleCreate(jsonRequest(path, body, { csrf, origin: "https://evil.example" }), routeContext);
+    expect(hostileOrigin.status).toBe(403);
+    expect(hostileOrigin.headers.get("Cache-Control")).toContain("private, no-store");
+    expect((await subscriptionReactivationScheduleCreate(jsonRequest(path, body), routeContext)).status).toBe(403);
+    expect((await subscriptionReactivationScheduleCreate(jsonRequest(path, body, { csrf, idempotency: null }), routeContext)).status).toBe(400);
+    expect((await subscriptionReactivationScheduleCreate(jsonRequest(path, { ...body, unexpected: true }, { csrf }), routeContext)).status).toBe(422);
+    const key = randomUUID();
+    const createdScheduleResponse = await subscriptionReactivationScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
+    const replayResponse = await subscriptionReactivationScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
+    expect(createdScheduleResponse.status).toBe(201); const scheduled = await createdScheduleResponse.json() as { subscriptionVersion: number; schedule: { id: string; version: number; status: string } };
+    expect(scheduled).toMatchObject({ subscriptionVersion: 4, schedule: { status: "PENDING", version: 1 } }); expect(await replayResponse.json()).toEqual(scheduled);
+    const actionContext = { params: Promise.resolve({ subscriptionId: created.id, scheduleId: scheduled.schedule.id }) };
+    const applyBody = { expectedSubscriptionVersion: 4, expectedScheduleVersion: 1 };
+    const prematureApply = await subscriptionReactivationScheduleApply(jsonRequest(`${path}/${scheduled.schedule.id}/apply`, applyBody, { csrf }), actionContext);
+    expect(prematureApply.status).toBe(422);
+    expect(prematureApply.headers.get("Cache-Control")).toContain("private, no-store");
+    const revokeBody = { expectedSubscriptionVersion: 4, expectedScheduleVersion: 1, reason: "El cliente aplaza la reanudacion" };
+    const missingRevokeKey = await subscriptionReactivationScheduleCancel(jsonRequest(`${path}/${scheduled.schedule.id}/cancel`, revokeBody, { csrf, idempotency: null }), actionContext);
+    expect(missingRevokeKey.status).toBe(400);
+    expect(missingRevokeKey.headers.get("Cache-Control")).toContain("private, no-store");
+    const revoked = await subscriptionReactivationScheduleCancel(jsonRequest(`${path}/${scheduled.schedule.id}/cancel`, revokeBody, { csrf }), actionContext);
+    expect(revoked.status).toBe(200); expect(await revoked.json()).toMatchObject({ subscriptionVersion: 5, schedule: { status: "REVOKED", version: 2 } });
+    await createViewOnlyUser(); cookieMock.reset(); await login("viewer", "Cambiar-viewer-2026"); const viewerCsrf = await csrfToken();
+    expect((await subscriptionReactivationScheduleCreate(jsonRequest(path, { ...body, expectedVersion: 5 }, { csrf: viewerCsrf }), routeContext)).status).toBe(403);
   });
 
   it("replays creation and rejects unknown fields and invalid ids", async () => {

@@ -28,6 +28,7 @@ export function SubscriptionReactivateForm({ subscriptionId, version, defaultNex
   const [message, setMessage] = useState<string | null>(null);
   const [reasonError, setReasonError] = useState<string | null>(null);
   const confirmationRef = useRef<HTMLDivElement>(null);
+  const reviewButtonRef = useRef<HTMLButtonElement>(null);
   const retry = useRef<{ payload: string; key: string } | null>(null);
 
   useEffect(() => {
@@ -95,7 +96,7 @@ export function SubscriptionReactivateForm({ subscriptionId, version, defaultNex
       aria-busy={submitting}
     >
       <div className="stack">
-        <h3 id="subscription-reactivation-confirmation-title">Confirmar reactivacion</h3>
+        <h3 id="subscription-reactivation-confirmation-title">Confirmar reactivacion inmediata</h3>
         <p id="subscription-reactivation-confirmation-description" className="message warning">
           La suscripcion volvera a estar activa. La primera renovacion comenzara el {confirmation.nextRenewalDate}; no se facturaran automaticamente periodos anteriores.
         </p>
@@ -106,9 +107,9 @@ export function SubscriptionReactivateForm({ subscriptionId, version, defaultNex
       </div>
       <div className="form-actions">
         <button className="button" type="button" disabled={submitting} onClick={reactivate}>
-          {submitting ? "Reactivando..." : `Reactivar desde ${confirmation.nextRenewalDate}`}
+          {submitting ? "Reactivando..." : "Confirmar reactivacion inmediata"}
         </button>
-        <button className="button button-secondary" type="button" disabled={submitting} onClick={() => { setConfirmation(null); setMessage(null); }}>
+        <button className="button button-secondary" type="button" disabled={submitting} onClick={() => { setConfirmation(null); setMessage(null); requestAnimationFrame(() => reviewButtonRef.current?.focus()); }}>
           Volver
         </button>
         {message ? <p className="message error" role="alert">{message}</p> : null}
@@ -118,7 +119,7 @@ export function SubscriptionReactivateForm({ subscriptionId, version, defaultNex
 
   return <form className="form-grid" onSubmit={prepareConfirmation}>
     <fieldset>
-      <legend>Reactivar suscripcion</legend>
+      <legend>Reactivar ahora</legend>
       <p id="subscription-reactivation-help" className="message warning">
         Indique cuando debe comenzar el siguiente periodo facturable. La cancelacion y sus motivos se conservaran en el historial.
       </p>
@@ -162,7 +163,7 @@ export function SubscriptionReactivateForm({ subscriptionId, version, defaultNex
       </label>
     </fieldset>
     <div className="form-actions">
-      <button className="button" type="submit">Revisar reactivacion</button>
+      <button ref={reviewButtonRef} className="button" type="submit">Revisar reactivacion</button>
       {message ? <p className="message" aria-live="polite">{message}</p> : null}
     </div>
   </form>;

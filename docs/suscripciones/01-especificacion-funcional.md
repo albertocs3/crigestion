@@ -28,11 +28,13 @@ licencia, permisos separados para datos economicos y cancelacion, idempotencia,
 historial append-only, inmutabilidad PostgreSQL y auditoria. El contrato
 autoritativo esta en [Contratos HTTP](02-contratos-api.md).
 
-Planes, cambios contractuales programados, edicion economica de la vista previa,
-gestion avanzada de exclusiones y reactivacion programada siguen pendientes.
-La reactivacion inmediata conserva cada ciclo de baja en historial append-only,
-usa una nueva fecha de proxima renovacion y no recupera periodos omitidos. El runner
-manual ya aplica
+Planes, cambios contractuales programados, edicion economica de la vista previa
+y gestion avanzada de exclusiones siguen pendientes. La reactivacion inmediata
+y la programada supervisada conservan cada ciclo de baja en historial append-only,
+usan una nueva fecha de proxima renovacion y no recuperan periodos omitidos. La
+programacion no constituye automatizacion: mantiene la suscripcion cancelada
+hasta que un operador aplica expresamente la orden vencida. El runner manual ya
+aplica
 la baja vencida antes de reservar y delega en Facturacion la creacion de factura,
 lineas, impuestos y vencimiento usando snapshots contractuales. El ledger
 `RESERVED` evita duplicar empresa, suscripcion y periodo. La confirmacion
@@ -359,9 +361,23 @@ Si la cancelación ocurre dentro de un periodo que ya se va a cobrar o ya está 
 
 - Se reutiliza la misma suscripción.
 - Se conserva todo el historial.
-- Se puede indicar una nueva fecha de inicio.
+- La reactivación inmediata cambia el estado en el acto según la fecha de negocio.
+- La reactivación programada crea una orden pendiente y mantiene la suscripción
+  cancelada hasta su aplicación supervisada.
+- Solo puede existir una programación pendiente por suscripción.
+- La orden puede retirarse antes de aplicarla, conservando motivo, actor,
+  versiones e instantes.
+- Una orden solo puede aplicarse en su fecha efectiva o posteriormente, siempre
+  que la fecha de próxima renovación no haya quedado atrás respecto al día de
+  negocio. Si queda atrás, debe retirarse y crearse una nueva programación.
+- La aplicación revalida cliente, configuración contractual, reservas,
+  exclusiones, fecha final y concurrencia.
 - Se puede indicar una nueva fecha de próxima renovación.
-- La reactivación debe quedar auditada.
+- La fecha de próxima renovación no puede ser anterior a la fecha efectiva.
+- La reactivación y cada transición de la programación deben quedar auditadas.
+- No se promete aplicación automática desatendida; una orden vencida permanece
+  visible como pendiente hasta que se aplica o retira. Si su renovación también
+  venció, la interfaz solo permite retirarla y reprogramarla.
 
 ## 11. Preparación de la facturación
 

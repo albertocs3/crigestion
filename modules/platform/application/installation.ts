@@ -70,6 +70,7 @@ const platformPermissions = [
   ["Subscriptions.ManageEconomics", "Gestionar datos economicos de suscripciones"],
   ["Subscriptions.Cancel", "Cancelar suscripciones"],
   ["Subscriptions.Reactivate", "Reactivar suscripciones"],
+  ["Subscriptions.ScheduleReactivations", "Programar reactivaciones de suscripciones"],
   ["Subscriptions.RunRenewals", "Preparar y liberar renovaciones de suscripciones"],
   ["Subscriptions.ConfirmRenewals", "Confirmar renovaciones de suscripciones"],
   ["Subscriptions.ManageRenewalExclusions", "Excluir renovaciones y consultar sus motivos"],
