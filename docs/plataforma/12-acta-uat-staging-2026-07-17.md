@@ -740,5 +740,19 @@ Durante la comprobacion de Tesoreria se detecto una regresion no bloqueante:
 los filtros `Agotados` y `Todos` de saldos de proveedor enviaban tambien
 `search=` y la pagina rechazaba el conjunto como invalido. La correccion
 normaliza la busqueda vacia a ausencia de filtro y se aplica asimismo a la
-pantalla equivalente de clientes. La correccion necesita una nueva identidad
-de release y smoke en staging antes de considerarse desplegada.
+pantalla equivalente de clientes.
+
+El 2026-08-10 se promovio la release inmutable
+`staging-2026.08.08-rc4`, commit
+`979b08cc76459e643c4fca7a3620714e0b00cf30`, con BUILD_ID
+`OJrzl8YQ92OZQf22UlN3c`. El migrador controlado encontro las 133 migraciones
+terminadas y ninguna pendiente. Tras la conmutacion atomica, aplicacion,
+worker y timers quedaron activos y el health publico devolvio `status`,
+`database`, `verifactu` y `worker` en estado `ok`.
+
+El smoke autenticado envio expresamente `search=` vacio y comprobo los filtros
+`Agotados` y `Todos` tanto en saldos de proveedor como en saldos de cliente.
+Los cuatro casos conservaron el estado seleccionado, mostraron sus resultados
+y no presentaron el mensaje de filtros invalidos. La regresion queda cerrada
+en staging. El archivo temporal de publicacion se elimino y la clave SSH
+temporal se retiro; un intento posterior con esa identidad fue rechazado.
