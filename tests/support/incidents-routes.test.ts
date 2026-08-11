@@ -4,6 +4,7 @@ import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import { GET as incidentsGet, POST as incidentsPost } from "@/app/api/support/incidents/route";
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
+import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -69,6 +70,17 @@ describe("support incidents HTTP contracts", () => {
     expect(replayBody.action.id).toBe(firstBody.action.id);
     expect(await prisma.supportIncidentAction.count()).toBe(1);
   });
+
+  it("resolves once and replays the versioned transition", async () => {
+    await loginAs("admin", password); const csrf = await csrfToken();
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    const incident = await created.json() as { id: string; version: number }; const body = { action: "resolve", expectedVersion: incident.version, solution: "Se aplica la corrección y se verifica el servicio." }; const key = randomUUID(); const context = { params: Promise.resolve({ incidentId: incident.id }) };
+    const first = await transitionsPost(jsonRequest(`/api/support/incidents/${incident.id}/status-transitions`, body, { csrf, key }), context);
+    const replay = await transitionsPost(jsonRequest(`/api/support/incidents/${incident.id}/status-transitions`, body, { csrf, key }), context);
+    expect(first.status).toBe(201); expect(replay.status).toBe(200); expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const firstBody = await first.json() as { transition: { id: string }; incident: { status: string; version: number } }; const replayBody = await replay.json() as { transition: { id: string } };
+    expect(firstBody).toMatchObject({ incident: { status: "RESOLVED", version: 2 } }); expect(replayBody.transition.id).toBe(firstBody.transition.id); expect(await prisma.supportIncidentStatusTransition.count()).toBe(1);
+  });
 });
 
 async function initialize() { const raw = JSON.stringify(base); const result = await initializePlatform(base, randomUUID(), hashRequestBody(raw)); if (!result.ok) throw new Error(result.error.code); const row = await prisma.installation.findFirstOrThrow(); await prisma.supportIncidentCategory.create({ data: { companyId: row.companyId!, name: "General", normalizedName: "general", description: "Categoria inicial", color: "#475569" } }); }
@@ -78,4 +90,4 @@ async function csrfToken() { const response = await csrfGet(request("/api/auth/c
 function request(path: string) { return new Request(`http://localhost${path}`); }
 function jsonRequest(path: string, body: unknown, options: { csrf?: string; key?: string } = {}) { const headers = new Headers({ "Content-Type": "application/json", Origin: "http://localhost:3000" }); if (options.csrf) headers.set("X-CSRF-Token", options.csrf); if (options.key) headers.set("Idempotency-Key", options.key); return new Request(`http://localhost${path}`, { method: "POST", headers, body: JSON.stringify(body) }); }
 function responseId(value: unknown): string | undefined { return typeof value === "object" && value !== null && "id" in value ? String(value.id) : undefined; }
-async function reset() { await prisma.$transaction(async (tx) => { await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"'); await tx.supportIncidentEvent.deleteMany(); await tx.supportIncidentAction.deleteMany(); await tx.supportIncident.deleteMany(); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"'); }); await prisma.supportIncidentNumberSequence.deleteMany(); await prisma.supportIncidentCategory.deleteMany(); await prisma.idempotencyRecord.deleteMany(); await prisma.auditEvent.deleteMany(); await prisma.installation.deleteMany(); await prisma.session.deleteMany(); await prisma.customer.deleteMany(); await prisma.reservedUserName.deleteMany(); await prisma.user.deleteMany(); await prisma.rolePermission.deleteMany(); await prisma.permission.deleteMany(); await prisma.role.deleteMany(); await prisma.company.deleteMany(); }
+async function reset() { await prisma.$transaction(async (tx) => { await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"'); await tx.supportIncidentEvent.deleteMany(); await tx.supportIncidentStatusTransition.deleteMany(); await tx.supportIncidentAction.deleteMany(); await tx.supportIncident.deleteMany(); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"'); await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"'); }); await prisma.supportIncidentNumberSequence.deleteMany(); await prisma.supportIncidentCategory.deleteMany(); await prisma.idempotencyRecord.deleteMany(); await prisma.auditEvent.deleteMany(); await prisma.installation.deleteMany(); await prisma.session.deleteMany(); await prisma.customer.deleteMany(); await prisma.reservedUserName.deleteMany(); await prisma.user.deleteMany(); await prisma.rolePermission.deleteMany(); await prisma.permission.deleteMany(); await prisma.role.deleteMany(); await prisma.company.deleteMany(); }

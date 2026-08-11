@@ -8,6 +8,7 @@ import type { RequestContext, SessionUser } from "@/modules/platform/application
 
 const prioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]);
 const statusSchema = z.enum(["NEW", "IN_PROGRESS", "PENDING_CUSTOMER", "PENDING_THIRD_PARTY", "RESOLVED", "CLOSED"]);
+const closeReasonSchema = z.enum(["DUPLICATE", "NOT_APPLICABLE", "CUSTOMER_WITHDRAWS", "UNREACHABLE", "RESOLVED_EXTERNALLY", "OTHER"]);
 const colorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$/, "El color debe tener formato hexadecimal #RRGGBB.");
 
 export const listSupportIncidentsSchema = z.object({
@@ -59,6 +60,9 @@ export type SupportIncidentListItem = {
 
 export type SupportIncidentDetail = SupportIncidentListItem & {
   description: string;
+  solution: string | null;
+  closeReason: z.infer<typeof closeReasonSchema> | null;
+  closeReasonDetail: string | null;
   store: { id: string; code: string; name: string; status: "ACTIVE" | "INACTIVE" } | null;
   createdBy: { id: string; displayName: string };
   actions: Array<{
@@ -75,6 +79,17 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     toStatus: z.infer<typeof statusSchema> | null;
     actor: { id: string; displayName: string };
     createdAt: string;
+  }>;
+  transitions: Array<{
+    id: string;
+    fromStatus: z.infer<typeof statusSchema>;
+    toStatus: z.infer<typeof statusSchema>;
+    reason: string | null;
+    solution: string | null;
+    closeReason: z.infer<typeof closeReasonSchema> | null;
+    closeReasonDetail: string | null;
+    actor: { id: string; displayName: string };
+    occurredAt: string;
   }>;
 };
 
@@ -123,6 +138,9 @@ const incidentListSelect = {
 const incidentDetailSelect = {
   ...incidentListSelect,
   description: true,
+  solution: true,
+  closeReason: true,
+  closeReasonDetail: true,
   store: { select: { id: true, code: true, name: true, status: true } },
   createdBy: { select: { id: true, displayName: true } },
   actions: {
@@ -139,6 +157,10 @@ const incidentDetailSelect = {
       createdAt: true,
       actorUser: { select: { id: true, displayName: true } }
     }
+  },
+  transitions: {
+    orderBy: [{ occurredAt: "asc" as const }, { id: "asc" as const }],
+    select: { id: true, fromStatus: true, toStatus: true, reasonText: true, solutionText: true, closeReason: true, closeReasonDetail: true, occurredAt: true, actorUser: { select: { id: true, displayName: true } } }
   }
 } satisfies Prisma.SupportIncidentSelect;
 
@@ -151,10 +173,12 @@ const incidentReplaySchema: z.ZodType<SupportIncidentDetail> = z.object({
   category: z.object({ id: z.string().uuid(), name: z.string(), color: colorSchema }).strict(),
   responsible: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(), description: z.string(),
+  solution: z.string().nullable(), closeReason: closeReasonSchema.nullable(), closeReasonDetail: z.string().nullable(),
   store: z.object({ id: z.string().uuid(), code: z.string(), name: z.string(), status: z.enum(["ACTIVE", "INACTIVE"]) }).strict().nullable(),
   createdBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
   actions: z.array(z.object({ id: z.string().uuid(), text: z.string(), performedAt: z.string().datetime(), recordedAt: z.string().datetime(), author: z.object({ id: z.string().uuid(), displayName: z.string() }).strict() }).strict()),
-  events: z.array(z.object({ id: z.string().uuid(), type: z.string(), fromStatus: statusSchema.nullable(), toStatus: statusSchema.nullable(), actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(), createdAt: z.string().datetime() }).strict())
+  events: z.array(z.object({ id: z.string().uuid(), type: z.string(), fromStatus: statusSchema.nullable(), toStatus: statusSchema.nullable(), actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(), createdAt: z.string().datetime() }).strict()),
+  transitions: z.array(z.object({ id: z.string().uuid(), fromStatus: statusSchema, toStatus: statusSchema, reason: z.string().nullable(), solution: z.string().nullable(), closeReason: closeReasonSchema.nullable(), closeReasonDetail: z.string().nullable(), actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(), occurredAt: z.string().datetime() }).strict())
 }).strict();
 
 const categoryReplaySchema: z.ZodType<SupportCategoryDto> = z.object({ id: z.string().uuid(), name: z.string(), description: z.string().nullable(), color: colorSchema, isActive: z.boolean() }).strict();
@@ -231,7 +255,7 @@ export async function createSupportIncident(command: CreateSupportIncidentComman
     });
     const sequenceNumber = sequence.nextValue - 1;
     const number = `INC-${year}-${String(sequenceNumber).padStart(5, "0")}`;
-    const created = await tx.supportIncident.create({ data: { companyId, year, sequenceNumber, number, customerId: command.customerId, storeId: command.storeId, categoryId: command.categoryId, responsibleUserId: command.responsibleUserId, createdById: actor.id, title: command.title, description: command.description, priority: command.priority, status: "NEW", events: { create: { company: { connect: { id: companyId } }, actorUser: { connect: { id: actor.id } }, eventType: "CREATED", toStatus: "NEW" } } }, select: incidentDetailSelect });
+    const created = await tx.supportIncident.create({ data: { companyId, year, sequenceNumber, number, customerId: command.customerId, storeId: command.storeId, categoryId: command.categoryId, responsibleUserId: command.responsibleUserId, createdById: actor.id, title: command.title, description: command.description, priority: command.priority, status: "NEW", events: { create: { company: { connect: { id: companyId } }, actorUser: { connect: { id: actor.id } }, eventType: "CREATED", toStatus: "NEW", resultingVersion: 1 } } }, select: incidentDetailSelect });
     const value = mapIncidentDetail(created);
     await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_CREATED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: created.id, incidentNumber: number, customerId: command.customerId, categoryId: command.categoryId, responsibleUserId: command.responsibleUserId, priority: command.priority, hasStore: Boolean(command.storeId), ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
     return { ok: true, status: 201, value };
@@ -284,7 +308,7 @@ async function executeMutation<T>(actor: SessionUser, context: SupportMutationCo
 }
 
 function mapIncidentListItem(row: IncidentListRecord): SupportIncidentListItem { return { id: row.id, number: row.number, title: row.title, priority: row.priority, status: row.status, version: row.version, customer: row.customer, category: row.category, responsible: row.responsibleUser, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }; }
-function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail { return { ...mapIncidentListItem(row), description: row.description, store: row.store, createdBy: row.createdBy, actions: row.actions.map((action) => ({ id: action.id, text: action.text, performedAt: action.performedAt.toISOString(), recordedAt: action.recordedAt.toISOString(), author: action.authorUser })), events: row.events.map((event) => ({ id: event.id, type: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus, actor: event.actorUser, createdAt: event.createdAt.toISOString() })) }; }
+function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail { return { ...mapIncidentListItem(row), description: row.description, solution: row.solution, closeReason: row.closeReason, closeReasonDetail: row.closeReasonDetail, store: row.store, createdBy: row.createdBy, actions: row.actions.map((action) => ({ id: action.id, text: action.text, performedAt: action.performedAt.toISOString(), recordedAt: action.recordedAt.toISOString(), author: action.authorUser })), events: row.events.map((event) => ({ id: event.id, type: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus, actor: event.actorUser, createdAt: event.createdAt.toISOString() })), transitions: row.transitions.map((transition) => ({ id: transition.id, fromStatus: transition.fromStatus, toStatus: transition.toStatus, reason: transition.reasonText, solution: transition.solutionText, closeReason: transition.closeReason, closeReasonDetail: transition.closeReasonDetail, actor: transition.actorUser, occurredAt: transition.occurredAt.toISOString() })) }; }
 function scopedKey(actor: SessionUser, context: SupportMutationContext): string { return `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
 async function currentCompanyId(client: Pick<Prisma.TransactionClient, "installation">): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }
 function normalizeName(value: string): string { return value.trim().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es-ES"); }

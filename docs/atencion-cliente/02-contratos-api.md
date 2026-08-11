@@ -2,13 +2,15 @@
 
 ## Alcance implementado
 
-La primera rebanada permite consultar y crear incidencias y consultar o crear categorías. Las actuaciones, cambios de estado, colaboradores, comunicaciones, adjuntos, fusiones y notificaciones quedan fuera de este contrato inicial.
+La rebanada actual permite consultar y crear incidencias y categorías, registrar actuaciones y recorrer el ciclo de estados con evidencia histórica. Colaboradores, comunicaciones, adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
 
 ## Permisos
 
 - `Support.View`: listado y detalle de incidencias y categorías.
 - `Support.Create` + `Support.View`: creación de incidencias.
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
+- `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución y cierre por el responsable o un administrador.
+- `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
 - `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
@@ -61,6 +63,20 @@ La fecha real no puede preceder a la incidencia ni superar en más de cinco minu
 
 Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_ACTION_FORBIDDEN`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_FINALIZED`, `SUPPORT_ACTION_DATE_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
 
+## `POST /api/support/incidents/{incidentId}/status-transitions`
+
+Mutación con Origin/CSRF, mantenimiento, JSON estricto, máximo de 8 KiB, `Idempotency-Key` y `expectedVersion`. Los cambios ordinarios requieren `Support.ManageAssigned` + `Support.View` y responsable vigente o Administrador. La reapertura requiere `Support.Reopen` + `Support.View` y no depende de la asignación.
+
+Los cuerpos admitidos son estrictos:
+
+- pendiente: `{ "action":"set-pending", "expectedVersion":2, "targetStatus":"PENDING_CUSTOMER", "reason":"..." }`;
+- retomar: `{ "action":"resume", "expectedVersion":3, "reason":"..." }`;
+- resolver: `{ "action":"resolve", "expectedVersion":4, "solution":"..." }`;
+- cerrar: `{ "action":"close", "expectedVersion":4, "closeReason":"DUPLICATE" }`; `OTHER` exige `detail`;
+- reabrir: `{ "action":"reopen", "expectedVersion":5, "reason":"..." }`.
+
+Resolver y cerrar son estados finales: no admiten actuaciones hasta reabrir. Cada transición incrementa una sola versión, crea evidencia append-only y un evento enlazado. Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_TRANSITION_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
+
 ## `/api/support/categories`
 
 `GET` requiere `Support.View`. `POST` requiere `Support.ManageCategories`, Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 2 KiB e idempotencia.
@@ -84,4 +100,5 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 - Una clave foránea compuesta impide usar categorías de otra empresa.
 - Los eventos son append-only; `UPDATE` y `DELETE` se rechazan en PostgreSQL.
 - Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
+- Las transiciones son append-only. PostgreSQL exige un único evento por versión resultante y mantiene coherentes estado, solución, motivo de cierre y marcas temporales.
 - No existe borrado físico de incidencias en la API.
