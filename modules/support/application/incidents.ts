@@ -735,6 +735,7 @@ export async function createSupportIncident(
           create: {
             company: { connect: { id: companyId } },
             actorUser: { connect: { id: actor.id } },
+            responsibleUserAtEvent: { connect: { id: command.responsibleUserId } },
             eventType: "CREATED",
             toStatus: "NEW",
             resultingVersion: 1,
@@ -912,6 +913,7 @@ export async function createIncidentFromCommunication(
           create: {
             company: { connect: { id: companyId } },
             actorUser: { connect: { id: actor.id } },
+            responsibleUserAtEvent: { connect: { id: command.responsibleUserId } },
             eventType: "CREATED",
             toStatus: "NEW",
             resultingVersion: 1,

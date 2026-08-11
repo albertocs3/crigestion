@@ -258,6 +258,8 @@ Solo tendria sentido usar el certificado en el equipo del cliente en una variant
 
 PostgreSQL es la fuente de verdad de las notificaciones. Los productores insertan el aviso dentro de la misma transacción serializable que crea el evento funcional; no existe un endpoint público de producción. La bandeja se consulta por destinatario y empresa, con cursor estable y sin caché compartida. Los cambios `UNREAD`, `READ` y `ARCHIVED` requieren versión esperada y evidencia append-only. La primera entrega se actualiza al navegar o recargar; una futura señal WebSocket/SSE necesitaría outbox transaccional y no sustituiría la persistencia.
 
+La migración `20260812010000_expand_support_workflow_notifications` exige una instantánea del responsable en cada evento creado desde su aplicación y hace obligatorios los avisos de incorporación, actuación de colaborador y reapertura; los eventos anteriores conservan `NULL`. Debe desplegarse con web y procesos de soporte detenidos y junto al binario productor; una instancia anterior no puede escribir sobre el esquema endurecido. Tras aplicarla, el rollback es forward-fix o restauración coordinada, no solo conmutación del binario.
+
 ## 15. Despliegue
 
 Entornos:

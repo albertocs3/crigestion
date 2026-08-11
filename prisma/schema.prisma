@@ -1408,32 +1408,35 @@ model SupportIncident {
 }
 
 model SupportIncidentEvent {
-  id                  String                 @id @default(uuid()) @db.Uuid
-  companyId           String                 @db.Uuid
-  incidentId          String                 @db.Uuid
-  actorUserId         String                 @db.Uuid
-  actionId            String?                @db.Uuid
-  transitionId        String?                @db.Uuid
-  participantChangeId String?                @db.Uuid
-  resultingVersion    Int
-  eventType           String                 @db.VarChar(80)
-  fromStatus          SupportIncidentStatus?
-  toStatus            SupportIncidentStatus?
-  createdAt           DateTime               @default(now()) @db.Timestamptz(3)
+  id                       String                 @id @default(uuid()) @db.Uuid
+  companyId                String                 @db.Uuid
+  incidentId               String                 @db.Uuid
+  actorUserId              String                 @db.Uuid
+  responsibleUserIdAtEvent String?                @db.Uuid
+  actionId                 String?                @db.Uuid
+  transitionId             String?                @db.Uuid
+  participantChangeId      String?                @db.Uuid
+  resultingVersion         Int
+  eventType                String                 @db.VarChar(80)
+  fromStatus               SupportIncidentStatus?
+  toStatus                 SupportIncidentStatus?
+  createdAt                DateTime               @default(now()) @db.Timestamptz(3)
 
-  company           Company                           @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  incident          SupportIncident                   @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
-  actorUser         User                              @relation("SupportIncidentEventsActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-  action            SupportIncidentAction?            @relation(fields: [actionId, companyId], references: [id, companyId], onDelete: Restrict)
-  transition        SupportIncidentStatusTransition?  @relation(fields: [transitionId, companyId], references: [id, companyId], onDelete: Restrict)
-  participantChange SupportIncidentParticipantChange? @relation(fields: [participantChangeId, companyId], references: [id, companyId], onDelete: Restrict)
-  notifications     Notification[]
+  company                Company                           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident               SupportIncident                   @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  actorUser              User                              @relation("SupportIncidentEventsActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  responsibleUserAtEvent User?                             @relation("SupportIncidentEventsResponsibleSnapshot", fields: [responsibleUserIdAtEvent], references: [id], onDelete: Restrict)
+  action                 SupportIncidentAction?            @relation(fields: [actionId, companyId], references: [id, companyId], onDelete: Restrict)
+  transition             SupportIncidentStatusTransition?  @relation(fields: [transitionId, companyId], references: [id, companyId], onDelete: Restrict)
+  participantChange      SupportIncidentParticipantChange? @relation(fields: [participantChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_participant_incident_fkey")
+  notifications          Notification[]
 
   @@unique([actionId, companyId])
   @@unique([transitionId, companyId])
   @@unique([participantChangeId, companyId])
+  @@unique([participantChangeId, companyId, incidentId], map: "support_event_participant_incident_key")
   @@unique([incidentId, resultingVersion])
-  @@unique([id, companyId, incidentId])
+  @@unique([id, companyId, incidentId], map: "support_collaborator_incident_key")
   @@index([incidentId, createdAt, id])
   @@index([companyId, eventType, createdAt, id])
   @@map("support_incident_events")
@@ -1485,6 +1488,7 @@ model SupportIncidentCollaborator {
   changes       SupportIncidentParticipantChange[]
 
   @@unique([id, companyId])
+  @@unique([id, companyId, incidentId])
   @@index([incidentId, removedAt, addedAt, id])
   @@index([companyId, userId, removedAt, id])
   @@map("support_incident_collaborators")
@@ -1506,12 +1510,13 @@ model SupportIncidentParticipantChange {
   company         Company                      @relation(fields: [companyId], references: [id], onDelete: Restrict)
   incident        SupportIncident              @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
   actorUser       User                         @relation("SupportIncidentParticipantChangeActor", fields: [actorUserId], references: [id], onDelete: Restrict)
-  collaborator    SupportIncidentCollaborator? @relation(fields: [collaboratorId, companyId], references: [id, companyId], onDelete: Restrict)
+  collaborator    SupportIncidentCollaborator? @relation(fields: [collaboratorId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_participant_change_collaborator_incident_fkey")
   fromResponsible User?                        @relation("SupportIncidentParticipantChangeFrom", fields: [fromResponsibleId], references: [id], onDelete: Restrict)
   toResponsible   User?                        @relation("SupportIncidentParticipantChangeTo", fields: [toResponsibleId], references: [id], onDelete: Restrict)
   event           SupportIncidentEvent?
 
   @@unique([id, companyId])
+  @@unique([id, companyId, incidentId], map: "support_participant_change_incident_key")
   @@unique([incidentId, resultingVersion])
   @@index([incidentId, occurredAt, id])
   @@map("support_incident_participant_changes")
@@ -1764,6 +1769,7 @@ model User {
   responsibleSupportIncidents             SupportIncident[]                            @relation("SupportIncidentsResponsible")
   createdSupportIncidents                 SupportIncident[]                            @relation("SupportIncidentsCreatedBy")
   supportIncidentEvents                   SupportIncidentEvent[]                       @relation("SupportIncidentEventsActor")
+  incidentResponsibilitySnapshots         SupportIncidentEvent[]                       @relation("SupportIncidentEventsResponsibleSnapshot")
   supportIncidentActions                  SupportIncidentAction[]                      @relation("SupportIncidentActionsAuthor")
   supportIncidentStatusTransitions        SupportIncidentStatusTransition[]            @relation("SupportIncidentTransitionsActor")
   supportIncidentCollaborations           SupportIncidentCollaborator[]                @relation("SupportIncidentCollaboratorUser")

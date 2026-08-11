@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
+import { createIncidentReopenedNotification } from "@/modules/platform/application/notifications";
 
 const statusSchema = z.enum(["NEW", "IN_PROGRESS", "PENDING_CUSTOMER", "PENDING_THIRD_PARTY", "RESOLVED", "CLOSED"]);
 const closeReasonSchema = z.enum(["DUPLICATE", "NOT_APPLICABLE", "CUSTOMER_WITHDRAWS", "UNREACHABLE", "RESOLVED_EXTERNALLY", "OTHER"]);
@@ -74,7 +75,8 @@ export async function transitionSupportIncident(incidentId: string, command: Sup
           closeReason: command.action === "close" ? command.closeReason : null,
           closeReasonDetail: command.action === "close" ? command.detail ?? null : null
         } });
-        await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, transitionId: transition.id, eventType: "STATUS_CHANGED", fromStatus: incident.status, toStatus: target, resultingVersion } });
+        const event = await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, responsibleUserIdAtEvent: incident.responsibleUserId, transitionId: transition.id, eventType: "STATUS_CHANGED", fromStatus: incident.status, toStatus: target, resultingVersion }, select: { id: true } });
+        if (command.action === "reopen") await createIncidentReopenedNotification(tx, { companyId, incidentId, sourceEventId: event.id, incidentNumber: incident.number, responsibleUserId: incident.responsibleUserId, correlationId: context.correlationId });
         const value: SupportStatusTransitionDto = { incident: { id: incident.id, status: target, version: resultingVersion }, transition: { id: transition.id, fromStatus: incident.status, toStatus: target, occurredAt: transition.occurredAt.toISOString() } };
         await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_STATUS_CHANGED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId, incidentNumber: incident.number, action: command.action, previousStatus: incident.status, status: target, previousVersion: incident.version, version: resultingVersion, hasReason: "reason" in command, hasSolution: "solution" in command, closeReason: command.action === "close" ? command.closeReason : null, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
         await tx.idempotencyRecord.create({ data: { key, requestHash: context.requestHash, responseStatus: 201, responseBody: value as unknown as Prisma.InputJsonValue } });

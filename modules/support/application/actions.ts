@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
+import { createIncidentCollaboratorActionNotification } from "@/modules/platform/application/notifications";
 
 const statusSchema = z.enum(["NEW", "IN_PROGRESS", "PENDING_CUSTOMER", "PENDING_THIRD_PARTY", "RESOLVED", "CLOSED"]);
 
@@ -23,10 +24,11 @@ export type SupportActionResultDto = {
 
 type ActionFailure = {
   ok: false;
-  status: 403 | 404 | 409 | 422;
+  status: 403 | 404 | 409 | 422 | 429 | 503;
   error: {
-    code: "SUPPORT_INCIDENT_ACTION_FORBIDDEN" | "SUPPORT_INCIDENT_NOT_FOUND" | "SUPPORT_INCIDENT_VERSION_CONFLICT" | "SUPPORT_INCIDENT_FINALIZED" | "SUPPORT_ACTION_DATE_INVALID" | "IDEMPOTENCY_KEY_REUSED" | "IDEMPOTENCY_REPLAY_INVALID";
+    code: "SUPPORT_INCIDENT_ACTION_FORBIDDEN" | "SUPPORT_INCIDENT_NOT_FOUND" | "SUPPORT_INCIDENT_VERSION_CONFLICT" | "SUPPORT_INCIDENT_FINALIZED" | "SUPPORT_ACTION_DATE_INVALID" | "SUPPORT_ACTION_RATE_LIMITED" | "SUPPORT_ACTION_BUSY" | "IDEMPOTENCY_KEY_REUSED" | "IDEMPOTENCY_REPLAY_INVALID";
     message: string;
+    retryAfterSeconds?: number;
   };
 };
 export type CreateSupportActionResult = { ok: true; status: 200 | 201; value: SupportActionResultDto } | ActionFailure;
@@ -44,9 +46,18 @@ export async function createSupportAction(incidentId: string, command: CreateSup
       return await prisma.$transaction(async (tx) => {
         const key = scopedKey(actor, context);
         const replay = await tx.idempotencyRecord.findUnique({ where: { key } });
-        if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
+        if (replay && replay.requestHash === context.requestHash) {
+          const validReplay = replaySchema.safeParse(replay.responseBody);
+          if (validReplay.success) return { ok: true, status: 200, value: validReplay.data };
+        }
         const companyId = await currentCompanyId(tx);
         if (!companyId) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
+        const rateLimit = await consumeActionRateLimit(tx, actor.id, companyId);
+        if (rateLimit.limited) {
+          if (rateLimit.firstLimitedRequest) await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_RATE_LIMITED", actorType: "USER", payload: { actorUserId: actor.id, companyId, retryAfterSeconds: rateLimit.retryAfterSeconds, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
+          return failure(429, "SUPPORT_ACTION_RATE_LIMITED", "Demasiadas actuaciones registradas. Espera antes de reintentar.", rateLimit.retryAfterSeconds);
+        }
+        if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
         const rows = await tx.$queryRaw<LockedIncident[]>(Prisma.sql`
           SELECT "id", "companyId", "status", "version", "responsibleUserId", "createdAt", "firstActionAt", "number"
           FROM "support_incidents"
@@ -55,7 +66,7 @@ export async function createSupportAction(incidentId: string, command: CreateSup
         `);
         const incident = rows[0];
         if (!incident) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
-        const isCollaborator = actor.id === incident.responsibleUserId || actor.role.code === "Administrador" ? false : Boolean(await tx.supportIncidentCollaborator.findFirst({ where: { incidentId: incident.id, companyId, userId: actor.id, removedAt: null }, select: { id: true } }));
+        const isCollaborator = Boolean(await tx.supportIncidentCollaborator.findFirst({ where: { incidentId: incident.id, companyId, userId: actor.id, removedAt: null }, select: { id: true } }));
         if (actor.id !== incident.responsibleUserId && actor.role.code !== "Administrador" && !isCollaborator) {
           await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: incident.id, reason: "NOT_RESPONSIBLE", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
           return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "Solo el responsable, un colaborador o un administrador puede registrar actuaciones.");
@@ -70,14 +81,18 @@ export async function createSupportAction(incidentId: string, command: CreateSup
         const nextStatus = incident.status === "NEW" ? "IN_PROGRESS" : incident.status;
         const updated = await tx.supportIncident.updateMany({ where: { id: incident.id, companyId, version: command.expectedVersion }, data: { status: nextStatus, firstActionAt, version: { increment: 1 } } });
         if (updated.count !== 1) return failure(409, "SUPPORT_INCIDENT_VERSION_CONFLICT", "La incidencia ha cambiado. Recarga antes de continuar.");
-        await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, actionId: action.id, eventType: "ACTION_ADDED", fromStatus: incident.status, toStatus: nextStatus, resultingVersion: command.expectedVersion + 1 } });
+        const event = await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, responsibleUserIdAtEvent: incident.responsibleUserId, actionId: action.id, eventType: "ACTION_ADDED", fromStatus: incident.status, toStatus: nextStatus, resultingVersion: command.expectedVersion + 1 }, select: { id: true } });
+        if (isCollaborator) await createIncidentCollaboratorActionNotification(tx, { companyId, incidentId, sourceEventId: event.id, incidentNumber: incident.number, responsibleUserId: incident.responsibleUserId, correlationId: context.correlationId });
         const value: SupportActionResultDto = { action: { id: action.id, text: action.text, performedAt: action.performedAt.toISOString(), recordedAt: action.recordedAt.toISOString(), author: { id: actor.id, displayName: actor.displayName } }, incident: { id: incident.id, status: nextStatus, version: command.expectedVersion + 1, firstActionAt: firstActionAt.toISOString() } };
         await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_ADDED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: incident.id, incidentNumber: incident.number, actionId: action.id, previousStatus: incident.status, status: nextStatus, previousVersion: incident.version, version: command.expectedVersion + 1, performedAt: value.action.performedAt, hasText: true, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
         await tx.idempotencyRecord.create({ data: { key, requestHash: context.requestHash, responseStatus: 201, responseBody: value as unknown as Prisma.InputJsonValue } });
         return { ok: true, status: 201, value };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034" && attempt < 2) continue;
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+        if (attempt < 2) continue;
+        return failure(503, "SUPPORT_ACTION_BUSY", "La actuación no pudo confirmarse por concurrencia. Reintenta en unos segundos.", 3);
+      }
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const replay = await prisma.idempotencyRecord.findUnique({ where: { key: scopedKey(actor, context) } });
         if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
@@ -92,4 +107,19 @@ export function hashSupportActionRequest(value: unknown): string { return create
 function scopedKey(actor: SessionUser, context: SupportActionMutationContext): string { return `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
 async function currentCompanyId(client: Pick<Prisma.TransactionClient, "installation">): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }
 function parseReplay(storedHash: string, requestHash: string, body: Prisma.JsonValue): CreateSupportActionResult { if (storedHash !== requestHash) return failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se uso con otra peticion."); const parsed = replaySchema.safeParse(body); return parsed.success ? { ok: true, status: 200, value: parsed.data } : failure(409, "IDEMPOTENCY_REPLAY_INVALID", "La respuesta idempotente almacenada no es valida."); }
-function failure(status: ActionFailure["status"], code: ActionFailure["error"]["code"], message: string): ActionFailure { return { ok: false, status, error: { code, message } }; }
+function failure(status: ActionFailure["status"], code: ActionFailure["error"]["code"], message: string, retryAfterSeconds?: number): ActionFailure { return { ok: false, status, error: { code, message, ...(retryAfterSeconds ? { retryAfterSeconds } : {}) } }; }
+
+async function consumeActionRateLimit(tx: Prisma.TransactionClient, actorId: string, companyId: string): Promise<{ limited: false } | { limited: true; firstLimitedRequest: boolean; retryAfterSeconds: number }> {
+  const now = new Date(); const windowMs = 15 * 60 * 1000; const windowStart = new Date(now.getTime() - windowMs);
+  const [bucket] = await tx.$queryRaw<Array<{ count: number; windowStart: Date }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${`support-action:${companyId}:${actorId}`}, ${now}, 1, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN 1 ELSE "rate_limit_buckets"."count" + 1 END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${windowStart} THEN ${now} ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = ${now}
+    RETURNING "count", "windowStart"
+  `);
+  if (!bucket || bucket.count <= 30) return { limited: false };
+  return { limited: true, firstLimitedRequest: bucket.count === 31, retryAfterSeconds: Math.max(1, Math.ceil((bucket.windowStart.getTime() + windowMs - now.getTime()) / 1000)) };
+}

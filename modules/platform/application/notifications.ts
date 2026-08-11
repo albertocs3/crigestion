@@ -175,6 +175,18 @@ export async function createIncidentReassignedNotification(tx: Prisma.Transactio
   await persistGeneratedNotifications(tx, input, new Map([[input.responsibleUserId, { kind: "SUPPORT_INCIDENT_REASSIGNED", messageCode: "support.incident.reassigned", severity: NotificationSeverity.INFO }]]));
 }
 
+export async function createIncidentCollaboratorAddedNotification(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; collaboratorUserId: string; correlationId?: string }) {
+  await persistGeneratedNotifications(tx, input, new Map([[input.collaboratorUserId, { kind: "SUPPORT_INCIDENT_COLLABORATOR_ADDED", messageCode: "support.incident.collaborator-added", severity: NotificationSeverity.INFO }]]));
+}
+
+export async function createIncidentCollaboratorActionNotification(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; responsibleUserId: string; correlationId?: string }) {
+  await persistGeneratedNotifications(tx, input, new Map([[input.responsibleUserId, { kind: "SUPPORT_INCIDENT_COLLABORATOR_ACTION", messageCode: "support.incident.collaborator-action", severity: NotificationSeverity.INFO }]]));
+}
+
+export async function createIncidentReopenedNotification(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; responsibleUserId: string; correlationId?: string }) {
+  await persistGeneratedNotifications(tx, input, new Map([[input.responsibleUserId, { kind: "SUPPORT_INCIDENT_REOPENED", messageCode: "support.incident.reopened", severity: NotificationSeverity.INFO }]]));
+}
+
 async function persistGeneratedNotifications(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; correlationId?: string }, recipients: Map<string, { kind: string; messageCode: string; severity: NotificationSeverity }>) {
   const expiresAt = new Date(); expiresAt.setUTCFullYear(expiresAt.getUTCFullYear() + 1);
   const inserted = recipients.size > 0 ? await tx.notification.createMany({ data: [...recipients].map(([recipientUserId, value]) => ({ companyId: input.companyId, recipientUserId, incidentId: input.incidentId, sourceIncidentEventId: input.sourceEventId, incidentNumber: input.incidentNumber, expiresAt, ...value })), skipDuplicates: true }) : { count: 0 };

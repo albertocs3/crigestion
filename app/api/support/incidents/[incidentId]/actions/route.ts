@@ -32,7 +32,7 @@ export async function POST(request: Request, context: { params: Promise<{ incide
   const parsed = createSupportActionSchema.safeParse(body);
   if (!parsed.success) return response(request, validationError(parsed.error.flatten()), 422);
   const result = await createSupportAction(params.data.incidentId, parsed.data, authorization.user, { idempotencyKey: idempotency.key, requestHash: hashSupportActionRequest({ incidentId: params.data.incidentId, ...parsed.data }), scope: `incident:${params.data.incidentId}:action:create`, correlationId });
-  return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status);
+  return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status, result.error.retryAfterSeconds);
 }
 
-function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0" } }); }
+function response(request: Request, body: unknown, status: number, retryAfterSeconds?: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...(retryAfterSeconds ? { "Retry-After": String(retryAfterSeconds) } : {}) } }); }

@@ -31,4 +31,4 @@ export default async function NotificationsPage({ searchParams }: Props) {
 
 function statusLabel(value: string) { return ({ UNREAD: "Sin leer", READ: "Leída", ARCHIVED: "Archivada" } as Record<string,string>)[value] ?? value; }
 function severityLabel(value: string) { return ({ INFO: "Información", URGENT: "Urgente", CRITICAL: "Crítica" } as Record<string,string>)[value] ?? value; }
-function messageLabel(value: string) { return ({ "support.incident.assigned": "Nueva incidencia asignada", "support.incident.reassigned": "Incidencia reasignada", "support.incident.urgent": "Incidencia urgente" } as Record<string,string>)[value] ?? "Nueva notificación"; }
+function messageLabel(value: string) { return ({ "support.incident.assigned": "Nueva incidencia asignada", "support.incident.reassigned": "Incidencia reasignada", "support.incident.urgent": "Incidencia urgente", "support.incident.collaborator-added": "Incorporación como colaborador", "support.incident.collaborator-action": "Nueva actuación de un colaborador", "support.incident.reopened": "Incidencia reabierta" } as Record<string,string>)[value] ?? "Nueva notificación"; }

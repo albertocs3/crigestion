@@ -114,6 +114,20 @@ describe("support incidents application", () => {
     });
     expect(await prisma.supportIncident.count()).toBe(1);
     expect(await prisma.supportIncidentEvent.count()).toBe(1);
+    if (!created.ok) throw new Error("INCIDENT_NOT_CREATED");
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    await expect(
+      prisma.$executeRaw`
+        INSERT INTO "support_incident_events" (
+          "id", "companyId", "incidentId", "actorUserId",
+          "responsibleUserIdAtEvent", "resultingVersion", "eventType", "createdAt"
+        )
+        VALUES (
+          ${randomUUID()}::uuid, ${companyId}::uuid, ${created.value.id}::uuid,
+          ${actor.id}::uuid, ${randomUUID()}::uuid, 2, 'ACTION_ADDED', clock_timestamp()
+        )
+      `,
+    ).rejects.toThrow(/responsible snapshot is invalid/i);
     const inbox = await listNotifications(actor, { state: "UNREAD", limit: 25 });
     expect(inbox).toMatchObject({ unreadCount: 1, items: [{ kind: "SUPPORT_INCIDENT_URGENT", severity: "URGENT", status: "UNREAD", incident: { id: created.ok ? created.value.id : "" } }] });
     if (!inbox?.items[0]) throw new Error("NOTIFICATION_MISSING");
@@ -210,6 +224,9 @@ describe("support incidents application", () => {
       where: { id: incident.value.id },
       include: { actions: true, events: true },
     });
+    await prisma.rateLimitBucket.update({ where: { key: `support-action:${stored.companyId}:${actor.id}` }, data: { count: 30, windowStart: new Date() } });
+    const limitedCommand = { ...actionCommand, expectedVersion: 2, text: "Intento acotado por cuota persistente." };
+    expect(await createSupportAction(incident.value.id, limitedCommand, actor, { ...context, requestHash: hashSupportActionRequest({ incidentId: incident.value.id, ...limitedCommand }) })).toMatchObject({ ok: false, status: 429, error: { code: "SUPPORT_ACTION_RATE_LIMITED", retryAfterSeconds: expect.any(Number) } });
     expect(stored).toMatchObject({ status: "IN_PROGRESS", version: 2 });
     expect(stored.firstActionAt?.toISOString()).toBe(actionCommand.performedAt);
     expect(stored.actions).toHaveLength(1);
@@ -471,23 +488,26 @@ describe("support incidents application", () => {
       expectedVersion: 4,
       reason: "El problema vuelve a reproducirse.",
     };
+    const reopenContext = transitionContext(incident.value.id, reopen, "reopen-key");
     const reopened = await transitionSupportIncident(
       incident.value.id,
       reopen,
       actor,
-      transitionContext(incident.value.id, reopen),
+      reopenContext,
     );
     const replay = await transitionSupportIncident(
       incident.value.id,
       reopen,
       actor,
-      transitionContext(incident.value.id, reopen, "reopen-key"),
+      reopenContext,
     );
     expect(reopened).toMatchObject({
       ok: true,
       value: { incident: { status: "IN_PROGRESS", version: 5 } },
     });
-    expect(replay.ok).toBe(false);
+    expect(await prisma.notification.findMany({ where: { incidentId: incident.value.id, kind: "SUPPORT_INCIDENT_REOPENED" }, select: { recipientUserId: true, messageCode: true, severity: true } })).toEqual([{ recipientUserId: actor.id, messageCode: "support.incident.reopened", severity: "INFO" }]);
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { incident: { version: 5 } } });
+    expect(await prisma.notification.count({ where: { incidentId: incident.value.id, kind: "SUPPORT_INCIDENT_REOPENED" } })).toBe(1);
     const stored = await prisma.supportIncident.findUniqueOrThrow({
       where: { id: incident.value.id },
       include: { transitions: true, events: true },
@@ -585,21 +605,21 @@ describe("support incidents application", () => {
         change: { type: "COLLABORATOR_ADDED" },
       },
     });
+    expect(await prisma.notification.findMany({ where: { incidentId: incident.value.id, kind: "SUPPORT_INCIDENT_COLLABORATOR_ADDED" }, select: { recipientUserId: true, messageCode: true, severity: true } })).toEqual([{ recipientUserId: user.id, messageCode: "support.incident.collaborator-added", severity: "INFO" }]);
     const action = {
       expectedVersion: 2,
       text: "La colaboradora reproduce y documenta el problema.",
       performedAt: new Date().toISOString(),
     };
-    expect(
-      await createSupportAction(incident.value.id, action, collaboratorActor, {
-        idempotencyKey: randomUUID(),
-        requestHash: hashSupportActionRequest({
-          incidentId: incident.value.id,
-          ...action,
-        }),
-        scope: `incident:${incident.value.id}:action:create`,
-      }),
-    ).toMatchObject({ ok: true, value: { incident: { version: 3 } } });
+    const actionContext = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportActionRequest({ incidentId: incident.value.id, ...action }),
+      scope: `incident:${incident.value.id}:action:create`,
+    };
+    expect(await createSupportAction(incident.value.id, action, collaboratorActor, actionContext)).toMatchObject({ ok: true, status: 201, value: { incident: { version: 3 } } });
+    expect(await createSupportAction(incident.value.id, action, collaboratorActor, actionContext)).toMatchObject({ ok: true, status: 200, value: { incident: { version: 3 } } });
+    expect(await prisma.notification.findMany({ where: { incidentId: incident.value.id, kind: "SUPPORT_INCIDENT_COLLABORATOR_ACTION" }, select: { recipientUserId: true, messageCode: true, severity: true } })).toEqual([{ recipientUserId: actor.id, messageCode: "support.incident.collaborator-action", severity: "INFO" }]);
+    expect(JSON.stringify(await prisma.auditEvent.findMany({ where: { eventType: "SUPPORT_NOTIFICATIONS_CREATED" } }))).not.toContain(action.text);
     const collaboratorId = added.ok ? added.value.change.collaboratorId! : "";
     const remove = {
       action: "remove-collaborator" as const,

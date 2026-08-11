@@ -246,6 +246,13 @@ describe("support incidents HTTP contracts", () => {
     });
     expect(replayBody.action.id).toBe(firstBody.action.id);
     expect(await prisma.supportIncidentAction.count()).toBe(1);
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    const adminId = (await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: "admin" }, select: { id: true } })).id;
+    await prisma.rateLimitBucket.update({ where: { key: `support-action:${companyId}:${adminId}` }, data: { count: 30, windowStart: new Date() } });
+    const limited = await actionsPost(jsonRequest(`/api/support/incidents/${incident.id}/actions`, { ...body, expectedVersion: 2, text: "Otro contenido con la misma clave." }, { csrf, key }), context);
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBeTruthy();
+    expect(await limited.json()).toMatchObject({ code: "SUPPORT_ACTION_RATE_LIMITED" });
   });
 
   it("resolves once and replays the versioned transition", async () => {
@@ -363,6 +370,7 @@ describe("support incidents HTTP contracts", () => {
     expect(firstBody.change.type).toBe("COLLABORATOR_ADDED");
     expect(replayBody.change.id).toBe(firstBody.change.id);
     expect(await prisma.supportIncidentCollaborator.count()).toBe(1);
+    expect(await prisma.notification.findMany({ where: { incidentId: incident.id, kind: "SUPPORT_INCIDENT_COLLABORATOR_ADDED" }, select: { recipientUserId: true, messageCode: true } })).toEqual([{ recipientUserId: user.id, messageCode: "support.incident.collaborator-added" }]);
   });
 
   it("creates and replays a protected communication", async () => {
