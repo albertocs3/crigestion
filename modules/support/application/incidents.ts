@@ -182,6 +182,14 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     actor: { id: string; displayName: string };
     occurredAt: string;
   }>;
+  priorityChanges: Array<{
+    id: string;
+    fromPriority: z.infer<typeof prioritySchema>;
+    toPriority: z.infer<typeof prioritySchema>;
+    reason: string;
+    actor: { id: string; displayName: string };
+    occurredAt: string;
+  }>;
 };
 
 export type SupportCategoryDto = {
@@ -314,6 +322,17 @@ const incidentDetailSelect = {
       actorUser: { select: { id: true, displayName: true } },
     },
   },
+  priorityChanges: {
+    orderBy: [{ occurredAt: "asc" as const }, { id: "asc" as const }],
+    select: {
+      id: true,
+      fromPriority: true,
+      toPriority: true,
+      reason: true,
+      occurredAt: true,
+      actorUser: { select: { id: true, displayName: true } },
+    },
+  },
 } satisfies Prisma.SupportIncidentSelect;
 
 type IncidentListRecord = Prisma.SupportIncidentGetPayload<{
@@ -323,7 +342,7 @@ type IncidentDetailRecord = Prisma.SupportIncidentGetPayload<{
   select: typeof incidentDetailSelect;
 }>;
 
-const incidentReplaySchema: z.ZodType<SupportIncidentDetail> = z
+const incidentReplaySchema = z
   .object({
     id: z.string().uuid(),
     number: z.string(),
@@ -453,6 +472,16 @@ const incidentReplaySchema: z.ZodType<SupportIncidentDetail> = z
         })
         .strict(),
     ),
+    priorityChanges: z.array(
+      z.object({
+        id: z.string().uuid(),
+        fromPriority: prioritySchema,
+        toPriority: prioritySchema,
+        reason: z.string(),
+        actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+        occurredAt: z.string().datetime(),
+      }).strict(),
+    ).optional().transform((value) => value ?? []),
   })
   .strict();
 
@@ -637,7 +666,7 @@ export async function createSupportIncident(
   actor: SessionUser,
   context: SupportMutationContext,
 ): Promise<CreateSupportIncidentResult> {
-  return executeMutation(actor, context, incidentReplaySchema, async (tx) => {
+  return executeMutation<SupportIncidentDetail>(actor, context, incidentReplaySchema, async (tx) => {
     const companyId = await currentCompanyId(tx);
     if (!companyId)
       return failure(
@@ -786,7 +815,7 @@ export async function createIncidentFromCommunication(
   actor: SessionUser,
   context: SupportMutationContext,
 ): Promise<CreateSupportIncidentResult> {
-  return executeMutation(actor, context, incidentReplaySchema, async (tx) => {
+  return executeMutation<SupportIncidentDetail>(actor, context, incidentReplaySchema, async (tx) => {
     const companyId = await currentCompanyId(tx);
     if (!companyId)
       return failure(
@@ -1060,7 +1089,7 @@ export function hashSupportRequest(value: unknown): string {
 async function executeMutation<T>(
   actor: SessionUser,
   context: SupportMutationContext,
-  replaySchema: z.ZodType<T>,
+  replaySchema: z.ZodType<T, z.ZodTypeDef, unknown>,
   work: (
     tx: Prisma.TransactionClient,
   ) => Promise<{ ok: true; status: 201; value: T } | SupportFailure>,
@@ -1206,6 +1235,14 @@ function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail {
       collaborator: change.collaborator,
       fromResponsible: change.fromResponsible,
       toResponsible: change.toResponsible,
+      actor: change.actorUser,
+      occurredAt: change.occurredAt.toISOString(),
+    })),
+    priorityChanges: row.priorityChanges.map((change) => ({
+      id: change.id,
+      fromPriority: change.fromPriority,
+      toPriority: change.toPriority,
+      reason: change.reason,
       actor: change.actorUser,
       occurredAt: change.occurredAt.toISOString(),
     })),

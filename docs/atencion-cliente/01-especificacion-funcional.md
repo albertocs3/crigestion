@@ -118,7 +118,7 @@ No puede modificar los datos principales ni reasignar, resolver o cerrar la inci
 - Gestiona las categorías.
 - Puede actuar como responsable o colaborador.
 - Consulta indicadores globales.
-- Recibe avisos de todas las incidencias urgentes.
+- Recibe avisos de todas las incidencias urgentes mediante el permiso `Support.ReceiveUrgentNotifications`.
 - Es el único que puede cambiar el cliente de una incidencia existente.
 
 ## 4. Comunicaciones
@@ -243,9 +243,10 @@ El contador se reinicia al comenzar cada año.
 - Alta.
 - Urgente.
 
-La prioridad predeterminada es `Media`.
+La prioridad predeterminada es `Media`, pero puede seleccionarse otra prioridad durante el alta.
 
 Las incidencias urgentes deben destacarse visualmente y generar las notificaciones correspondientes.
+El responsable vigente o un administrador puede cambiar posteriormente la prioridad dejando motivo e historial. Una incidencia `Resuelta` o `Cerrada` debe reabrirse antes de cambiarla.
 
 ### 5.5 Estados
 
@@ -400,7 +401,7 @@ Se generarán por:
 - Cambio a prioridad urgente.
 - Fusión de incidencias.
 
-El administrador recibirá una notificación por cada incidencia urgente.
+Cada usuario activo con `Support.ReceiveUrgentNotifications` recibirá una notificación cuando una incidencia se cree como urgente o cambie de una prioridad no urgente a `Urgente`. Un mismo destinatario recibe un único aviso por evento, aunque también sea responsable de la incidencia.
 
 ## 13. Pantallas
 
@@ -537,12 +538,12 @@ El sistema deberá registrar los intervalos de estado para calcular correctament
 
 1. Toda comunicación puede registrarse sin crear una incidencia.
 2. Marcar una comunicación como `Requiere seguimiento` obliga a crear una incidencia.
-3. Toda incidencia se crea con número anual, cliente, responsable, estado `Nueva` y prioridad `Media`.
+3. Toda incidencia se crea con número anual, cliente, responsable, estado `Nueva` y prioridad seleccionable, `Media` de forma predeterminada.
 4. La primera actuación textual cambia automáticamente una incidencia nueva a `En curso`.
 5. Solo el responsable o el administrador modifican los datos principales.
 6. Los colaboradores pueden añadir actuaciones y adjuntos.
 7. Resolver exige una solución y cerrar exige un motivo.
-8. Una incidencia finalizada debe reabrirse antes de admitir nuevas actuaciones.
+8. Una incidencia finalizada debe reabrirse antes de admitir nuevas actuaciones o cambios de prioridad.
 9. Todas las modificaciones relevantes quedan auditadas.
 10. Ninguna comunicación o actuación puede eliminarse.
 11. Una incidencia duplicada puede cerrarse y enlazarse con su principal mediante una fusión.

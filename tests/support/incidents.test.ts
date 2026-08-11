@@ -39,6 +39,10 @@ import {
   hashSupportParticipantRequest,
 } from "@/modules/support/application/participants";
 import {
+  changeSupportIncidentPriority,
+  hashSupportPriorityChangeRequest,
+} from "@/modules/support/application/priorities";
+import {
   correctSupportCommunication,
   createSupportCommunication,
   createSupportCommunicationSchema,
@@ -160,6 +164,33 @@ describe("support incidents application", () => {
     });
     expect(JSON.stringify(audit.payload)).not.toContain(command.title);
     expect(JSON.stringify(audit.payload)).not.toContain(command.description);
+  });
+
+  it("records and replays priority changes and notifies each urgent recipient once", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Prioridad revisable", description: "Incidencia creada para comprobar la escalada posterior.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const command = { expectedVersion: created.value.version, priority: "URGENT" as const, reason: "Impacto operativo generalizado." };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportPriorityChangeRequest({ incidentId: created.value.id, ...command }), scope: `incident:${created.value.id}:priority-change`, correlationId: "priority-test-0001" };
+
+    const first = await changeSupportIncidentPriority(created.value.id, command, actor, context);
+    const replay = await changeSupportIncidentPriority(created.value.id, command, actor, context);
+
+    expect(first).toMatchObject({ ok: true, status: 201, value: { incident: { priority: "URGENT", version: 2 }, change: { fromPriority: "MEDIUM", toPriority: "URGENT" } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { change: { id: first.ok ? first.value.change.id : "" } } });
+    expect(await prisma.supportIncidentPriorityChange.count({ where: { incidentId: created.value.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: created.value.id, eventType: "PRIORITY_CHANGED" } })).toBe(1);
+    expect(await prisma.notification.count({ where: { incidentId: created.value.id, kind: "SUPPORT_INCIDENT_URGENT" } })).toBe(1);
+    const unchangedCommand = { expectedVersion: 2, priority: "URGENT" as const, reason: "Se mantiene la prioridad ya vigente." };
+    const unchanged = await changeSupportIncidentPriority(created.value.id, unchangedCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportPriorityChangeRequest({ incidentId: created.value.id, ...unchangedCommand }), scope: `incident:${created.value.id}:priority-change` });
+    expect(unchanged).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_PRIORITY_UNCHANGED" } });
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_PRIORITY_CHANGED" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(command.reason);
+    await expect(prisma.supportIncidentPriorityChange.update({ where: { id: first.ok ? first.value.change.id : randomUUID() }, data: { reason: "Intento de alterar la evidencia." } })).rejects.toThrow();
+    await expect(prisma.supportIncident.update({ where: { id: created.value.id }, data: { priority: "HIGH", version: 3 } })).rejects.toThrow();
   });
 
   it("records actions append-only and advances a new incident exactly once", async () => {
@@ -1398,6 +1429,9 @@ async function reset() {
       'ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"',
     );
     await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_priority_changes" DISABLE TRIGGER "support_priority_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
@@ -1419,6 +1453,7 @@ async function reset() {
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
+    await tx.supportIncidentPriorityChange.deleteMany();
     await tx.supportIncidentAttachment.deleteMany();
     await tx.attachment.deleteMany();
     await tx.supportIncidentAction.deleteMany();
@@ -1432,6 +1467,9 @@ async function reset() {
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_priority_changes" ENABLE TRIGGER "support_priority_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',

@@ -9,6 +9,7 @@ import {
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
+import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
@@ -303,6 +304,28 @@ describe("support incidents HTTP contracts", () => {
     });
     expect(replayBody.transition.id).toBe(firstBody.transition.id);
     expect(await prisma.supportIncidentStatusTransition.count()).toBe(1);
+  });
+
+  it("changes priority once through the protected versioned contract", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    const incident = (await created.json()) as { id: string; version: number };
+    const body = { expectedVersion: incident.version, priority: "URGENT", reason: "Escalada operativa confirmada." };
+    const key = randomUUID();
+    const context = { params: Promise.resolve({ incidentId: incident.id }) };
+    const denied = await priorityChangesPost(jsonRequest(`/api/support/incidents/${incident.id}/priority-changes`, body, { key: randomUUID() }), context);
+    expect(denied.status).toBe(403);
+    const first = await priorityChangesPost(jsonRequest(`/api/support/incidents/${incident.id}/priority-changes`, body, { csrf, key }), context);
+    const replay = await priorityChangesPost(jsonRequest(`/api/support/incidents/${incident.id}/priority-changes`, body, { csrf, key }), context);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const firstBody = (await first.json()) as { incident: { priority: string; version: number }; change: { id: string } };
+    const replayBody = (await replay.json()) as { change: { id: string } };
+    expect(firstBody.incident).toEqual({ id: incident.id, priority: "URGENT", version: 2 });
+    expect(replayBody.change.id).toBe(firstBody.change.id);
+    expect(await prisma.supportIncidentPriorityChange.count({ where: { incidentId: incident.id } })).toBe(1);
   });
 
   it("adds a collaborator once through the protected participant contract", async () => {
@@ -822,6 +845,9 @@ async function reset() {
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
     await tx.supportIncidentAction.deleteMany();
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_priority_changes" DISABLE TRIGGER "support_priority_changes_append_only"');
+    await tx.supportIncidentPriorityChange.deleteMany();
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_priority_changes" ENABLE TRIGGER "support_priority_changes_append_only"');
     await tx.supportIncident.deleteMany();
     await tx.customerContact.deleteMany();
     await tx.$executeRawUnsafe(

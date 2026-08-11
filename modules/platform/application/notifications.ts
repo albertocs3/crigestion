@@ -171,6 +171,18 @@ export async function createIncidentCreatedNotifications(tx: Prisma.TransactionC
   await persistGeneratedNotifications(tx, input, recipients);
 }
 
+export async function createIncidentPriorityUrgentNotifications(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; correlationId?: string }) {
+  const urgentRecipients = await tx.user.findMany({
+    where: { status: "ACTIVE", role: { permissions: { some: { permission: { code: "Support.ReceiveUrgentNotifications" } } } } },
+    select: { id: true }
+  });
+  await persistGeneratedNotifications(tx, input, new Map(urgentRecipients.map((recipient) => [recipient.id, {
+    kind: "SUPPORT_INCIDENT_URGENT",
+    messageCode: "support.incident.urgent",
+    severity: NotificationSeverity.URGENT
+  }])));
+}
+
 export async function createIncidentReassignedNotification(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; responsibleUserId: string; correlationId?: string }) {
   await persistGeneratedNotifications(tx, input, new Map([[input.responsibleUserId, { kind: "SUPPORT_INCIDENT_REASSIGNED", messageCode: "support.incident.reassigned", severity: NotificationSeverity.INFO }]]));
 }

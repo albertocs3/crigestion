@@ -9,7 +9,7 @@ La rebanada actual permite gestionar incidencias, participantes, comunicaciones 
 - `Support.View`: listado y detalle de incidencias y categorías.
 - `Support.Create` + `Support.View`: creación de incidencias.
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
-- `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución y cierre por el responsable o un administrador.
+- `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución, cierre y cambio posterior de prioridad por el responsable o un administrador.
 - `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
 - `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
@@ -43,6 +43,8 @@ Mutación autenticada con `Support.Create` y `Support.View`, protección Origin/
 ```
 
 La incidencia se crea con estado `NEW`, versión `1`, responsable obligatorio y número anual `INC-AAAA-00001`. La tienda, si se indica, debe pertenecer al cliente. El responsable debe estar activo y conservar `Support.View` y `Support.AddActions`.
+
+La prioridad es seleccionable durante el alta y toma `MEDIUM` cuando se omite.
 
 Respuesta `201`; un replay idéntico devuelve `200` sin repetir numeración, evento ni auditoría.
 
@@ -81,6 +83,24 @@ Los cuerpos admitidos son estrictos:
 - reabrir: `{ "action":"reopen", "expectedVersion":5, "reason":"..." }`.
 
 Resolver y cerrar son estados finales: no admiten actuaciones hasta reabrir. Cada transición incrementa una sola versión, crea evidencia append-only y un evento enlazado. Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_TRANSITION_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
+
+## `POST /api/support/incidents/{incidentId}/priority-changes`
+
+Requiere `Support.ManageAssigned` + `Support.View` y ser el responsable vigente o Administrador. Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 4 KiB, `Idempotency-Key` y control de versión.
+
+```json
+{
+  "expectedVersion": 3,
+  "priority": "URGENT",
+  "reason": "El impacto operativo afecta a todos los puestos."
+}
+```
+
+La prioridad debe ser distinta de la vigente y el motivo contiene entre 3 y 500 caracteres. Una incidencia `RESOLVED` o `CLOSED` debe reabrirse antes del cambio. La operación incrementa una sola versión y conserva evidencia append-only con prioridad anterior, nueva, motivo, actor y fecha, además del evento `PRIORITY_CHANGED`. Respuesta `201`; un replay idéntico devuelve `200` sin repetir versión, evidencia, notificación ni auditoría.
+
+El paso de cualquier prioridad no urgente a `URGENT` crea, dentro de la misma transacción, una notificación `SUPPORT_INCIDENT_URGENT` para cada usuario activo con `Support.ReceiveUrgentNotifications`. Salir de urgente no notifica; volver posteriormente a urgente genera un nuevo aviso porque procede de otro evento. Un destinatario recibe como máximo un aviso por evento fuente. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+
+La cuota persistente admite 20 intentos por actor y empresa en 15 minutos; un replay válido no consume cuota. Errores estables: `SUPPORT_INCIDENT_PRIORITY_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_PRIORITY_UNCHANGED`, `SUPPORT_INCIDENT_PRIORITY_FINALIZED`, `SUPPORT_INCIDENT_PRIORITY_RATE_LIMITED`, `SUPPORT_INCIDENT_PRIORITY_BUSY`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`, además de los errores HTTP comunes de validación, autenticación, CSRF, formato y mantenimiento. La cuota devuelve `429` con `Retry-After`; el agotamiento de reintentos serializables devuelve `503` con `Retry-After: 3`.
 
 ## `POST /api/support/incidents/{incidentId}/participant-changes`
 
@@ -154,6 +174,7 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 - Los eventos son append-only; `UPDATE` y `DELETE` se rechazan en PostgreSQL.
 - Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
 - Las transiciones son append-only. PostgreSQL exige un único evento por versión resultante y mantiene coherentes estado, solución, motivo de cierre y marcas temporales.
+- Los cambios de prioridad son append-only. PostgreSQL exige un único evento `PRIORITY_CHANGED` por versión resultante, correspondencia exacta entre prioridad anterior y nueva, y la notificación obligatoria a los receptores autorizados cuando el destino es `URGENT`.
 - Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
 - Las comunicaciones no se borran y cada actualización exige una corrección exacta append-only con versión consecutiva.
 - No existe borrado físico de incidencias en la API.
@@ -164,9 +185,9 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 
 `PUT /api/notifications/{notificationId}/state` recibe JSON estricto `{ state, expectedVersion }`, exige Origin, CSRF, mantenimiento inactivo e `Idempotency-Key`, y limita el cuerpo a 2 KiB. Permite `UNREAD -> READ|ARCHIVED` y `READ -> UNREAD|ARCHIVED`; `ARCHIVED` es terminal. Una versión obsoleta devuelve `409 NOTIFICATION_VERSION_CONFLICT`, una transición inválida `409 NOTIFICATION_STATE_INVALID` y un identificador inexistente, ajeno o de otra empresa `404 NOTIFICATION_NOT_FOUND`. La cuota persistente admite 120 cambios por usuario y 15 minutos; el replay válido no consume cuota y el exceso devuelve `429 NOTIFICATION_STATE_RATE_LIMITED` con `Retry-After`.
 
-El alta de incidencia notifica al responsable. Una incidencia `URGENT` notifica a los usuarios activos con `Support.ReceiveUrgentNotifications`; si el responsable también posee ese permiso recibe una única notificación urgente. Una reasignación notifica solo al nuevo responsable. La incorporación de un colaborador le notifica exclusivamente a él; una actuación registrada por un colaborador activo notifica al responsable vigente en ese evento; y una reapertura notifica al responsable vigente, incluso cuando él mismo la ejecuta. La creación ocurre en la misma transacción que el evento funcional, con unicidad por destinatario y evento fuente. Los cambios de estado conservan evidencia append-only y control de versión en PostgreSQL.
+El alta de incidencia notifica al responsable. Una incidencia creada como `URGENT`, o cambiada posteriormente desde una prioridad no urgente a `URGENT`, notifica a los usuarios activos con `Support.ReceiveUrgentNotifications`; si el responsable también posee ese permiso recibe una única notificación urgente por evento. Una reasignación notifica solo al nuevo responsable. La incorporación de un colaborador le notifica exclusivamente a él; una actuación registrada por un colaborador activo notifica al responsable vigente en ese evento; y una reapertura notifica al responsable vigente, incluso cuando él mismo la ejecuta. La creación ocurre en la misma transacción que el evento funcional, con unicidad por destinatario y evento fuente. Los cambios de estado y prioridad conservan evidencia append-only y control de versión en PostgreSQL.
 
-La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. La transición posterior de prioridad a urgente, fusiones, acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. Las fusiones, acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
 
 Las clases adicionales son `SUPPORT_INCIDENT_COLLABORATOR_ADDED`, `SUPPORT_INCIDENT_COLLABORATOR_ACTION` y `SUPPORT_INCIDENT_REOPENED`, todas de severidad `INFO`. Sus mensajes se derivan de códigos controlados y del número de incidencia; nunca contienen texto de actuación, motivo de reapertura, cliente ni nombre del actor. Las actuaciones están limitadas a 30 intentos por actor y empresa cada 15 minutos; el replay válido queda exento y el exceso devuelve `429 SUPPORT_ACTION_RATE_LIMITED` con `Retry-After`. Tras agotar tres reintentos serializables se devuelve `503 SUPPORT_ACTION_BUSY` con `Retry-After: 3`.
 
