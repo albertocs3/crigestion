@@ -226,6 +226,22 @@ enum CustomerStoreStatus {
   INACTIVE
 }
 
+enum SupportIncidentPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum SupportIncidentStatus {
+  NEW
+  IN_PROGRESS
+  PENDING_CUSTOMER
+  PENDING_THIRD_PARTY
+  RESOLVED
+  CLOSED
+}
+
 enum SubscriptionStatus {
   DRAFT
   ACTIVE
@@ -692,6 +708,10 @@ model Company {
   accountingWaiverReplacementRequests        AccountingWaiverEvidenceReplacementRequest[]
   accountingWaiverReplacementEvents          AccountingWaiverEvidenceReplacementEvent[]
   subscriptionRenewalAttempts                SubscriptionRenewalAttempt[]
+  supportIncidentCategories                  SupportIncidentCategory[]
+  supportIncidentSequences                   SupportIncidentNumberSequence[]
+  supportIncidents                           SupportIncident[]
+  supportIncidentEvents                      SupportIncidentEvent[]
   logoAttachment                             Attachment?                                  @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
@@ -778,6 +798,7 @@ model Customer {
   subscriptions                      Subscription[]
   subscriptionRenewalReservations    SubscriptionRenewalReservation[]
   subscriptionRenewalWaiverSnapshots SubscriptionRenewalWaiverSnapshot[]
+  supportIncidents                   SupportIncident[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -1197,14 +1218,107 @@ model CustomerStore {
   createdAt       DateTime            @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
 
-  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy User     @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy User?    @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy        User              @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy        User?             @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  supportIncidents SupportIncident[]
 
+  @@unique([id, customerId])
   @@index([customerId, status, name, id])
   @@index([customerId, isPrimary])
   @@index([createdById, createdAt])
   @@map("customer_stores")
+}
+
+model SupportIncidentCategory {
+  id             String   @id @default(uuid()) @db.Uuid
+  companyId      String   @db.Uuid
+  name           String   @db.VarChar(120)
+  normalizedName String   @db.VarChar(120)
+  description    String?  @db.VarChar(500)
+  color          String   @default("#475569") @db.VarChar(7)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+
+  company   Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incidents SupportIncident[]
+
+  @@unique([companyId, normalizedName])
+  @@unique([id, companyId])
+  @@index([companyId, isActive, name, id])
+  @@map("support_incident_categories")
+}
+
+model SupportIncidentNumberSequence {
+  companyId String @db.Uuid
+  year      Int
+  nextValue Int    @default(1)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@id([companyId, year])
+  @@map("support_incident_number_sequences")
+}
+
+model SupportIncident {
+  id                String                  @id @default(uuid()) @db.Uuid
+  companyId         String                  @db.Uuid
+  year              Int
+  sequenceNumber    Int
+  number            String                  @db.VarChar(20)
+  customerId        String                  @db.Uuid
+  storeId           String?                 @db.Uuid
+  categoryId        String                  @db.Uuid
+  responsibleUserId String                  @db.Uuid
+  createdById       String                  @db.Uuid
+  title             String                  @db.VarChar(200)
+  description       String                  @db.VarChar(4000)
+  priority          SupportIncidentPriority @default(MEDIUM)
+  status            SupportIncidentStatus   @default(NEW)
+  version           Int                     @default(1)
+  firstActionAt     DateTime?               @db.Timestamptz(3)
+  resolvedAt        DateTime?               @db.Timestamptz(3)
+  closedAt          DateTime?               @db.Timestamptz(3)
+  createdAt         DateTime                @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime                @updatedAt @db.Timestamptz(3)
+
+  company         Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer        Customer                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  store           CustomerStore?          @relation(fields: [storeId, customerId], references: [id, customerId], onDelete: Restrict)
+  category        SupportIncidentCategory @relation(fields: [categoryId, companyId], references: [id, companyId], onDelete: Restrict)
+  responsibleUser User                    @relation("SupportIncidentsResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  createdBy       User                    @relation("SupportIncidentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  events          SupportIncidentEvent[]
+
+  @@unique([companyId, number])
+  @@unique([companyId, year, sequenceNumber])
+  @@unique([id, companyId])
+  @@index([companyId, status, updatedAt, id])
+  @@index([companyId, priority, status, updatedAt, id])
+  @@index([companyId, responsibleUserId, status, updatedAt, id])
+  @@index([customerId, status, updatedAt, id])
+  @@index([categoryId, status, updatedAt, id])
+  @@map("support_incidents")
+}
+
+model SupportIncidentEvent {
+  id          String                 @id @default(uuid()) @db.Uuid
+  companyId   String                 @db.Uuid
+  incidentId  String                 @db.Uuid
+  actorUserId String                 @db.Uuid
+  eventType   String                 @db.VarChar(80)
+  fromStatus  SupportIncidentStatus?
+  toStatus    SupportIncidentStatus?
+  createdAt   DateTime               @default(now()) @db.Timestamptz(3)
+
+  company   Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident  SupportIncident @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  actorUser User            @relation("SupportIncidentEventsActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([incidentId, createdAt, id])
+  @@index([companyId, eventType, createdAt, id])
+  @@map("support_incident_events")
 }
 
 model User {
@@ -1284,6 +1398,9 @@ model User {
   createdBankReconciliations              BankReconciliation[]                         @relation("BankReconciliationsCreatedBy")
   undoneBankReconciliations               BankReconciliation[]                         @relation("BankReconciliationsUndoneBy")
   importedBankStatements                  BankStatement[]                              @relation("BankStatementsImportedBy")
+  responsibleSupportIncidents             SupportIncident[]                            @relation("SupportIncidentsResponsible")
+  createdSupportIncidents                 SupportIncident[]                            @relation("SupportIncidentsCreatedBy")
+  supportIncidentEvents                   SupportIncidentEvent[]                       @relation("SupportIncidentEventsActor")
   verifactuCredentialTests                VerifactuMtlsCredentialTestAttempt[]
   createdSubscriptions                    Subscription[]                               @relation("SubscriptionsCreatedBy")
   updatedSubscriptions                    Subscription[]                               @relation("SubscriptionsUpdatedBy")
