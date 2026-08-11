@@ -332,7 +332,9 @@ Prioridades pendientes despues de este corte:
    la devolución parcial por cantidad ya está implementada.
 5. Ampliar perfiles bancarios solo cuando exista un requisito confirmado:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
-6. Completar Suscripciones con cambios programados, edicion controlada de la
+6. Ampliar los cambios programados de Suscripciones mas alla de la primera
+   rebanada de cantidades `PER_LICENSE`, ya integrada con vista previa,
+   reserva y evidencia append-only; completar la edicion controlada de la
    vista previa, ampliar de forma controlada el catalogo de bloqueos
    automaticos y paginacion navegable entre cortes de grupos. La reactivacion
    programada ya dispone de aplicacion supervisada y de un worker one-shot

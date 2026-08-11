@@ -5,10 +5,11 @@
 Este contrato cubre el alta, listado, detalle, edicion de borradores,
 activacion manual, cancelacion inmediata y registro o retirada de una baja
 futura. Incluye tambien el runner manual de renovaciones: consulta agrupada,
-reserva de borrador, confirmacion atomica y liberacion trazable. Todavia no
-incluye planes, cambios contractuales programados, edicion de lineas en la
-vista previa ni gestion avanzada de exclusiones. La reactivacion inmediata de
-una suscripcion cancelada si forma parte del contrato.
+reserva de borrador, confirmacion atomica y liberacion trazable. Incluye la
+primera rebanada de cambios programados de cantidad `PER_LICENSE`; todavia no
+incluye cambios de plan, conceptos, precios o periodicidad ni edicion de lineas
+en la vista previa. La reactivacion inmediata de una suscripcion cancelada si
+forma parte del contrato.
 
 Las suscripciones consumen clientes y conceptos del catalogo comunes. Al crear
 una suscripcion se congelan codigo, tipo, descripcion, precio e impuesto de cada
@@ -28,8 +29,10 @@ linea para que cambios posteriores del catalogo no alteren el contrato creado.
 | `Subscriptions.View` | Listar y consultar suscripciones. |
 | `Subscriptions.Manage` | Crear y activar suscripciones. |
 | `Subscriptions.ManageEconomics` | Informar precios o descuentos distintos de los valores del catalogo. |
+| `Subscriptions.ScheduleChanges` | Programar o retirar cambios contractuales de cantidad; requiere ademas ManageEconomics y View. |
 | `Subscriptions.Cancel` | Cancelar inmediatamente o registrar y retirar una baja futura. |
 | `Subscriptions.Reactivate` | Reactivar una suscripcion cancelada sin recuperar periodos omitidos. |
+| `Subscriptions.ScheduleReactivations` | Programar, retirar o aplicar reactivaciones futuras; requiere ademas View. |
 | `Subscriptions.RunRenewals` | Consultar candidatos, preparar reservas y liberarlas. |
 | `Subscriptions.ConfirmRenewals` | Confirmar una reserva de renovacion. |
 | `Subscriptions.ManageRenewalExclusions` | Excluir renovaciones y consultar sus motivos. |
@@ -311,6 +314,58 @@ evento `SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED` con actor `SYSTEM`.
 Las tres mutaciones exigen Origin, CSRF, JSON estricto, mantenimiento inactivo,
 `Idempotency-Key`, cuerpo acotado, rate limit persistente y auditoria sin
 motivos libres ni claves idempotentes.
+
+## 8.5. `POST /api/subscriptions/{subscriptionId}/change-schedules`
+
+Permisos requeridos: `Subscriptions.ScheduleChanges`,
+`Subscriptions.ManageEconomics` y `Subscriptions.View`.
+
+```json
+{
+  "expectedVersion": 3,
+  "reason": "Ampliacion de licencias acordada para el siguiente periodo",
+  "lines": [
+    { "subscriptionLineId": "00000000-0000-0000-0000-000000000001", "quantity": "15.000" }
+  ]
+}
+```
+
+La primera version solo admite cantidades positivas de lineas existentes en
+una suscripcion `ACTIVE` con modalidad `PER_LICENSE`. La fecha efectiva no se
+recibe del cliente: es la `nextRenewalDate` bloqueada por el servidor. Todas
+las lineas incluidas deben cambiar realmente y no se pueden repetir. No admite
+precios, descuentos, impuestos, conceptos, periodicidad ni fechas.
+
+Responde `201` con `{ "subscriptionVersion": 4, "schedule": { ... } }`.
+Crear la orden no modifica las cantidades vigentes. Solo puede existir una
+orden `PENDING` y no se permite si hay una reserva `RESERVED`, una exclusion
+`OPEN`, una baja pendiente o una reactivacion pendiente. La vista previa
+proyecta sus cantidades sin mutar datos; la aplicacion real se realiza dentro
+de la transaccion serializable que reserva la renovacion.
+
+## 8.6. `POST /api/subscriptions/{subscriptionId}/change-schedules/{scheduleId}/cancel`
+
+Permisos requeridos: `Subscriptions.ScheduleChanges`,
+`Subscriptions.ManageEconomics` y `Subscriptions.View`.
+
+```json
+{
+  "expectedSubscriptionVersion": 4,
+  "expectedScheduleVersion": 1,
+  "reason": "El cliente aplaza la ampliacion"
+}
+```
+
+Realiza `PENDING -> REVOKED`, incrementa las versiones de orden y suscripcion
+y responde `200`. No elimina ni edita la evidencia. Mientras exista una orden
+pendiente, la baja inmediata y la baja programada se rechazan con
+`SUBSCRIPTION_PENDING_CHANGE_EXISTS`; primero debe retirarse expresamente.
+
+Ambas mutaciones exigen Origin, CSRF, JSON estricto, cuerpo acotado,
+`Idempotency-Key`, cuota persistente por actor y empresa y respuesta
+`Cache-Control: private, no-store`. Los replays validos se atienden antes de la
+cuota. La auditoria no contiene cantidades, motivo libre, importes ni clave de
+idempotencia.
 
 ## 9. `POST /api/subscriptions/{subscriptionId}/cancellation-schedules`
 

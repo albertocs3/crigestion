@@ -16,6 +16,7 @@ import {
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
 import { resolveScheduledCancellationBeforeRenewal } from "@/modules/subscriptions/application/subscriptions";
+import { applyDueSubscriptionChangeBeforeRenewal } from "@/modules/subscriptions/application/subscriptionChanges";
 import {
   materializePreparationFailure,
   recordConfirmationAttempt,
@@ -128,6 +129,7 @@ export type SubscriptionRenewalPreview = {
       id: string; number: string; name: string; status: "ACTIVE" | "RENEWAL_PENDING";
       periodicity: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL";
       version: number; estimatedTotal: string; action: "INVOICE" | "CANCEL";
+      pendingChange: null | { scheduleId: string; effectiveDate: string; lineCount: number };
       pending: null | {
         exclusionId: string; reasonCode: "MANUAL_EXCLUSION" | "PREPARATION_FAILED" | "LEGACY_PENDING"; hasReason: boolean;
         reason?: string; excludedAt: string; excludedBy: { id: string; displayName: string } | null;
@@ -244,8 +246,16 @@ export async function listSubscriptionRenewalPreview(
       id: true, number: true, name: true, status: true, periodicity: true, paymentMethod: true,
       nextRenewalDate: true, endDate: true, version: true,
       customer: { select: { id: true, code: true, legalName: true } },
-      lines: { select: { quantity: true, unitPrice: true, discountPercent: true, discountAmount: true, taxRateSnapshot: true } },
+      lines: { select: { id: true, quantity: true, unitPrice: true, discountPercent: true, discountAmount: true, taxRateSnapshot: true } },
       cancellationSchedules: { where: { status: "PENDING", effectiveDate: { lte: processDate } }, take: 1, select: { id: true } },
+      changeSchedules: {
+        where: { status: "PENDING", effectiveDate: { lte: processDate } }, take: 1,
+        orderBy: [{ effectiveDate: "asc" }, { id: "asc" }],
+        select: {
+          id: true, effectiveDate: true,
+          lines: { select: { subscriptionLineId: true, newQuantity: true } }
+        }
+      },
       renewalExclusions: {
         where: { status: "OPEN" }, take: 1,
         select: {
@@ -260,8 +270,10 @@ export async function listSubscriptionRenewalPreview(
   for (const subscription of subscriptions) {
     if (subscription.status !== "ACTIVE" && subscription.status !== "RENEWAL_PENDING") continue;
     const periodStart = formatDateOnly(subscription.nextRenewalDate);
+    const pendingChange = subscription.changeSchedules[0] ?? null;
+    const projectedQuantity = new Map(pendingChange?.lines.map((line) => [line.subscriptionLineId, line.newQuantity]) ?? []);
     const total = subscription.lines.reduce((sum, line) => sum.plus(calculateInvoiceLine({
-      quantity: line.quantity, unitPrice: line.unitPrice, discountPercent: line.discountPercent,
+      quantity: projectedQuantity.get(line.id) ?? line.quantity, unitPrice: line.unitPrice, discountPercent: line.discountPercent,
       discountAmount: line.discountAmount, taxRate: line.taxRateSnapshot
     }).lineTotal), new Prisma.Decimal(0));
     const key = `${subscription.customer.id}:${subscription.paymentMethod}:${periodStart}`;
@@ -273,6 +285,11 @@ export async function listSubscriptionRenewalPreview(
       id: subscription.id, number: subscription.number, name: subscription.name, status: subscription.status,
       periodicity: subscription.periodicity, version: subscription.version, estimatedTotal: total.toFixed(2),
       action: subscription.cancellationSchedules.length > 0 ? "CANCEL" : "INVOICE",
+      pendingChange: pendingChange ? {
+        scheduleId: pendingChange.id,
+        effectiveDate: formatDateOnly(pendingChange.effectiveDate),
+        lineCount: pendingChange.lines.length
+      } : null,
       pending: subscription.renewalExclusions[0] ? {
         exclusionId: subscription.renewalExclusions[0].id,
         reasonCode: subscription.renewalExclusions[0].reasonCode,
@@ -671,6 +688,7 @@ export async function createSubscriptionRenewalDraft(
 
         const sources: Array<{ subscriptionId: string; expectedVersion: number }> = [];
         const cancelledSubscriptionIds: string[] = [];
+        let appliedChangeOccurred = false;
         for (const subscriptionId of subscriptionIds) {
           const resolution = await resolveScheduledCancellationBeforeRenewal(tx, {
             companyId: command.companyId,
@@ -679,29 +697,40 @@ export async function createSubscriptionRenewalDraft(
             initiatedByUserId: actor.id,
             correlationId: context.correlationId
           });
-          if (resolution.outcome === "NOT_FOUND") return failOrRollback(failure(404, "SUBSCRIPTION_NOT_FOUND", "Una suscripcion no existe."), cancelledSubscriptionIds);
-          if (resolution.outcome === "NOT_RENEWABLE") return failOrRollback(failure(409, "SUBSCRIPTION_NOT_RENEWABLE", "Una suscripcion no es renovable."), cancelledSubscriptionIds);
-          if (resolution.outcome === "NOT_DUE") return failOrRollback(failure(422, "SUBSCRIPTION_RENEWAL_NOT_DUE", "Una suscripcion aun no vence."), cancelledSubscriptionIds);
+          if (resolution.outcome === "NOT_FOUND") return failOrRollback(failure(404, "SUBSCRIPTION_NOT_FOUND", "Una suscripcion no existe."), cancelledSubscriptionIds, appliedChangeOccurred);
+          if (resolution.outcome === "NOT_RENEWABLE") return failOrRollback(failure(409, "SUBSCRIPTION_NOT_RENEWABLE", "Una suscripcion no es renovable."), cancelledSubscriptionIds, appliedChangeOccurred);
+          if (resolution.outcome === "NOT_DUE") return failOrRollback(failure(422, "SUBSCRIPTION_RENEWAL_NOT_DUE", "Una suscripcion aun no vence."), cancelledSubscriptionIds, appliedChangeOccurred);
           if (resolution.outcome === "CANCELLED") {
             const expectedVersion = command.expectedVersions?.[subscriptionId];
             if (expectedVersion !== undefined && (!resolution.applied || resolution.subscriptionVersion !== expectedVersion + 1)) {
-              return failOrRollback(failure(409, "SUBSCRIPTION_VERSION_CONFLICT", "Una suscripcion ha cambiado desde la vista previa."), [...cancelledSubscriptionIds, subscriptionId]);
+              return failOrRollback(failure(409, "SUBSCRIPTION_VERSION_CONFLICT", "Una suscripcion ha cambiado desde la vista previa."), [...cancelledSubscriptionIds, subscriptionId], appliedChangeOccurred);
             }
             cancelledSubscriptionIds.push(subscriptionId);
           } else {
             const expectedVersion = command.expectedVersions?.[subscriptionId];
             if (expectedVersion !== undefined && resolution.subscriptionVersion !== expectedVersion) {
-              return failOrRollback(failure(409, "SUBSCRIPTION_VERSION_CONFLICT", "Una suscripcion ha cambiado desde la vista previa."), cancelledSubscriptionIds);
+              return failOrRollback(failure(409, "SUBSCRIPTION_VERSION_CONFLICT", "Una suscripcion ha cambiado desde la vista previa."), cancelledSubscriptionIds, appliedChangeOccurred);
             }
+            const changeResolution = await applyDueSubscriptionChangeBeforeRenewal(tx, {
+              companyId: command.companyId,
+              subscriptionId,
+              asOfDate: command.issueDate,
+              initiatedByUserId: actor.id,
+              correlationId: context.correlationId
+            });
+            if (changeResolution.outcome === "STALE") {
+              return failOrRollback(failure(409, "SUBSCRIPTION_CHANGE_SCHEDULE_STALE", "El cambio programado ya no se puede aplicar."), cancelledSubscriptionIds, appliedChangeOccurred);
+            }
+            if (changeResolution.outcome === "APPLIED") appliedChangeOccurred = true;
             const source = await tx.subscription.findFirst({
               where: { id: subscriptionId, companyId: command.companyId },
               select: { status: true, nextRenewalDate: true }
             });
-            if (!source) return failOrRollback(failure(404, "SUBSCRIPTION_NOT_FOUND", "Una suscripcion no existe."), cancelledSubscriptionIds);
+            if (!source) return failOrRollback(failure(404, "SUBSCRIPTION_NOT_FOUND", "Una suscripcion no existe."), cancelledSubscriptionIds, appliedChangeOccurred);
             const pendingExclusionId = command.pendingExclusionIds?.[subscriptionId];
             if (source.status === "RENEWAL_PENDING") {
               if (!pendingExclusionId) {
-                return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_PENDING_SELECTION_REQUIRED", "Una renovacion pendiente debe seleccionarse mediante su expediente."), cancelledSubscriptionIds);
+                return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_PENDING_SELECTION_REQUIRED", "Una renovacion pendiente debe seleccionarse mediante su expediente."), cancelledSubscriptionIds, appliedChangeOccurred);
               }
               const exclusion = await tx.subscriptionRenewalExclusion.findFirst({
                 where: {
@@ -711,12 +740,12 @@ export async function createSubscriptionRenewalDraft(
                 select: { id: true }
               });
               if (!exclusion) {
-                return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_STALE", "El expediente pendiente ha cambiado o ya esta cerrado."), cancelledSubscriptionIds);
+                return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_STALE", "El expediente pendiente ha cambiado o ya esta cerrado."), cancelledSubscriptionIds, appliedChangeOccurred);
               }
             } else if (pendingExclusionId) {
-              return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_NOT_APPLICABLE", "Una suscripcion activa no admite un expediente pendiente."), cancelledSubscriptionIds);
+              return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_NOT_APPLICABLE", "Una suscripcion activa no admite un expediente pendiente."), cancelledSubscriptionIds, appliedChangeOccurred);
             }
-            sources.push({ subscriptionId, expectedVersion: resolution.subscriptionVersion });
+            sources.push({ subscriptionId, expectedVersion: changeResolution.subscriptionVersion });
           }
         }
 
@@ -734,7 +763,7 @@ export async function createSubscriptionRenewalDraft(
             correlationId: context.correlationId
           });
           const draftFailure = mapDraftFailure(draft);
-          if (draftFailure) return failOrRollback(draftFailure, cancelledSubscriptionIds);
+          if (draftFailure) return failOrRollback(draftFailure, cancelledSubscriptionIds, appliedChangeOccurred);
           if (draft.kind !== "created") throw new Error("SUBSCRIPTION_RENEWAL_DRAFT_RESULT_UNREACHABLE");
           await recordSuccessfulPreparationAttempt(tx, {
             companyId: command.companyId, invoiceId: draft.invoiceId, reservationIds: draft.reservationIds
@@ -781,8 +810,8 @@ export async function createSubscriptionRenewalDraft(
   throw new Error("SUBSCRIPTION_RENEWAL_TRANSACTION_RETRY_EXHAUSTED");
 }
 
-function failOrRollback(result: RenewalFailure, cancelledSubscriptionIds: string[]): RenewalFailure {
-  if (cancelledSubscriptionIds.length > 0) throw new RenewalFunctionalRollback(result);
+function failOrRollback(result: RenewalFailure, cancelledSubscriptionIds: string[], appliedChangeOccurred = false): RenewalFailure {
+  if (cancelledSubscriptionIds.length > 0 || appliedChangeOccurred) throw new RenewalFunctionalRollback(result);
   return result;
 }
 

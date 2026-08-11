@@ -333,10 +333,27 @@ Se podrá modificar:
 - Los cambios no alteran un periodo ya facturado.
 - Se guardan como modificaciones programadas.
 - Entran en vigor en la siguiente renovación.
-- Se aplican antes de preparar la vista previa de esa renovación.
+- La vista previa proyecta el cambio sin aplicarlo; la aplicacion real ocurre
+  al reservar la renovacion.
 - Pueden cancelarse antes de su aplicación.
 - Deben conservar valor anterior, valor nuevo, fecha efectiva, usuario y motivo.
 - Los cambios económicos requieren permisos de administrador.
+
+### 9.1 Primera rebanada de cantidades y licencias
+
+La primera entrega de cambios programados se limita a cantidades de conceptos
+ya contratados en suscripciones `PER_LICENSE`. La fecha efectiva es siempre la
+proxima renovacion vigente y la calcula el servidor. Solo puede existir una
+orden pendiente por suscripcion; para modificarla se retira y se registra una
+nueva, conservando ambas evidencias.
+
+La consulta de vista previa no modifica el contrato: proyecta las cantidades
+pendientes y las identifica como tales. Al reservar el borrador, la misma
+transaccion aplica la orden, incrementa la version de la suscripcion y congela
+las nuevas cantidades en la reserva. Una reserva vigente, una exclusion
+abierta, una baja pendiente o una reactivacion pendiente bloquean la creacion.
+La implementacion de planes, periodicidad, altas o bajas de conceptos y cambios
+de precio, descuento o impuesto queda fuera de esta primera rebanada.
 
 ## 10. Cancelación y reactivación
 

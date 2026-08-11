@@ -392,6 +392,11 @@ export async function excludeSubscriptionRenewal(
         })) {
           return failure(409, "SUBSCRIPTION_CANCELLATION_DUE", "La baja vencida debe aplicarse y no puede posponerse mediante exclusion.");
         }
+        if (await tx.subscriptionChangeSchedule.count({
+          where: { subscriptionId: subscription.id, companyId: command.companyId, status: "PENDING" }
+        })) {
+          return failure(409, "SUBSCRIPTION_PENDING_CHANGE_EXISTS", "Retire el cambio programado antes de excluir la renovacion.");
+        }
         if (await tx.subscriptionRenewalReservation.count({
           where: { companyId: command.companyId, subscriptionId: subscription.id, periodStart: subscription.nextRenewalDate, status: { in: ["RESERVED", "BILLED"] } }
         })) {

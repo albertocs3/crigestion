@@ -257,6 +257,12 @@ enum SubscriptionReactivationScheduleStatus {
   REVOKED
 }
 
+enum SubscriptionChangeScheduleStatus {
+  PENDING
+  APPLIED
+  REVOKED
+}
+
 enum SubscriptionReactivationAutomationOutcome {
   APPLIED
   BLOCKED
@@ -674,6 +680,7 @@ model Company {
   subscriptionReactivations                  SubscriptionReactivation[]
   subscriptionReactivationSchedules          SubscriptionReactivationSchedule[]
   subscriptionReactivationAutomationAttempts SubscriptionReactivationAutomationAttempt[]
+  subscriptionChangeSchedules                SubscriptionChangeSchedule[]
   subscriptionRenewalReservations            SubscriptionRenewalReservation[]
   subscriptionRenewalExclusions              SubscriptionRenewalExclusion[]
   subscriptionRenewalWaiverSnapshots         SubscriptionRenewalWaiverSnapshot[]
@@ -1290,6 +1297,9 @@ model User {
   reactivationSchedulesCancelledBy        SubscriptionReactivationSchedule[]           @relation("SubscriptionReactivationSchedulesCancelledBySnapshot")
   revokedSubscriptionReactivations        SubscriptionReactivationSchedule[]           @relation("SubscriptionReactivationSchedulesRevokedBy")
   appliedSubscriptionReactivations        SubscriptionReactivationSchedule[]           @relation("SubscriptionReactivationSchedulesAppliedBy")
+  requestedSubscriptionChanges            SubscriptionChangeSchedule[]                 @relation("SubscriptionChangeSchedulesRequestedBy")
+  revokedSubscriptionChanges              SubscriptionChangeSchedule[]                 @relation("SubscriptionChangeSchedulesRevokedBy")
+  appliedSubscriptionChanges              SubscriptionChangeSchedule[]                 @relation("SubscriptionChangeSchedulesAppliedBy")
   reservedSubscriptionRenewals            SubscriptionRenewalReservation[]             @relation("SubscriptionRenewalsReservedBy")
   releasedSubscriptionRenewals            SubscriptionRenewalReservation[]             @relation("SubscriptionRenewalsReleasedBy")
   openedSubscriptionRenewalExclusions     SubscriptionRenewalExclusion[]               @relation("SubscriptionRenewalExclusionsOpenedBy")
@@ -1485,6 +1495,7 @@ model Subscription {
   reactivations                  SubscriptionReactivation[]
   reactivationSchedules          SubscriptionReactivationSchedule[]
   reactivationAutomationAttempts SubscriptionReactivationAutomationAttempt[]
+  changeSchedules                SubscriptionChangeSchedule[]
   renewalReservations            SubscriptionRenewalReservation[]
   renewalExclusions              SubscriptionRenewalExclusion[]
   renewalAttemptMembers          SubscriptionRenewalAttemptMember[]
@@ -1635,6 +1646,64 @@ model SubscriptionReactivationAutomationAttempt {
   @@map("subscription_reactivation_automation_attempts")
 }
 
+model SubscriptionChangeSchedule {
+  id                           String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId                    String                           @db.Uuid
+  subscriptionId               String                           @db.Uuid
+  status                       SubscriptionChangeScheduleStatus @default(PENDING)
+  effectiveDate                DateTime                         @db.Date
+  reason                       String                           @db.VarChar(500)
+  createdAgainstVersion        Int
+  scheduledSubscriptionVersion Int
+  version                      Int                              @default(1)
+  requestedById                String                           @db.Uuid
+  requestedAt                  DateTime                         @default(now()) @db.Timestamptz(3)
+  revokedById                  String?                          @db.Uuid
+  revokedAt                    DateTime?                        @db.Timestamptz(3)
+  revocationReason             String?                          @db.VarChar(500)
+  revokedAgainstVersion        Int?
+  revokedSubscriptionVersion   Int?
+  appliedById                  String?                          @db.Uuid
+  appliedAt                    DateTime?                        @db.Timestamptz(3)
+  appliedAgainstVersion        Int?
+  appliedSubscriptionVersion   Int?
+  updatedAt                    DateTime                         @updatedAt @db.Timestamptz(3)
+
+  company      Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  subscription Subscription                     @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
+  requestedBy  User                             @relation("SubscriptionChangeSchedulesRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  revokedBy    User?                            @relation("SubscriptionChangeSchedulesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  appliedBy    User?                            @relation("SubscriptionChangeSchedulesAppliedBy", fields: [appliedById], references: [id], onDelete: Restrict)
+  lines        SubscriptionChangeScheduleLine[]
+
+  @@unique([id, subscriptionId])
+  @@index([companyId, status, effectiveDate, id])
+  @@index([subscriptionId, requestedAt, id])
+  @@index([requestedById, requestedAt, id])
+  @@index([revokedById, revokedAt, id])
+  @@index([appliedById, appliedAt, id])
+  @@map("subscription_change_schedules")
+}
+
+model SubscriptionChangeScheduleLine {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scheduleId         String   @db.Uuid
+  subscriptionId     String   @db.Uuid
+  subscriptionLineId String   @db.Uuid
+  position           Int
+  previousQuantity   Decimal  @db.Decimal(12, 3)
+  newQuantity        Decimal  @db.Decimal(12, 3)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  schedule         SubscriptionChangeSchedule @relation(fields: [scheduleId, subscriptionId], references: [id, subscriptionId], onDelete: Restrict)
+  subscriptionLine SubscriptionLine           @relation(fields: [subscriptionLineId, subscriptionId], references: [id, subscriptionId], onDelete: Restrict)
+
+  @@unique([scheduleId, position])
+  @@unique([scheduleId, subscriptionLineId])
+  @@index([subscriptionLineId])
+  @@map("subscription_change_schedule_lines")
+}
+
 model SubscriptionLine {
   id                      String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   subscriptionId          String          @db.Uuid
@@ -1654,10 +1723,11 @@ model SubscriptionLine {
   createdAt               DateTime        @default(now()) @db.Timestamptz(3)
   updatedAt               DateTime        @updatedAt @db.Timestamptz(3)
 
-  subscription Subscription                         @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
-  catalogItem  CatalogItem                          @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
-  taxRate      CatalogTaxRate                       @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
-  renewalLines SubscriptionRenewalReservationLine[]
+  subscription        Subscription                         @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+  catalogItem         CatalogItem                          @relation(fields: [catalogItemId], references: [id], onDelete: Restrict)
+  taxRate             CatalogTaxRate                       @relation(fields: [taxRateId], references: [id], onDelete: Restrict)
+  renewalLines        SubscriptionRenewalReservationLine[]
+  changeScheduleLines SubscriptionChangeScheduleLine[]
 
   @@unique([subscriptionId, position])
   @@unique([subscriptionId, catalogItemId])

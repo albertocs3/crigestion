@@ -12,6 +12,8 @@ import { POST as subscriptionReactivationScheduleApply } from "@/app/api/subscri
 import { POST as subscriptionReactivationScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/reactivation-schedules/[scheduleId]/cancel/route";
 import { POST as subscriptionSchedule } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/route";
 import { POST as subscriptionScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/cancellation-schedules/[scheduleId]/cancel/route";
+import { POST as subscriptionChangeScheduleCreate } from "@/app/api/subscriptions/[subscriptionId]/change-schedules/route";
+import { POST as subscriptionChangeScheduleCancel } from "@/app/api/subscriptions/[subscriptionId]/change-schedules/[scheduleId]/cancel/route";
 import { GET as renewalsGet, POST as renewalsPost } from "@/app/api/subscriptions/renewals/route";
 import { POST as renewalConfirm } from "@/app/api/subscriptions/renewals/[invoiceId]/confirm/route";
 import { POST as renewalRelease } from "@/app/api/subscriptions/renewals/[invoiceId]/release/route";
@@ -236,6 +238,50 @@ describe("subscription HTTP contracts", () => {
     expect(revoked.status).toBe(200); expect(await revoked.json()).toMatchObject({ subscriptionVersion: 5, schedule: { status: "REVOKED", version: 2 } });
     await createViewOnlyUser(); cookieMock.reset(); await login("viewer", "Cambiar-viewer-2026"); const viewerCsrf = await csrfToken();
     expect((await subscriptionReactivationScheduleCreate(jsonRequest(path, { ...body, expectedVersion: 5 }, { csrf: viewerCsrf }), routeContext)).status).toBe(403);
+  });
+
+  it("creates, replays and revokes a protected quantity change schedule", async () => {
+    await login(); const csrf = await csrfToken(); const references = await createReferences();
+    const creationBody = { ...payload(references, futureDate()), pricingMode: "PER_LICENSE", lines: [{ catalogItemId: references.itemId, quantity: "2.000" }] };
+    const created = await (await subscriptionsPost(jsonRequest("/api/subscriptions", creationBody, { csrf }))).json() as { id: string; version: number; lines: Array<{ id: string }> };
+    expect((await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: 1 }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) })).status).toBe(200);
+    const path = `/api/subscriptions/${created.id}/change-schedules`; const routeContext = { params: Promise.resolve({ subscriptionId: created.id }) };
+    const body = { expectedVersion: 2, reason: "Ampliacion de licencias acordada", lines: [{ subscriptionLineId: created.lines[0]!.id, quantity: "3.000" }] };
+    const hostile = await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, origin: "https://evil.example" }), routeContext);
+    expect(hostile.status).toBe(403); expect(hostile.headers.get("Cache-Control")).toContain("private, no-store");
+    expect((await subscriptionChangeScheduleCreate(jsonRequest(path, body), routeContext)).status).toBe(403);
+    expect((await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, idempotency: null }), routeContext)).status).toBe(400);
+    expect((await subscriptionChangeScheduleCreate(jsonRequest(path, { ...body, unexpected: true }, { csrf }), routeContext)).status).toBe(422);
+    const key = randomUUID();
+    const first = await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
+    const replay = await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
+    expect(first.status).toBe(201); const scheduled = await first.json() as { subscriptionVersion: number; schedule: { id: string; status: string; version: number } };
+    expect(scheduled).toMatchObject({ subscriptionVersion: 3, schedule: { status: "PENDING", version: 1 } });
+    expect(await replay.json()).toEqual(scheduled);
+    for (let index = 0; index < 9; index += 1) {
+      const missingId = randomUUID();
+      expect((await subscriptionChangeScheduleCreate(jsonRequest(`/api/subscriptions/${missingId}/change-schedules`, body, { csrf }),
+        { params: Promise.resolve({ subscriptionId: missingId }) })).status).toBe(404);
+    }
+    const limitedId = randomUUID();
+    const limited = await subscriptionChangeScheduleCreate(jsonRequest(`/api/subscriptions/${limitedId}/change-schedules`, body, { csrf }),
+      { params: Promise.resolve({ subscriptionId: limitedId }) });
+    expect(limited.status).toBe(429); expect(limited.headers.get("Retry-After")).toBe("900");
+    const rateAudits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_CHANGE_SCHEDULE_RATE_LIMITED" }, select: { payload: true } });
+    expect(rateAudits).toHaveLength(1); expect(JSON.stringify(rateAudits)).not.toContain(limitedId); expect(JSON.stringify(rateAudits)).not.toContain(body.reason);
+    const replayAfterLimit = await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
+    expect(replayAfterLimit.status).toBe(201); expect(await replayAfterLimit.json()).toEqual(scheduled);
+    const detail = await subscriptionGet(apiRequest(`/api/subscriptions/${created.id}`), routeContext);
+    expect(await detail.json()).toMatchObject({ version: 3, changeSchedules: [{ id: scheduled.schedule.id, status: "PENDING" }] });
+
+    const cancelPath = `${path}/${scheduled.schedule.id}/cancel`; const cancelContext = { params: Promise.resolve({ subscriptionId: created.id, scheduleId: scheduled.schedule.id }) };
+    const cancelBody = { expectedSubscriptionVersion: 3, expectedScheduleVersion: 1, reason: "El cliente aplaza la ampliacion" };
+    expect((await subscriptionChangeScheduleCancel(jsonRequest(cancelPath, cancelBody, { csrf, idempotency: null }), cancelContext)).status).toBe(400);
+    const cancelled = await subscriptionChangeScheduleCancel(jsonRequest(cancelPath, cancelBody, { csrf }), cancelContext);
+    expect(cancelled.status).toBe(200); expect(await cancelled.json()).toMatchObject({ subscriptionVersion: 4, schedule: { status: "REVOKED", version: 2 } });
+
+    await createViewOnlyUser(); cookieMock.reset(); await login("viewer", "Cambiar-viewer-2026"); const viewerCsrf = await csrfToken();
+    expect((await subscriptionChangeScheduleCreate(jsonRequest(path, { ...body, expectedVersion: 4 }, { csrf: viewerCsrf }), routeContext)).status).toBe(403);
   });
 
   it("replays creation and rejects unknown fields and invalid ids", async () => {

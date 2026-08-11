@@ -10,6 +10,7 @@ import { excludeSubscriptionRenewal, hashSubscriptionRenewalExclusionRequest, ha
 import { listSubscriptionRenewalWaivers } from "@/modules/subscriptions/application/renewalWaiverReports";
 import { completeRenewalWaiverFiscalReview, decideRenewalWaiverFiscalReview, hashCompleteRenewalWaiverFiscalReview, hashDecideRenewalWaiverFiscalReview, hashStartRenewalWaiverFiscalReview, startRenewalWaiverFiscalReview } from "@/modules/subscriptions/application/renewalWaiverFiscalReviews";
 import { applySubscriptionReactivationSchedule, createSubscriptionReactivationSchedule, hashSubscriptionReactivationScheduleRequest, processNextDueSubscriptionReactivationSchedule, revokeSubscriptionReactivationSchedule } from "@/modules/subscriptions/application/reactivationSchedules";
+import { createSubscriptionChangeSchedule, hashSubscriptionChangeScheduleRequest, revokeSubscriptionChangeSchedule } from "@/modules/subscriptions/application/subscriptionChanges";
 import { issueInvoice } from "@/modules/billing/application/invoices";
 import { createManualJournalEntry } from "@/modules/accounting/application/journal";
 import { approveWaiverEvidenceReversal, hashWaiverEvidenceReversalApproval, hashWaiverEvidenceReversalRequest, requestWaiverEvidenceReversal } from "@/modules/accounting/application/waiverEvidenceReversals";
@@ -317,6 +318,119 @@ describe("subscriptions application service", () => {
     await expect(prisma.subscriptionReactivationAutomationAttempt.delete({ where: { id: attempts[0]!.id } })).rejects.toThrow();
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED", actorType: "SYSTEM" } });
     expect(JSON.stringify(audit.payload)).not.toContain(scheduleCommand.reason);
+  });
+
+  it("schedules and revokes a per-license quantity change without mutating the active contract", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id);
+    const creation = payload(customerId, itemId, {
+      pricingMode: "PER_LICENSE",
+      lines: [{ catalogItemId: itemId, quantity: "2.000", discountPercent: "0.00", discountAmount: "0.00" }]
+    });
+    const created = await createSubscription(creation, actor, context("change-create", creation)); if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("change-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+    const command = {
+      expectedVersion: 2,
+      reason: "Ampliacion de licencias en la siguiente renovacion",
+      lines: [{ subscriptionLineId: created.value.lines[0]!.id, quantity: "3.000" }]
+    };
+    const scheduled = await createSubscriptionChangeSchedule(created.value.id, command, actor,
+      changeScheduleContext("create", "change-schedule", created.value.id, null, command));
+    const replay = await createSubscriptionChangeSchedule(created.value.id, command, actor,
+      changeScheduleContext("create", "change-schedule", created.value.id, null, command));
+    expect(scheduled).toMatchObject({ ok: true, status: 201, value: {
+      subscriptionVersion: 3,
+      schedule: { status: "PENDING", version: 1, lines: [{ previousQuantity: "2.000", newQuantity: "3.000" }] }
+    } });
+    expect(replay).toEqual(scheduled); if (!scheduled.ok) throw new Error(scheduled.error.code);
+    expect((await prisma.subscriptionLine.findUniqueOrThrow({ where: { id: created.value.lines[0]!.id }, select: { quantity: true } })).quantity.toFixed(3))
+      .toBe("2.000");
+    await expect(prisma.subscriptionLine.update({ where: { id: created.value.lines[0]!.id }, data: { quantity: "3.000" } })).rejects.toThrow();
+
+    const duplicate = { ...command, expectedVersion: 3 };
+    expect(await createSubscriptionChangeSchedule(created.value.id, duplicate, actor,
+      changeScheduleContext("create", "change-duplicate", created.value.id, null, duplicate))).toMatchObject({
+      ok: false, status: 409, error: { code: "SUBSCRIPTION_PENDING_CHANGE_EXISTS" }
+    });
+    expect(await cancelSubscription(created.value.id, { expectedVersion: 3, reason: "Baja incompatible" }, actor,
+      context("change-cancel-blocked", { expectedVersion: 3, reason: "Baja incompatible" }))).toMatchObject({
+      ok: false, status: 409, error: { code: "SUBSCRIPTION_PENDING_CHANGE_EXISTS" }
+    });
+    expect(await scheduleSubscriptionCancellation(created.value.id, { expectedVersion: 3, effectiveDate: created.value.nextRenewalDate, reason: "Baja futura incompatible" }, actor,
+      context("change-future-cancel-blocked", { expectedVersion: 3, effectiveDate: created.value.nextRenewalDate, reason: "Baja futura incompatible" }))).toMatchObject({
+      ok: false, status: 409, error: { code: "SUBSCRIPTION_PENDING_CHANGE_EXISTS" }
+    });
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    await expect(prisma.$executeRaw`
+      INSERT INTO "subscription_cancellation_schedules"
+        ("companyId", "subscriptionId", "effectiveDate", "reason", "createdAgainstVersion", "requestedById", "updatedAt")
+      VALUES (${companyId}::uuid, ${created.value.id}::uuid, ${created.value.nextRenewalDate}::date,
+        'Intento SQL incompatible', 3, ${actor.id}::uuid, clock_timestamp())
+    `).rejects.toThrow(/pending subscription change schedule/i);
+    const revoke = { expectedSubscriptionVersion: 3, expectedScheduleVersion: 1, reason: "El cliente aplaza la ampliacion" };
+    const revoked = await revokeSubscriptionChangeSchedule(created.value.id, scheduled.value.schedule.id, revoke, actor,
+      changeScheduleContext("revoke", "change-revoke", created.value.id, scheduled.value.schedule.id, revoke));
+    expect(revoked).toMatchObject({ ok: true, value: { subscriptionVersion: 4, schedule: { status: "REVOKED", version: 2 } } });
+    await expect(prisma.subscriptionChangeSchedule.update({ where: { id: scheduled.value.schedule.id }, data: { reason: "Alteracion" } })).rejects.toThrow();
+    await expect(prisma.subscriptionChangeScheduleLine.deleteMany({ where: { scheduleId: scheduled.value.schedule.id } })).rejects.toThrow();
+    const audit = JSON.stringify(await prisma.auditEvent.findMany({ where: { eventType: { in: ["SUBSCRIPTION_CHANGE_SCHEDULED", "SUBSCRIPTION_CHANGE_SCHEDULE_REVOKED"] } }, select: { payload: true } }));
+    expect(audit).not.toContain(command.reason);
+    expect(audit).not.toContain(revoke.reason);
+    expect(audit).not.toContain("3.000");
+  });
+
+  it("previews and applies a due quantity change in the renewal reservation transaction", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id);
+    const renewalDate = todayDate();
+    const createCommand = payload(customerId, itemId, {
+      pricingMode: "PER_LICENSE", startDate: renewalDate,
+      lines: [{ catalogItemId: itemId, quantity: "2.000", discountPercent: "0.00", discountAmount: "0.00" }]
+    });
+    const created = await createSubscription(createCommand, actor, context("change-apply-create", createCommand));
+    if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("change-apply-activate", { version: 1 }));
+    if (!activated.ok) throw new Error(activated.error.code);
+    const scheduleCommand = {
+      expectedVersion: 2, reason: "Ampliacion acordada para la siguiente renovacion",
+      lines: [{ subscriptionLineId: created.value.lines[0]!.id, quantity: "3.000" }]
+    };
+    const scheduled = await createSubscriptionChangeSchedule(created.value.id, scheduleCommand, actor,
+      changeScheduleContext("create", "change-apply-schedule", created.value.id, null, scheduleCommand));
+    if (!scheduled.ok) throw new Error(scheduled.error.code);
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+
+    const preview = await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false }, actor);
+    expect(preview).toMatchObject({ ok: true, value: { groups: [{ estimatedTotal: "181.14", subscriptions: [{
+      id: created.value.id, version: 3, estimatedTotal: "181.14",
+      pendingChange: { scheduleId: scheduled.value.schedule.id, effectiveDate: renewalDate, lineCount: 1 }
+    }] }] } });
+    expect((await prisma.subscriptionLine.findUniqueOrThrow({ where: { id: created.value.lines[0]!.id } })).quantity.toFixed(3)).toBe("2.000");
+
+    const renewal = { companyId, subscriptionIds: [created.value.id], expectedVersions: { [created.value.id]: 3 }, issueDate: renewalDate };
+    await prisma.customer.update({ where: { id: customerId }, data: { status: "INACTIVE" } });
+    expect(await createSubscriptionRenewalDraft(renewal, actor, renewalContext("change-apply-rollback", renewal))).toMatchObject({
+      ok: false, status: 422, error: { code: "CUSTOMER_NOT_ACTIVE" }
+    });
+    expect(await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, select: { version: true } })).toEqual({ version: 3 });
+    expect((await prisma.subscriptionLine.findUniqueOrThrow({ where: { id: created.value.lines[0]!.id } })).quantity.toFixed(3)).toBe("2.000");
+    expect(await prisma.subscriptionChangeSchedule.findUniqueOrThrow({ where: { id: scheduled.value.schedule.id }, select: { status: true, version: true } })).toEqual({ status: "PENDING", version: 1 });
+    expect(await prisma.invoice.count({ where: { origin: "SUBSCRIPTION" } })).toBe(0);
+    await prisma.customer.update({ where: { id: customerId }, data: { status: "ACTIVE" } });
+    const result = await createSubscriptionRenewalDraft(renewal, actor, renewalContext("change-apply-renewal", renewal));
+    expect(result).toMatchObject({ ok: true, status: 201, value: { lineCount: 1, total: "181.14" } });
+    if (!result.ok || !result.value.invoiceId) throw new Error("CHANGE_RENEWAL_DRAFT_EXPECTED");
+    expect(await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, select: { version: true } })).toEqual({ version: 4 });
+    expect((await prisma.subscriptionLine.findUniqueOrThrow({ where: { id: created.value.lines[0]!.id } })).quantity.toFixed(3)).toBe("3.000");
+    expect(await prisma.subscriptionChangeSchedule.findUniqueOrThrow({ where: { id: scheduled.value.schedule.id }, select: {
+      status: true, version: true, appliedAgainstVersion: true, appliedSubscriptionVersion: true
+    } })).toEqual({ status: "APPLIED", version: 2, appliedAgainstVersion: 3, appliedSubscriptionVersion: 4 });
+    const invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: result.value.invoiceId }, include: {
+      lines: true, subscriptionRenewalReservations: true
+    } });
+    expect(invoice.lines[0]!.quantity.toFixed(3)).toBe("3.000");
+    expect(invoice.subscriptionRenewalReservations[0]).toMatchObject({ subscriptionVersionSnapshot: 4 });
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUBSCRIPTION_CHANGE_SCHEDULE_APPLIED", payload: {
+      path: ["subscriptionId"], equals: created.value.id
+    } } })).toBe(1);
   });
 
   it("blocks automatic application when the requester loses authority without retrying immediately", async () => {
@@ -1408,6 +1522,7 @@ describe("subscriptions application service", () => {
 function payload(customerId: string, catalogItemId: string, overrides: Record<string, unknown> = {}) { return { customerId, name: "Soporte mensual", periodicity: "MONTHLY" as const, pricingMode: "FIXED" as const, startDate: "2026-09-01", endDate: null, notes: "Nota privada", lines: [{ catalogItemId, quantity: "1.000", discountPercent: "0.00", discountAmount: "0.00" }], ...overrides }; }
 function context(key: string, value: unknown) { return { idempotencyKey: `subscriptions-test:${key}`, requestHash: hashSubscriptionRequest(value), correlationId: `subscriptions-${key}` }; }
 function reactivationScheduleContext(action: "create" | "revoke" | "apply", key: string, subscriptionId: string, scheduleId: string | null, value: object) { const semantic = scheduleId ? { subscriptionId, scheduleId, ...value } : { subscriptionId, ...value }; return { idempotencyKey: `subscription-reactivation-schedules-test:${key}`, requestHash: hashSubscriptionReactivationScheduleRequest(action, semantic), correlationId: `subscription-reactivation-schedules-${key}` }; }
+function changeScheduleContext(action: "create" | "revoke", key: string, subscriptionId: string, scheduleId: string | null, value: object) { const semantic = scheduleId ? { subscriptionId, scheduleId, ...value } : { subscriptionId, ...value }; return { idempotencyKey: `subscription-change-schedules-test:${key}`, requestHash: hashSubscriptionChangeScheduleRequest(action, semantic), correlationId: `subscription-change-schedules-${key}` }; }
 function renewalContext(key: string, value: Parameters<typeof hashSubscriptionRenewalDraftRequest>[0]) { return { idempotencyKey: `subscription-renewals-test:${key}`, requestHash: hashSubscriptionRenewalDraftRequest(value), correlationId: `subscription-renewals-${key}` }; }
 function confirmationContext(key: string, value: Parameters<typeof hashSubscriptionRenewalConfirmationRequest>[0]) { return { idempotencyKey: `subscription-renewal-confirmations-test:${key}`, requestHash: hashSubscriptionRenewalConfirmationRequest(value), correlationId: `subscription-renewal-confirmations-${key}` }; }
 function releaseContext(key: string, value: Parameters<typeof hashSubscriptionRenewalReleaseRequest>[0]) { return { idempotencyKey: `subscription-renewal-releases-test:${key}`, requestHash: hashSubscriptionRenewalReleaseRequest(value), correlationId: `subscription-renewal-releases-${key}` }; }

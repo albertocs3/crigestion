@@ -40,6 +40,7 @@ Este directorio contiene las decisiones arquitectonicas relevantes de CriGestió
 | [ADR-0023](ADR-0023-verifactu-modalidad-y-contrato-v1.md) | Aceptada | Adoptar modalidad VERI*FACTU y contrato fiscal V1 |
 | [ADR-0024](ADR-0024-maker-checker-cierre-contable.md) | Aceptada | Exigir maker-checker para el cierre contable |
 | [ADR-0025](ADR-0025-maker-checker-reapertura-contable.md) | Aceptada | Reabrir cierres con maker-checker y contraasientos append-only |
+| [ADR-0026](ADR-0026-cambios-programados-suscripciones.md) | Aceptada | Aplicar cambios programados de cantidad al reservar la siguiente renovacion |
 
 ## Reglas de mantenimiento
 

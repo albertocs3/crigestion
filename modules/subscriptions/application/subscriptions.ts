@@ -11,6 +11,12 @@ import {
   subscriptionReactivationScheduleSelect,
   type SubscriptionReactivationScheduleDto
 } from "@/modules/subscriptions/application/reactivationSchedules";
+import {
+  mapSubscriptionChangeSchedule,
+  subscriptionChangeScheduleReplaySchema,
+  subscriptionChangeScheduleSelect,
+  type SubscriptionChangeScheduleDto
+} from "@/modules/subscriptions/application/subscriptionChanges";
 
 const defaultLimit = 25;
 const maxLimit = 100;
@@ -169,6 +175,7 @@ export type SubscriptionDto = {
   cancellation: { effectiveDate: string; reason: string; cancelledAt: string; mode: "IMMEDIATE" | "SCHEDULED" } | null;
   reactivations: SubscriptionReactivationDto[];
   reactivationSchedules: SubscriptionReactivationScheduleDto[];
+  changeSchedules: SubscriptionChangeScheduleDto[];
   cancellationSchedules: SubscriptionCancellationScheduleDto[];
   createdAt: string;
   updatedAt: string;
@@ -249,6 +256,7 @@ const subscriptionDtoReplaySchema = z.object({
   }).strict()), estimatedTotal: z.string(), activatedAt: z.string().datetime().nullable(),
   cancellation: cancellationSnapshotReplaySchema.nullable(), reactivations: z.array(subscriptionReactivationReplaySchema),
   reactivationSchedules: z.array(subscriptionReactivationScheduleReplaySchema).default([]),
+  changeSchedules: z.array(subscriptionChangeScheduleReplaySchema).default([]),
   cancellationSchedules: z.array(subscriptionCancellationScheduleReplaySchema),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime()
 }).strict();
@@ -269,7 +277,7 @@ export type ScheduledCancellationResolution =
   | { outcome: "CANCELLED"; scheduleId: string | null; subscriptionVersion: number; applied: boolean };
 
 export type SubscriptionList = {
-  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "reactivations" | "reactivationSchedules" | "cancellationSchedules"> & { lineCount: number }>;
+  subscriptions: Array<Omit<SubscriptionDto, "notes" | "lines" | "cancellation" | "reactivations" | "reactivationSchedules" | "changeSchedules" | "cancellationSchedules"> & { lineCount: number }>;
   nextCursor: string | null;
 };
 
@@ -343,8 +351,8 @@ export async function listSubscriptions(
     subscriptions: page.map((row) => {
       const detail = mapSubscription(row);
       const { lines, ...detailWithoutLines } = detail;
-      const { notes, cancellation, cancellationSchedules, ...summary } = detailWithoutLines;
-      void notes; void cancellation; void cancellationSchedules;
+      const { notes, cancellation, reactivations, reactivationSchedules, changeSchedules, cancellationSchedules, ...summary } = detailWithoutLines;
+      void notes; void cancellation; void reactivations; void reactivationSchedules; void changeSchedules; void cancellationSchedules;
       return { ...summary, lineCount: lines.length };
     }),
     nextCursor: hasNext ? page.at(-1)?.id ?? null : null
@@ -705,6 +713,9 @@ export async function cancelSubscription(
     if (await tx.subscriptionRenewalReservation.count({ where: { subscriptionId, companyId, status: "RESERVED" } })) {
       return failure(409, "SUBSCRIPTION_RENEWAL_RESERVED", "La renovacion esta reservada; debe liberarse antes de cancelar la suscripcion.");
     }
+    if (await tx.subscriptionChangeSchedule.count({ where: { subscriptionId, companyId, status: "PENDING" } })) {
+      return failure(409, "SUBSCRIPTION_PENDING_CHANGE_EXISTS", "Retire el cambio programado antes de cancelar la suscripcion.");
+    }
     const cancelledAt = new Date();
     const effectiveDateText = todayDateOnly(cancelledAt);
     const effectiveDate = parseDateOnly(effectiveDateText);
@@ -886,6 +897,9 @@ export async function scheduleSubscriptionCancellation(
     if (subscription.status !== "ACTIVE" && subscription.status !== "RENEWAL_PENDING") return failure(409, "SUBSCRIPTION_CANCELLATION_NOT_SCHEDULABLE", "Solo se puede programar la baja de una suscripcion activa o pendiente de renovacion.");
     if (await tx.subscriptionRenewalReservation.count({ where: { subscriptionId, companyId, periodStart: subscription.nextRenewalDate, status: "RESERVED" } })) {
       return failure(409, "SUBSCRIPTION_RENEWAL_RESERVED", "La renovacion esta reservada; no se puede programar una baja para ese periodo.");
+    }
+    if (await tx.subscriptionChangeSchedule.count({ where: { subscriptionId, companyId, status: "PENDING" } })) {
+      return failure(409, "SUBSCRIPTION_PENDING_CHANGE_EXISTS", "Retire el cambio programado antes de programar la baja.");
     }
     const now = new Date();
     const today = todayDateOnly(now);
@@ -1193,6 +1207,7 @@ function mapSubscription(row: Prisma.SubscriptionGetPayload<{ select: typeof sub
     } : null,
     reactivations: row.reactivations.map(mapReactivation),
     reactivationSchedules: row.reactivationSchedules.map(mapSubscriptionReactivationSchedule),
+    changeSchedules: row.changeSchedules.map(mapSubscriptionChangeSchedule),
     cancellationSchedules: row.cancellationSchedules.map(mapCancellationSchedule),
     createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString()
   };
@@ -1230,6 +1245,11 @@ const subscriptionSelect = {
     orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }],
     take: 20,
     select: subscriptionReactivationScheduleSelect
+  },
+  changeSchedules: {
+    orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }],
+    take: 20,
+    select: subscriptionChangeScheduleSelect
   },
   cancellationSchedules: { orderBy: [{ requestedAt: "desc" as const }, { id: "desc" as const }], take: 20, select: cancellationScheduleSelect }
 } satisfies Prisma.SubscriptionSelect;
