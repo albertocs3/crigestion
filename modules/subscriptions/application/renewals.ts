@@ -36,6 +36,11 @@ export const createSubscriptionRenewalDraftSchema = z.object({
   subscriptionIds: z.array(z.string().uuid()).min(1).max(100),
   expectedVersions: z.record(z.string().uuid(), z.number().int().positive()).optional(),
   pendingExclusionIds: z.record(z.string().uuid(), z.string().uuid()).optional(),
+  lineDescriptionOverrides: z.array(z.object({
+    subscriptionId: z.string().uuid(),
+    subscriptionLineId: z.string().uuid(),
+    description: z.string().trim().min(1).max(500)
+  }).strict()).max(100).optional(),
   issueDate: subscriptionRenewalDateOnlySchema
 }).strict().superRefine((value, context) => {
   if (new Set(value.subscriptionIds).size !== value.subscriptionIds.length) {
@@ -50,6 +55,13 @@ export const createSubscriptionRenewalDraftSchema = z.object({
   }
   if (value.pendingExclusionIds && Object.keys(value.pendingExclusionIds).some((id) => !value.subscriptionIds.includes(id))) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["pendingExclusionIds"], message: "Las exclusiones deben corresponder con las suscripciones seleccionadas." });
+  }
+  const overrideKeys = value.lineDescriptionOverrides?.map((override) => `${override.subscriptionId}:${override.subscriptionLineId}`) ?? [];
+  if (new Set(overrideKeys).size !== overrideKeys.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["lineDescriptionOverrides"], message: "No se puede repetir una linea personalizada." });
+  }
+  if (value.lineDescriptionOverrides?.some((override) => !value.subscriptionIds.includes(override.subscriptionId))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["lineDescriptionOverrides"], message: "Las lineas personalizadas deben pertenecer a las suscripciones seleccionadas." });
   }
 });
 
@@ -139,6 +151,7 @@ export type SubscriptionRenewalPreview = {
       periodicity: "MONTHLY" | "QUARTERLY" | "SEMIANNUAL" | "ANNUAL";
       version: number; estimatedTotal: string; action: "INVOICE" | "CANCEL";
       pendingChange: null | { scheduleId: string; effectiveDate: string; lineCount: number };
+      lines: Array<{ id: string; position: number; description: string }>;
       pending: null | {
         exclusionId: string; reasonCode: "MANUAL_EXCLUSION" | "PREPARATION_FAILED" | "LEGACY_PENDING"; hasReason: boolean;
         reason?: string; excludedAt: string; excludedBy: { id: string; displayName: string } | null;
@@ -171,6 +184,10 @@ export function hashSubscriptionRenewalDraftRequest(command: CreateSubscriptionR
       : undefined,
     pendingExclusionIds: command.pendingExclusionIds
       ? Object.fromEntries(Object.entries(command.pendingExclusionIds).sort(([left], [right]) => left.localeCompare(right)))
+      : undefined,
+    lineDescriptionOverrides: command.lineDescriptionOverrides
+      ? [...command.lineDescriptionOverrides].sort((left, right) => left.subscriptionId.localeCompare(right.subscriptionId)
+        || left.subscriptionLineId.localeCompare(right.subscriptionLineId))
       : undefined
   });
 }
@@ -271,7 +288,7 @@ export async function listSubscriptionRenewalPreview(
       id: true, number: true, name: true, status: true, periodicity: true, paymentMethod: true,
       nextRenewalDate: true, endDate: true, version: true,
       customer: { select: { id: true, code: true, legalName: true } },
-      lines: { select: { id: true, quantity: true, unitPrice: true, discountPercent: true, discountAmount: true, taxRateSnapshot: true } },
+      lines: { orderBy: { position: "asc" }, select: { id: true, position: true, description: true, quantity: true, unitPrice: true, discountPercent: true, discountAmount: true, taxRateSnapshot: true } },
       cancellationSchedules: { where: { status: "PENDING", effectiveDate: { lte: processDate } }, take: 1, select: { id: true } },
       changeSchedules: {
         where: { status: "PENDING", effectiveDate: { lte: processDate } }, take: 1,
@@ -315,6 +332,7 @@ export async function listSubscriptionRenewalPreview(
         effectiveDate: formatDateOnly(pendingChange.effectiveDate),
         lineCount: pendingChange.lines.length
       } : null,
+      lines: subscription.lines.map((line) => ({ id: line.id, position: line.position, description: line.description })),
       pending: subscription.renewalExclusions[0] ? {
         exclusionId: subscription.renewalExclusions[0].id,
         reasonCode: subscription.renewalExclusions[0].reasonCode,
@@ -716,7 +734,11 @@ export async function createSubscriptionRenewalDraft(
         const installation = await tx.installation.findFirst({ where: { companyId: command.companyId }, select: { companyId: true } });
         if (!installation) return failure(404, "SUBSCRIPTION_RENEWAL_COMPANY_NOT_FOUND", "La empresa no existe.");
 
-        const sources: Array<{ subscriptionId: string; expectedVersion: number }> = [];
+        const sources: Array<{
+          subscriptionId: string;
+          expectedVersion: number;
+          lineDescriptionOverrides: Array<{ subscriptionLineId: string; description: string }>;
+        }> = [];
         const cancelledSubscriptionIds: string[] = [];
         let appliedChangeOccurred = false;
         for (const subscriptionId of subscriptionIds) {
@@ -775,8 +797,19 @@ export async function createSubscriptionRenewalDraft(
             } else if (pendingExclusionId) {
               return failOrRollback(failure(409, "SUBSCRIPTION_RENEWAL_EXCLUSION_NOT_APPLICABLE", "Una suscripcion activa no admite un expediente pendiente."), cancelledSubscriptionIds, appliedChangeOccurred);
             }
-            sources.push({ subscriptionId, expectedVersion: changeResolution.subscriptionVersion });
+            sources.push({
+              subscriptionId,
+              expectedVersion: changeResolution.subscriptionVersion,
+              lineDescriptionOverrides: command.lineDescriptionOverrides
+                ?.filter((override) => override.subscriptionId === subscriptionId)
+                .map(({ subscriptionLineId, description }) => ({ subscriptionLineId, description })) ?? []
+            });
           }
+        }
+
+        const renewableSourceIds = new Set(sources.map((source) => source.subscriptionId));
+        if (command.lineDescriptionOverrides?.some((override) => !renewableSourceIds.has(override.subscriptionId))) {
+          return failOrRollback(failure(422, "SUBSCRIPTION_RENEWAL_LINE_OVERRIDE_INVALID", "Una linea personalizada no pertenece a una renovacion facturable."), cancelledSubscriptionIds, appliedChangeOccurred);
         }
 
         let value: SubscriptionRenewalDraftValue;
@@ -860,6 +893,7 @@ function replayStoredDraft(responseStatus: number, responseBody: Prisma.JsonValu
 function mapDraftFailure(result: SubscriptionRenewalDraftResult): RenewalFailure | null {
   if (result.kind === "created") return null;
   if (result.kind === "invalid-group") return failure(422, "SUBSCRIPTION_RENEWAL_GROUP_INVALID", "Las suscripciones no se pueden agrupar en una unica factura.");
+  if (result.kind === "invalid-line-overrides") return failure(422, "SUBSCRIPTION_RENEWAL_LINE_OVERRIDE_INVALID", "Una linea personalizada no pertenece a la suscripcion seleccionada.");
   if (result.kind === "subscription-not-renewable") return failure(409, "SUBSCRIPTION_NOT_RENEWABLE", "Una suscripcion no es renovable.");
   if (result.kind === "renewal-already-reserved") return failure(409, "SUBSCRIPTION_RENEWAL_ALREADY_RESERVED", "El periodo ya esta reservado para facturacion.");
   if (result.kind === "customer-not-active") return failure(422, "CUSTOMER_NOT_ACTIVE", "El cliente debe estar activo.");

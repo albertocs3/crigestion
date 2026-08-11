@@ -334,9 +334,11 @@ Prioridades pendientes despues de este corte:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Ampliar los cambios programados de Suscripciones mas alla de la primera
    rebanada de cantidades `PER_LICENSE`, ya integrada con vista previa,
-   reserva y evidencia append-only; completar la edicion controlada de la
-   vista previa y ampliar de forma controlada el catalogo de bloqueos
-   automaticos. La vista previa ya dispone de paginacion navegable mediante
+   reserva y evidencia append-only. La vista previa ya permite personalizar
+   descripciones solo para el borrador; queda definir e implementar la edicion
+   economica de cantidades, precios, descuentos o recargos y ampliar de forma
+   controlada el catalogo de bloqueos automaticos. La vista previa ya dispone
+   de paginacion navegable mediante
    cursor firmado ligado a filtros. La reactivacion
    programada ya dispone de aplicacion supervisada y de un worker one-shot
    monitorizado con autoridad diferida, cooldown y ledger append-only de

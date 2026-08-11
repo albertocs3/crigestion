@@ -608,14 +608,18 @@ describe("subscriptions application service", () => {
     expect(await prisma.subscriptionCancellationSchedule.count({ where: { subscriptionId: created.value.id, status: "REVOKED" } })).toBe(1);
   });
 
-  it("creates a complete reserved renewal draft from subscription snapshots without advancing the period", async () => {
+  it("creates a complete reserved renewal draft with invoice-only descriptions without advancing the period", async () => {
     const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id); const renewalDate = todayDate();
     const command = payload(customerId, itemId, { startDate: renewalDate });
     const created = await createSubscription(command, actor, context("renewal-create", command)); if (!created.ok) throw new Error(created.error.code);
     const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("renewal-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
     await prisma.catalogItem.update({ where: { id: itemId }, data: { status: "INACTIVE", salePrice: "999.00" } });
     const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
-    const renewal = { companyId, subscriptionIds: [created.value.id], issueDate: renewalDate };
+    const customDescription = "Servicio renovado para este periodo";
+    const renewal = {
+      companyId, subscriptionIds: [created.value.id], issueDate: renewalDate,
+      lineDescriptionOverrides: [{ subscriptionId: created.value.id, subscriptionLineId: created.value.lines[0]!.id, description: customDescription }]
+    };
     const result = await createSubscriptionRenewalDraft(renewal, actor, renewalContext("renewal-draft", renewal));
     expect(result).toMatchObject({ ok: true, status: 201, value: { lineCount: 1, total: "60.38", cancelledSubscriptionIds: [] } });
     if (!result.ok || !result.value.invoiceId) throw new Error("RENEWAL_DRAFT_EXPECTED");
@@ -625,15 +629,42 @@ describe("subscriptions application service", () => {
     });
     expect(invoice).toMatchObject({ origin: "SUBSCRIPTION", status: "DRAFT", total: expect.objectContaining({}), lines: [{ unitPrice: expect.objectContaining({}) }] });
     expect(invoice.total.toFixed(2)).toBe("60.38"); expect(invoice.lines[0]?.unitPrice.toFixed(2)).toBe("49.90");
+    expect(invoice.lines[0]?.description).toBe(customDescription);
+    expect((await prisma.subscriptionLine.findUniqueOrThrow({ where: { id: created.value.lines[0]!.id }, select: { description: true } })).description).not.toBe(customDescription);
     expect(invoice.taxSummaries).toHaveLength(1); expect(invoice.dueDates).toHaveLength(1);
     expect(invoice.dueDates[0]?.amount.toFixed(2)).toBe("60.38");
     expect(invoice.subscriptionRenewalReservations).toHaveLength(1);
     expect(invoice.subscriptionRenewalReservations[0]).toMatchObject({ status: "RESERVED", subscriptionVersionSnapshot: 2 });
     expect(invoice.subscriptionRenewalReservations[0]?.lines).toHaveLength(1);
+    expect(invoice.subscriptionRenewalReservations[0]?.lines[0]?.descriptionOverridden).toBe(true);
+    await expect(prisma.subscriptionRenewalReservationLine.update({
+      where: { id: invoice.subscriptionRenewalReservations[0]!.lines[0]!.id }, data: { descriptionOverridden: false }
+    })).rejects.toThrow();
     const unchanged = await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, select: { nextRenewalDate: true, version: true } });
     expect(unchanged.nextRenewalDate.toISOString().slice(0, 10)).toBe(renewalDate); expect(unchanged.version).toBe(2);
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_RENEWAL_DRAFT_RESERVED", payload: { path: ["invoiceId"], equals: invoice.id } } });
-    expect(JSON.stringify(audit.payload)).not.toContain("49.90"); expect(JSON.stringify(audit.payload)).not.toContain(invoice.customerTaxIdSnapshot);
+    expect(audit.payload).toMatchObject({ descriptionOverrideCount: 1 });
+    expect(JSON.stringify(audit.payload)).not.toContain(customDescription); expect(JSON.stringify(audit.payload)).not.toContain("49.90"); expect(JSON.stringify(audit.payload)).not.toContain(invoice.customerTaxIdSnapshot);
+    const changedDescription = { ...renewal, lineDescriptionOverrides: [{ ...renewal.lineDescriptionOverrides[0]!, description: "Otro texto para la misma clave" }] };
+    expect(await createSubscriptionRenewalDraft(changedDescription, actor, renewalContext("renewal-draft", changedDescription))).toMatchObject({
+      ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" }
+    });
+  });
+
+  it("rejects a renewal description override for a line outside the selected subscription", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id); const renewalDate = todayDate();
+    const command = payload(customerId, itemId, { startDate: renewalDate });
+    const created = await createSubscription(command, actor, context("renewal-invalid-description-create", command)); if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("renewal-invalid-description-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    const renewal = {
+      companyId, subscriptionIds: [created.value.id], issueDate: renewalDate,
+      lineDescriptionOverrides: [{ subscriptionId: created.value.id, subscriptionLineId: randomUUID(), description: "Linea ajena" }]
+    };
+    expect(await createSubscriptionRenewalDraft(renewal, actor, renewalContext("renewal-invalid-description", renewal))).toMatchObject({
+      ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_LINE_OVERRIDE_INVALID" }
+    });
+    expect(await prisma.invoice.count({ where: { origin: "SUBSCRIPTION" } })).toBe(0);
   });
 
   it("replays the same renewal and rejects competing reservations for the same period", async () => {

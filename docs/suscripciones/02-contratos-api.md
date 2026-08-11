@@ -467,15 +467,23 @@ Permiso requerido: `Subscriptions.RunRenewals`.
 ```json
 {
   "subscriptions": [
-    { "subscriptionId": "uuid", "expectedVersion": 2, "pendingExclusionId": "uuid opcional" }
+    {
+      "subscriptionId": "uuid",
+      "expectedVersion": 2,
+      "pendingExclusionId": "uuid opcional",
+      "lineDescriptionOverrides": [
+        { "subscriptionLineId": "uuid", "description": "Descripcion solo para esta factura" }
+      ]
+    }
   ],
   "issueDate": "2026-08-06"
 }
 ```
 
 La empresa se deriva de la instalacion y nunca se acepta del navegador. La
-peticion admite como maximo 100 suscripciones, exige sus versiones observadas,
-se limita a 16 KiB y revalida dentro de una transaccion `Serializable` empresa,
+peticion admite como maximo 100 suscripciones y 100 descripciones
+personalizadas, exige sus versiones observadas, se limita a 64 KiB y revalida
+dentro de una transaccion `Serializable` empresa,
 estado, periodo frente a la fecha seleccionada, vigencia final, cliente, forma
 de pago y baja vencida a esa misma fecha. Responde `201` al crear
 una reserva y `200` al reproducir la misma clave idempotente.
@@ -485,6 +493,13 @@ debe identificar el expediente `OPEN` de la empresa, suscripcion y periodo
 observados. Una suscripcion activa no admite ese campo. De este modo,
 `includePending=true` solo permite consultar la cola: nunca autoriza una
 preparacion masiva o implicita de pendientes.
+
+`lineDescriptionOverrides` es opcional y solo admite lineas de la suscripcion
+seleccionada. El texto se recorta y debe contener entre 1 y 500 caracteres. La
+descripcion se copia exclusivamente a la linea del borrador reservado: no
+modifica la suscripcion, el catalogo ni renovaciones futuras. La huella
+idempotente incluye las personalizaciones. La auditoria conserva solamente el
+numero de descripciones cambiadas, nunca su contenido.
 
 ### `POST /api/subscriptions/{subscriptionId}/renewal-exclusions`
 
@@ -832,9 +847,9 @@ cuota adicional.
 | `409` | `SUBSCRIPTION_RENEWAL_ALREADY_RESERVED`, `SUBSCRIPTION_RENEWAL_RESERVED` o `INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN` | El periodo ya esta reservado, la reserva bloquea otra mutacion o falta ejercicio abierto. |
 | `409` | `SUBSCRIPTION_RENEWAL_INVOICE_NOT_CONFIRMABLE` o `SUBSCRIPTION_RENEWAL_RESERVATION_STALE` | El borrador ya no puede confirmarse o la suscripcion cambio desde la reserva. |
 | `409` | `SUBSCRIPTION_RENEWAL_NOT_EXCLUDABLE`, `SUBSCRIPTION_RENEWAL_ALREADY_EXCLUDED`, `SUBSCRIPTION_RENEWAL_PENDING_SELECTION_REQUIRED` o `SUBSCRIPTION_RENEWAL_EXCLUSION_STALE` | La exclusion o seleccion pendiente no coincide con el estado, periodo o expediente vigente. |
-| `422` | `SUBSCRIPTION_RENEWAL_NOT_DUE` o `SUBSCRIPTION_RENEWAL_GROUP_INVALID` | La seleccion aun no vence o no puede formar una factura agrupada. |
+| `422` | `SUBSCRIPTION_RENEWAL_NOT_DUE`, `SUBSCRIPTION_RENEWAL_GROUP_INVALID` o `SUBSCRIPTION_RENEWAL_LINE_OVERRIDE_INVALID` | La seleccion aun no vence, no puede formar una factura agrupada o una descripcion apunta a una linea ajena. |
 | `415` | `UNSUPPORTED_MEDIA_TYPE` | El cuerpo no es JSON. |
-| `413` | `PAYLOAD_TOO_LARGE` | El cuerpo supera 16 KiB al preparar, 4 KiB al excluir o 2 KiB al confirmar, liberar o reactivar. |
+| `413` | `PAYLOAD_TOO_LARGE` | El cuerpo supera 64 KiB al preparar, 4 KiB al excluir o 2 KiB al confirmar, liberar o reactivar. |
 | `422` | `VALIDATION_ERROR`, `SUBSCRIPTION_REACTIVATION_DATE_INVALID`, `SUBSCRIPTION_REACTIVATION_AFTER_END`, `SUBSCRIPTION_REACTIVATION_PERIOD_OVERLAP` y errores de referencias no activas | El contrato o una invariante funcional no se cumple. |
 | `422` | `SUBSCRIPTION_REACTIVATION_SCHEDULE_DATE_NOT_FUTURE`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_NOT_DUE`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_RENEWAL_DATE_PASSED`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_NEXT_RENEWAL_DATE_INVALID`, `SUBSCRIPTION_REACTIVATION_SCHEDULE_AFTER_END` o `SUBSCRIPTION_REACTIVATION_SCHEDULE_PERIOD_OVERLAP` | La programacion o su aplicacion no cumplen las reglas temporales. |
 | `423` | `MAINTENANCE_MODE_ACTIVE` | La plataforma esta en mantenimiento. |
@@ -845,8 +860,9 @@ cuota adicional.
 
 - La activacion es manual; no se activa un borrador por fecha.
 - El runner es manual y supervisado; no hay ejecucion automatica desatendida.
-- La vista previa permite seleccionar suscripciones y excluir explicitamente
-  una renovacion con motivo, pero no editar sus lineas economicas.
+- La vista previa permite seleccionar suscripciones, excluir explicitamente
+  una renovacion con motivo y personalizar descripciones solo para el borrador.
+  No permite editar cantidades, precios, descuentos, impuestos ni recargos.
 - La apertura automatica se limita a bloqueos estables de preparacion ya
   aceptada (`CUSTOMER_NOT_ACTIVE` y ejercicio contable no abierto). Otros
   fallos conservan el estado contractual y solo usan la evidencia que les

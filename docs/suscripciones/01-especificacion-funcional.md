@@ -433,6 +433,12 @@ Permitirá:
 
 Las modificaciones hechas en la vista previa afectan solamente a esa factura y no alteran la suscripción ni futuras renovaciones.
 
+La primera rebanada operativa permite personalizar la descripcion de cada
+linea seleccionada antes de reservar el borrador. La descripcion se valida
+contra la linea contractual vigente y se copia solo a la factura resultante;
+cantidades, precios, descuentos, impuestos y recargos mantienen por ahora las
+instantaneas de la suscripcion.
+
 ### 11.3 Exclusiones
 
 - Una suscripción excluida queda en estado `Pendiente de renovación`.

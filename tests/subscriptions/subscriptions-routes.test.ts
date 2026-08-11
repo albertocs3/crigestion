@@ -330,27 +330,34 @@ describe("subscription HTTP contracts", () => {
     expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}`))).status).toBe(401);
     expect((await renewalExclusionsGet(apiRequest("/api/subscriptions/renewal-exclusions"))).status).toBe(401);
     await login(); const csrf = await csrfToken(); const references = await createReferences(); await prisma.customer.update({ where: { id: references.customerId }, data: { code: "6" } });
-    const created = await (await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, todayDate()), { csrf }))).json() as { id: string; version: number };
+    const created = await (await subscriptionsPost(jsonRequest("/api/subscriptions", payload(references, todayDate()), { csrf }))).json() as { id: string; version: number; lines: Array<{ id: string }> };
     await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: created.version }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) });
     const installation = await prisma.installation.findFirstOrThrow();
     await seedRenewalAccounting(installation.companyId!, references.actorId, "6");
     const preview = await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}`));
     expect(preview.status).toBe(200); expect(preview.headers.get("Cache-Control")).toContain("private, no-store");
-    expect(await preview.json()).toMatchObject({ groups: [{ subscriptions: [{ id: created.id }] }], nextCursor: null });
+    expect(await preview.json()).toMatchObject({ groups: [{ subscriptions: [{ id: created.id, lines: [{ id: created.lines[0]!.id }] }] }], nextCursor: null });
     expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&includePending=yes`))).status).toBe(422);
     expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&limit=01`))).status).toBe(422);
     expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&limit=1&limit=2`))).status).toBe(422);
     expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&unknown=true`))).status).toBe(422);
-    const body = { subscriptions: [{ subscriptionId: created.id, expectedVersion: 2 }], issueDate: todayDate() };
+    const customDescription = "Descripcion exclusiva de esta factura";
+    const body = { subscriptions: [{ subscriptionId: created.id, expectedVersion: 2, lineDescriptionOverrides: [{ subscriptionLineId: created.lines[0]!.id, description: customDescription }] }], issueDate: todayDate() };
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", body, { csrf, origin: "https://evil.example" }))).status).toBe(403);
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", body))).status).toBe(403);
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", body, { csrf, idempotency: null }))).status).toBe(400);
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", { ...body, unexpected: true }, { csrf }))).status).toBe(422);
+    expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", {
+      ...body,
+      subscriptions: [{ ...body.subscriptions[0], lineDescriptionOverrides: [body.subscriptions[0]!.lineDescriptionOverrides[0]!, body.subscriptions[0]!.lineDescriptionOverrides[0]!] }]
+    }, { csrf }))).status).toBe(422);
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", { ...body, issueDate: "2026-02-31" }, { csrf }))).status).toBe(422);
-    const oversized = new Request("http://localhost/api/subscriptions/renewals", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID() }, body: JSON.stringify({ padding: "x".repeat(17_000) }) });
+    const oversized = new Request("http://localhost/api/subscriptions/renewals", { method: "POST", headers: { "Content-Type": "application/json", Origin: "http://localhost:3000", "X-CSRF-Token": csrf, "Idempotency-Key": randomUUID() }, body: JSON.stringify({ padding: "x".repeat(66_000) }) });
     expect((await renewalsPost(oversized)).status).toBe(413);
     const prepared = await renewalsPost(jsonRequest("/api/subscriptions/renewals", body, { csrf })); expect(prepared.status).toBe(201);
     const invoiceId = ((await prepared.json()) as { invoiceId: string }).invoiceId;
+    expect((await prisma.invoiceLine.findFirstOrThrow({ where: { invoiceId }, select: { description: true } })).description).toBe(customDescription);
+    expect(JSON.stringify(await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_RENEWAL_DRAFT_RESERVED", payload: { path: ["invoiceId"], equals: invoiceId } }, select: { payload: true } }))).not.toContain(customDescription);
     const released = await renewalRelease(jsonRequest(`/api/subscriptions/renewals/${invoiceId}/release`, { reason: "Correccion de la seleccion" }, { csrf }), { params: Promise.resolve({ invoiceId }) });
     expect(released.status).toBe(200); expect(await released.json()).toMatchObject({ invoiceId, subscriptionIds: [created.id] });
   });

@@ -1771,15 +1771,16 @@ model SubscriptionRenewalReservation {
 }
 
 model SubscriptionRenewalReservationLine {
-  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  reservationId      String   @db.Uuid
-  companyId          String   @db.Uuid
-  subscriptionId     String   @db.Uuid
-  subscriptionLineId String   @db.Uuid
-  invoiceId          String   @db.Uuid
-  invoiceLineId      String   @db.Uuid
-  periodStart        DateTime @db.Date
-  reservedAt         DateTime @default(now()) @db.Timestamptz(3)
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reservationId         String   @db.Uuid
+  companyId             String   @db.Uuid
+  subscriptionId        String   @db.Uuid
+  subscriptionLineId    String   @db.Uuid
+  invoiceId             String   @db.Uuid
+  invoiceLineId         String   @db.Uuid
+  periodStart           DateTime @db.Date
+  descriptionOverridden Boolean  @default(false)
+  reservedAt            DateTime @default(now()) @db.Timestamptz(3)
 
   reservation      SubscriptionRenewalReservation @relation(fields: [reservationId, companyId, subscriptionId, invoiceId, periodStart], references: [id, companyId, subscriptionId, invoiceId, periodStart], onDelete: Restrict)
   subscriptionLine SubscriptionLine               @relation(fields: [subscriptionLineId, subscriptionId], references: [id, subscriptionId], onDelete: Restrict)

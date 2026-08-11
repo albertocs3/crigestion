@@ -8,6 +8,7 @@ import { lockOpenFiscalYearForDatedMutation } from "@/modules/accounting/applica
 export type SubscriptionRenewalDraftSource = {
   subscriptionId: string;
   expectedVersion: number;
+  lineDescriptionOverrides?: Array<{ subscriptionLineId: string; description: string }>;
 };
 
 export type CreateSubscriptionRenewalDraftInput = {
@@ -21,6 +22,7 @@ export type CreateSubscriptionRenewalDraftInput = {
 export type SubscriptionRenewalDraftResult =
   | { kind: "created"; invoiceId: string; reservationIds: string[]; lineCount: number; total: string }
   | { kind: "invalid-group" }
+  | { kind: "invalid-line-overrides" }
   | { kind: "subscription-not-renewable" }
   | { kind: "renewal-already-reserved" }
   | { kind: "customer-not-active" }
@@ -37,6 +39,10 @@ export async function createSubscriptionRenewalDraftInTransaction(
   if (input.sources.length === 0) return { kind: "invalid-group" };
   const sourceIds = input.sources.map((source) => source.subscriptionId);
   if (new Set(sourceIds).size !== sourceIds.length) return { kind: "invalid-group" };
+  if (input.sources.some((source) => {
+    const lineIds = source.lineDescriptionOverrides?.map((override) => override.subscriptionLineId) ?? [];
+    return new Set(lineIds).size !== lineIds.length;
+  })) return { kind: "invalid-line-overrides" };
 
   const subscriptions = await tx.subscription.findMany({
     where: { id: { in: sourceIds }, companyId: input.companyId },
@@ -73,6 +79,14 @@ export async function createSubscriptionRenewalDraftInTransaction(
   if (subscriptions.length !== input.sources.length) return { kind: "subscription-not-renewable" };
 
   const expectedVersions = new Map(input.sources.map((source) => [source.subscriptionId, source.expectedVersion]));
+  const descriptionOverrides = new Map(input.sources.map((source) => [
+    source.subscriptionId,
+    new Map(source.lineDescriptionOverrides?.map((override) => [override.subscriptionLineId, override.description]) ?? [])
+  ]));
+  if (subscriptions.some((subscription) => {
+    const lineIds = new Set(subscription.lines.map((line) => line.id));
+    return [...(descriptionOverrides.get(subscription.id)?.keys() ?? [])].some((lineId) => !lineIds.has(lineId));
+  })) return { kind: "invalid-line-overrides" };
   const first = subscriptions[0];
   if (!first || subscriptions.some((subscription) =>
     !["ACTIVE", "RENEWAL_PENDING"].includes(subscription.status)
@@ -110,7 +124,8 @@ export async function createSubscriptionRenewalDraftInTransaction(
       catalogItemId: line.catalogItemId,
       catalogItemCodeSnapshot: line.catalogItemCodeSnapshot,
       catalogItemKindSnapshot: line.catalogItemKindSnapshot,
-      description: line.description,
+      description: descriptionOverrides.get(subscription.id)?.get(line.id) ?? line.description,
+      descriptionOverridden: (descriptionOverrides.get(subscription.id)?.get(line.id) ?? line.description) !== line.description,
       quantity: line.quantity,
       unitPrice: line.unitPrice,
       discountPercent: line.discountPercent,
@@ -214,7 +229,8 @@ export async function createSubscriptionRenewalDraftInTransaction(
       data: sourceLines.map((line) => ({
         reservationId: reservation.id, companyId: input.companyId,
         subscriptionId: subscription.id, subscriptionLineId: line.subscriptionLineId,
-        invoiceId: invoice.id, invoiceLineId: line.id, periodStart: subscription.nextRenewalDate
+        invoiceId: invoice.id, invoiceLineId: line.id, periodStart: subscription.nextRenewalDate,
+        descriptionOverridden: line.descriptionOverridden
       }))
     });
   }
@@ -231,6 +247,7 @@ export async function createSubscriptionRenewalDraftInTransaction(
         reservationIds,
         periodStart: formatDateOnly(first.nextRenewalDate),
         lineCount: calculatedLines.length,
+        descriptionOverrideCount: calculatedLines.filter((line) => line.descriptionOverridden).length,
         ...(input.correlationId ? { correlationId: input.correlationId } : {})
       }
     }

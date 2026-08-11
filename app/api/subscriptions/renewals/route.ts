@@ -12,13 +12,27 @@ const prepareSchema = z.object({
   subscriptions: z.array(z.object({
     subscriptionId: z.string().uuid(),
     expectedVersion: z.number().int().positive(),
-    pendingExclusionId: z.string().uuid().optional()
+    pendingExclusionId: z.string().uuid().optional(),
+    lineDescriptionOverrides: z.array(z.object({
+      subscriptionLineId: z.string().uuid(),
+      description: z.string().trim().min(1).max(500)
+    }).strict()).max(100).optional()
   }).strict()).min(1).max(100),
   issueDate: subscriptionRenewalDateOnlySchema
 }).strict().superRefine((value, context) => {
   if (new Set(value.subscriptions.map((subscription) => subscription.subscriptionId)).size !== value.subscriptions.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["subscriptions"], message: "No se puede repetir una suscripcion." });
   }
+  const overrideCount = value.subscriptions.reduce((count, subscription) => count + (subscription.lineDescriptionOverrides?.length ?? 0), 0);
+  if (overrideCount > 100) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["subscriptions"], message: "No se pueden personalizar mas de 100 lineas por preparacion." });
+  }
+  value.subscriptions.forEach((subscription, index) => {
+    const lineIds = subscription.lineDescriptionOverrides?.map((override) => override.subscriptionLineId) ?? [];
+    if (new Set(lineIds).size !== lineIds.length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["subscriptions", index, "lineDescriptionOverrides"], message: "No se puede repetir una linea personalizada." });
+    }
+  });
 });
 
 export async function GET(request: Request) {
@@ -63,7 +77,7 @@ export async function POST(request: Request) {
   if (!isJsonRequest(request)) return jsonResponse(request, unsupportedMediaType(), { status: 415 });
   const idempotency = validateIdempotencyKey(request.headers.get("Idempotency-Key"));
   if (!idempotency.ok) return jsonResponse(request, idempotency.error, { status: idempotency.status });
-  const rawBody = await readBoundedTextBody(request, 16_384);
+  const rawBody = await readBoundedTextBody(request, 65_536);
   if (rawBody === null) return jsonResponse(request, { code: "PAYLOAD_TOO_LARGE", message: "La peticion supera el tamano permitido." }, { status: 413 });
   let body: unknown;
   try { body = JSON.parse(rawBody); } catch { return jsonResponse(request, invalidJson(), { status: 400 }); }
@@ -79,7 +93,12 @@ export async function POST(request: Request) {
     companyId, subscriptionIds: subscriptions.map((subscription) => subscription.subscriptionId), issueDate: payload.data.issueDate,
     expectedVersions: Object.fromEntries(subscriptions.map((subscription) => [subscription.subscriptionId, subscription.expectedVersion])),
     pendingExclusionIds: Object.fromEntries(subscriptions.flatMap((subscription) => subscription.pendingExclusionId
-      ? [[subscription.subscriptionId, subscription.pendingExclusionId]] : []))
+      ? [[subscription.subscriptionId, subscription.pendingExclusionId]] : [])),
+    lineDescriptionOverrides: subscriptions.flatMap((subscription) => subscription.lineDescriptionOverrides?.map((override) => ({
+      subscriptionId: subscription.subscriptionId,
+      subscriptionLineId: override.subscriptionLineId,
+      description: override.description
+    })) ?? [])
   };
   const result = await createSubscriptionRenewalDraft(command, authorization.user, {
     correlationId,
