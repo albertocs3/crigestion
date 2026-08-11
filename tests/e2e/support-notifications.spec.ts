@@ -33,6 +33,7 @@ const outsiderPassword = "Cambiar-outsider-notifications-2026";
 const actionText = "Actuación sintética para comprobar el aviso al responsable.";
 const closeDetail = "Cierre sintético previo a la reapertura E2E.";
 const reopenReason = "Reapertura sintética para comprobar la notificación.";
+const priorityReason = "Escalada sintética de prioridad para comprobar el aviso urgente.";
 
 test.beforeEach(async () => {
   await resetNotificationE2eDatabase();
@@ -60,6 +61,7 @@ test("shows a private and operable support inbox for each recipient", async ({ p
   await collaboratorNotice.getByRole("link", { name: "Abrir incidencia" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/support/incidents/${fixture.incidentId}$`));
   await expect(page.getByRole("heading", { name: fixture.incidentTitle })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Cambiar prioridad" })).not.toBeVisible();
 
   await page.goto("/app/notifications");
   await page
@@ -103,6 +105,26 @@ test("shows a private and operable support inbox for each recipient", async ({ p
   await reopenedNotice.getByRole("link", { name: "Abrir incidencia" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/support/incidents/${fixture.incidentId}$`));
   await expect(page.getByRole("heading", { name: fixture.incidentTitle })).toBeVisible();
+  const priorityForm = page.getByRole("group", { name: "Cambiar prioridad" });
+  await priorityForm.getByLabel("Nueva prioridad").selectOption("URGENT");
+  await priorityForm.getByLabel("Motivo").fill(priorityReason);
+  await expect(priorityForm.getByText("Se notificará a los usuarios autorizados para recibir incidencias urgentes.")).toBeVisible();
+  const urgentConfirmation = priorityForm.getByLabel(/Confirmo el cambio a urgente/);
+  await expect(urgentConfirmation).toHaveAttribute("required", "");
+  await urgentConfirmation.check();
+  await page.getByRole("button", { name: "Actualizar prioridad" }).click();
+  await expect(page.getByRole("status")).toHaveText("Prioridad actualizada.");
+  await expect(page.getByLabel("Prioridad: Urgente")).toBeVisible();
+
+  await page.goto("/app/notifications");
+  const urgentNotice = page.getByRole("list", { name: "Notificaciones" }).getByRole("listitem").filter({ hasText: "Incidencia urgente" }).filter({ hasText: fixture.incidentNumber });
+  await expect(urgentNotice).toHaveCount(1);
+  await expect(urgentNotice.getByText("Urgente", { exact: true })).toBeVisible();
+  await expect(page.getByText(priorityReason)).not.toBeVisible();
+  await expect(page.getByRole("list", { name: "Notificaciones" }).getByRole("listitem")).toHaveCount(4);
+  expect(await prisma.notification.count({ where: { incidentId: fixture.incidentId, recipientUserId: fixture.responsible.id, kind: "SUPPORT_INCIDENT_URGENT" } })).toBe(1);
+  expect(await prisma.notification.count({ where: { incidentId: fixture.incidentId, recipientUserId: fixture.collaborator.id, kind: "SUPPORT_INCIDENT_URGENT" } })).toBe(0);
+  expect(await prisma.notification.count({ where: { incidentId: fixture.incidentId, kind: "SUPPORT_INCIDENT_URGENT" } })).toBe(2);
 
   await loginAs(page, fixture.outsider.userName, outsiderPassword);
   await page.goto("/app/notifications?state=ALL");
@@ -171,7 +193,13 @@ async function createNotificationFixture() {
     ],
   };
 
-  const operatorRole = await createRole("SupportNotificationsOperatorE2E", [
+  const responsibleRole = await createRole("SupportNotificationsResponsibleE2E", [
+    "Support.View",
+    "Support.AddActions",
+    "Support.ManageAssigned",
+    "Support.ReceiveUrgentNotifications",
+  ]);
+  const collaboratorRole = await createRole("SupportNotificationsCollaboratorE2E", [
     "Support.View",
     "Support.AddActions",
   ]);
@@ -180,13 +208,13 @@ async function createNotificationFixture() {
     "Responsable Notifications E2E",
     "responsible-notifications-e2e",
     responsiblePassword,
-    operatorRole.id,
+    responsibleRole.id,
   );
   const collaborator = await createUser(
     "Colaborador Notifications E2E",
     "collaborator-notifications-e2e",
     collaboratorPassword,
-    operatorRole.id,
+    collaboratorRole.id,
   );
   const outsider = await createUser(
     "Tercero Notifications E2E",
@@ -194,7 +222,7 @@ async function createNotificationFixture() {
     outsiderPassword,
     viewerRole.id,
   );
-  const collaboratorActor = sessionUser(collaborator, operatorRole, [
+  const collaboratorActor = sessionUser(collaborator, collaboratorRole, [
     "Support.View",
     "Support.AddActions",
   ]);
