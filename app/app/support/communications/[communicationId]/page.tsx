@@ -7,6 +7,8 @@ import {
   supportCommunicationParamsSchema,
 } from "@/modules/support/application/communications";
 import { SupportCommunicationForm } from "@/modules/support/presentation/SupportCommunicationForm";
+import { CommunicationIncidentForm } from "@/modules/support/presentation/CommunicationIncidentForm";
+import { listSupportReferences } from "@/modules/support/application/incidents";
 export const dynamic = "force-dynamic";
 export default async function CommunicationPage({
   params,
@@ -34,7 +36,16 @@ export default async function CommunicationPage({
   const canManage = auth.user.permissions.includes(
     "Support.ManageCommunications",
   );
+  const canConvert =
+    !item.incidentId &&
+    canManage &&
+    auth.user.permissions.includes("Support.Create") &&
+    auth.user.permissions.includes("Support.View");
   const refs = canManage ? await listCommunicationReferences() : null;
+  const incidentRefs = canConvert ? await listSupportReferences() : null;
+  const customerRefs = incidentRefs?.customers.find(
+    (customer) => customer.id === item.customer.id,
+  );
   return (
     <main className="shell">
       <header className="topbar">
@@ -114,6 +125,16 @@ export default async function CommunicationPage({
         {canManage && refs ? (
           <div className="panel stack">
             <SupportCommunicationForm references={refs} current={item} />
+          </div>
+        ) : null}
+        {canConvert && incidentRefs ? (
+          <div className="panel stack">
+            <CommunicationIncidentForm
+              communication={item}
+              categories={incidentRefs.categories}
+              responsibleUsers={incidentRefs.responsibleUsers}
+              stores={customerRefs?.stores ?? []}
+            />
           </div>
         ) : null}
       </section>

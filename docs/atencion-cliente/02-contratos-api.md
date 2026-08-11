@@ -116,6 +116,12 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 
 Las lecturas de listado y detalle generan auditoría opaca sin resumen, número de contacto ni textos de corrección. Altas y correcciones comparten límites persistentes separados de 20 intentos por actor y empresa en 15 minutos. El replay válido se resuelve antes de consumir cuota. Al superar el límite se devuelve `429 SUPPORT_COMMUNICATION_RATE_LIMITED` con `Retry-After: 900`; tras tres conflictos serializables se devuelve `503 SUPPORT_COMMUNICATION_BUSY` con `Retry-After: 3`.
 
+### `POST /api/support/communications/{communicationId}/incident`
+
+Convierte una comunicación todavía no vinculada en una incidencia. Exige conjuntamente `Support.Create`, `Support.View`, `Support.ManageCommunications` y `Support.ViewCommunications`, además de Origin/CSRF, mantenimiento, JSON estricto, límite de 8 KiB e idempotencia. El cuerpo contiene `expectedCommunicationVersion`, `categoryId`, `responsibleUserId`, `storeId`, `title` y `priority`.
+
+La transacción bloquea la comunicación, copia cliente y resumen, asigna el número anual, crea el evento inicial y enlaza la comunicación mediante una corrección append-only que cambia su resultado a `REFERRED_TO_INCIDENT`. El replay devuelve `200`; la primera ejecución devuelve `201`. Una comunicación vinculada devuelve `409 SUPPORT_COMMUNICATION_ALREADY_LINKED` y una versión obsoleta `409 SUPPORT_COMMUNICATION_VERSION_CONFLICT`. La auditoría registra identificadores y metadatos operativos, nunca resumen, teléfono ni motivo de corrección.
+
 ## Integridad y conservación
 
 - PostgreSQL garantiza unicidad del número y de la secuencia por empresa y año.

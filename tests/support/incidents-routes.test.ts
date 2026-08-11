@@ -11,6 +11,7 @@ import {
   POST as communicationsPost,
 } from "@/app/api/support/communications/route";
 import { GET as communicationGet } from "@/app/api/support/communications/[communicationId]/route";
+import { POST as communicationIncidentPost } from "@/app/api/support/communications/[communicationId]/incident/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -367,6 +368,78 @@ describe("support incidents HTTP contracts", () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: "FORBIDDEN" });
     expect(await prisma.supportCommunication.count()).toBe(0);
+  });
+
+  it("creates an incident atomically from a protected communication", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const source = await payload();
+    const communicationResponse = await communicationsPost(
+      jsonRequest(
+        "/api/support/communications",
+        {
+          customerId: source.customerId,
+          channel: "PHONE",
+          direction: "INBOUND",
+          occurredAt: new Date().toISOString(),
+          contactNumber: "+34910000006",
+          durationSeconds: 120,
+          summary: "Llamada que requiere apertura de incidencia.",
+          result: "INFORMATION_PROVIDED",
+          incidentId: null,
+        },
+        { csrf, key: randomUUID() },
+      ),
+    );
+    const communication = (await communicationResponse.json()) as {
+      id: string;
+      version: number;
+    };
+    const category = await prisma.supportIncidentCategory.findFirstOrThrow();
+    const installation = await prisma.installation.findFirstOrThrow();
+    const body = {
+      expectedCommunicationVersion: communication.version,
+      storeId: null,
+      categoryId: category.id,
+      responsibleUserId: installation.initialAdministratorId!,
+      title: "Incidencia creada desde llamada",
+      priority: "MEDIUM",
+    };
+    const key = randomUUID();
+    const context = {
+      params: Promise.resolve({ communicationId: communication.id }),
+    };
+    const first = await communicationIncidentPost(
+      jsonRequest(
+        `/api/support/communications/${communication.id}/incident`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
+    const replay = await communicationIncidentPost(
+      jsonRequest(
+        `/api/support/communications/${communication.id}/incident`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    const firstBody = (await first.json()) as { id: string };
+    expect((await replay.json()) as { id: string }).toMatchObject({
+      id: firstBody.id,
+    });
+    expect(await prisma.supportIncident.count()).toBe(1);
+    expect(
+      await prisma.supportCommunication.findUniqueOrThrow({
+        where: { id: communication.id },
+      }),
+    ).toMatchObject({ incidentId: firstBody.id, version: 2 });
   });
 });
 

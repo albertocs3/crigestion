@@ -5,7 +5,7 @@ import { createCustomer } from "@/modules/customers/application/customers";
 import { login } from "@/modules/platform/application/auth";
 import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
 import { createSupportAction, hashSupportActionRequest } from "@/modules/support/application/actions";
-import { createSupportCategory, createSupportIncident, getSupportIncident, hashSupportRequest, listSupportIncidents, listSupportReferences } from "@/modules/support/application/incidents";
+import { createIncidentFromCommunication, createSupportCategory, createSupportIncident, getSupportIncident, hashSupportRequest, listSupportIncidents, listSupportReferences } from "@/modules/support/application/incidents";
 import { hashSupportStatusTransitionRequest, transitionSupportIncident } from "@/modules/support/application/statusTransitions";
 import { changeSupportParticipants, hashSupportParticipantRequest } from "@/modules/support/application/participants";
 import { correctSupportCommunication, createSupportCommunication, createSupportCommunicationSchema, getSupportCommunication, hashSupportCommunicationRequest } from "@/modules/support/application/communications";
@@ -444,6 +444,104 @@ describe("support incidents application", () => {
     expect(createSupportCommunicationSchema.safeParse({ ...command, result: "REQUIRES_FOLLOW_UP" }).success).toBe(false);
     await expect(prisma.supportCommunication.delete({ where: { id: created.value.id } })).rejects.toThrow();
     await expect(prisma.supportCommunication.update({ where: { id: created.value.id }, data: { summary: "Cambio sin evidencia", version: 3 } })).rejects.toThrow();
+  });
+
+  it("creates an incident from a communication atomically and replays it", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const communicationCommand = {
+      customerId: customer.id,
+      channel: "WHATSAPP" as const,
+      direction: "INBOUND" as const,
+      occurredAt: new Date().toISOString(),
+      contactNumber: "+34910000005",
+      durationSeconds: null,
+      summary: "El cliente comunica una incidencia que requiere seguimiento técnico.",
+      result: "INFORMATION_PROVIDED" as const,
+      incidentId: null,
+    };
+    const communication = await createSupportCommunication(
+      communicationCommand,
+      actor,
+      {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportCommunicationRequest(communicationCommand),
+        scope: "communication:create",
+      },
+    );
+    if (!communication.ok) throw new Error(communication.error.code);
+    const refs = await listSupportReferences();
+    const command = {
+      expectedCommunicationVersion: 1,
+      storeId: null,
+      categoryId: refs.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Seguimiento de comunicación entrante",
+      priority: "HIGH" as const,
+    };
+    const context = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportRequest({
+        communicationId: communication.value.id,
+        ...command,
+      }),
+      scope: `communication:${communication.value.id}:incident:create`,
+      correlationId: "communication-conversion-1",
+    };
+    const created = await createIncidentFromCommunication(
+      communication.value.id,
+      command,
+      actor,
+      context,
+    );
+    const replay = await createIncidentFromCommunication(
+      communication.value.id,
+      command,
+      actor,
+      context,
+    );
+    expect(created).toMatchObject({
+      ok: true,
+      status: 201,
+      value: {
+        title: command.title,
+        description: communicationCommand.summary,
+        priority: "HIGH",
+      },
+    });
+    expect(replay).toMatchObject({ ok: true, status: 200 });
+    if (!created.ok) throw new Error("incident not created");
+    const storedCommunication = await prisma.supportCommunication.findUniqueOrThrow({
+      where: { id: communication.value.id },
+      include: { corrections: true },
+    });
+    expect(storedCommunication).toMatchObject({
+      incidentId: created.value.id,
+      result: "REFERRED_TO_INCIDENT",
+      version: 2,
+    });
+    expect(storedCommunication.corrections).toHaveLength(1);
+    expect(await prisma.supportIncident.count()).toBe(1);
+    const duplicate = await createIncidentFromCommunication(
+      communication.value.id,
+      command,
+      actor,
+      { ...context, idempotencyKey: randomUUID() },
+    );
+    expect(duplicate).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "SUPPORT_COMMUNICATION_ALREADY_LINKED" },
+    });
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_INCIDENT_CREATED_FROM_COMMUNICATION" },
+    });
+    expect(JSON.stringify(audit.payload)).not.toContain(
+      communicationCommand.summary,
+    );
+    expect(JSON.stringify(audit.payload)).not.toContain(
+      communicationCommand.contactNumber,
+    );
   });
 
   it("rejects a store belonging to another customer", async () => {
