@@ -27,6 +27,7 @@ const contentShape = {
   summary: z.string().trim().min(3).max(2000),
   result: resultSchema,
   incidentId: z.string().uuid().nullable(),
+  contactId: z.string().uuid().nullable().default(null),
 };
 export const createSupportCommunicationSchema = z
   .object({ customerId: z.string().uuid(), ...contentShape })
@@ -68,6 +69,7 @@ type Content = {
   direction: z.infer<typeof directionSchema>;
   occurredAt: string;
   contactNumber: string;
+  contactId: string | null;
   durationSeconds: number | null;
   summary: string;
   result: z.infer<typeof resultSchema>;
@@ -77,6 +79,7 @@ export type SupportCommunicationDto = Content & {
   id: string;
   customer: { id: string; code: string; legalName: string };
   incident: { id: string; number: string; title: string } | null;
+  contact: { id: string; name: string | null; role: string | null } | null;
   registeredBy: { id: string; displayName: string };
   version: number;
   recordedAt: string;
@@ -98,6 +101,7 @@ type Failure = {
       | "SUPPORT_CUSTOMER_NOT_FOUND"
       | "SUPPORT_COMMUNICATION_NOT_FOUND"
       | "SUPPORT_COMMUNICATION_INCIDENT_INVALID"
+      | "SUPPORT_COMMUNICATION_CONTACT_INVALID"
       | "SUPPORT_COMMUNICATION_DATE_INVALID"
       | "SUPPORT_COMMUNICATION_VERSION_CONFLICT"
       | "SUPPORT_COMMUNICATION_RATE_LIMITED"
@@ -116,6 +120,7 @@ const detailSelect = {
   direction: true,
   occurredAt: true,
   contactNumber: true,
+  contactId: true,
   durationSeconds: true,
   summary: true,
   result: true,
@@ -124,6 +129,7 @@ const detailSelect = {
   recordedAt: true,
   customer: { select: { id: true, code: true, legalName: true } },
   incident: { select: { id: true, number: true, title: true } },
+  contact: { select: { id: true, name: true, role: true } },
   registeredBy: { select: { id: true, displayName: true } },
   corrections: {
     orderBy: [{ resultingVersion: "asc" as const }],
@@ -138,6 +144,8 @@ const detailSelect = {
       correctedOccurredAt: true,
       previousContactNumber: true,
       correctedContactNumber: true,
+      previousContactId: true,
+      correctedContactId: true,
       previousDurationSeconds: true,
       correctedDurationSeconds: true,
       previousSummary: true,
@@ -160,13 +168,14 @@ const replayContentSchema = z
     direction: directionSchema,
     occurredAt: z.string().datetime({ offset: true }),
     contactNumber: z.string(),
+    contactId: z.string().uuid().nullable().default(null),
     durationSeconds: z.number().int().nullable(),
     summary: z.string(),
     result: resultSchema,
     incidentId: z.string().uuid().nullable(),
   })
   .strict();
-const replaySchema: z.ZodType<SupportCommunicationDto> = z
+const replaySchema = z
   .object({
     id: z.string().uuid(),
     customer: z
@@ -178,6 +187,14 @@ const replaySchema: z.ZodType<SupportCommunicationDto> = z
       .strict(),
     incident: z
       .object({ id: z.string().uuid(), number: z.string(), title: z.string() })
+      .strict()
+      .nullable(),
+    contact: z
+      .object({
+        id: z.string().uuid(),
+        name: z.string().nullable(),
+        role: z.string().nullable(),
+      })
       .strict()
       .nullable(),
     registeredBy: z
@@ -292,21 +309,44 @@ export async function getSupportCommunication(
 }
 export async function listCommunicationReferences() {
   const companyId = await currentCompanyId(prisma);
-  if (!companyId) return { customers: [], incidents: [] };
-  const [customers, incidents] = await Promise.all([
-    prisma.customer.findMany({
-      orderBy: [{ legalName: "asc" }, { id: "asc" }],
-      take: 500,
-      select: { id: true, code: true, legalName: true },
-    }),
+  if (!companyId) return { customers: [], incidents: [], contacts: [] };
+  const customers = await prisma.customer.findMany({
+    orderBy: [{ legalName: "asc" }, { id: "asc" }],
+    take: 500,
+    select: { id: true, code: true, legalName: true },
+  });
+  const [incidents, contacts] = await Promise.all([
     prisma.supportIncident.findMany({
       where: { companyId },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       take: 500,
       select: { id: true, customerId: true, number: true, title: true },
     }),
+    prisma.customerContact.findMany({
+      where: {
+        status: "ACTIVE",
+        customerId: { in: customers.map((customer) => customer.id) },
+      },
+      orderBy: [
+        { customerId: "asc" },
+        { storeId: "asc" },
+        { name: "asc" },
+        { id: "asc" },
+      ],
+      take: 1_000,
+      select: {
+        id: true,
+        customerId: true,
+        name: true,
+        role: true,
+        phone: true,
+        mobile: true,
+        whatsapp: true,
+        store: { select: { code: true, name: true } },
+      },
+    }),
   ]);
-  return { customers, incidents };
+  return { customers, incidents, contacts };
 }
 
 export async function createSupportCommunication(
@@ -336,6 +376,14 @@ export async function createSupportCommunication(
       command.incidentId,
     );
     if (incidentFailure) return incidentFailure;
+    const contactFailure = await validateContact(
+      tx,
+      command.customerId,
+      command.contactId,
+      command.channel,
+      command.contactNumber,
+    );
+    if (contactFailure) return contactFailure;
     const occurredAt = new Date(command.occurredAt);
     if (occurredAt.getTime() > Date.now() + 300_000)
       return fail(
@@ -352,6 +400,7 @@ export async function createSupportCommunication(
         direction: command.direction,
         occurredAt,
         contactNumber: command.contactNumber,
+        contactId: command.contactId,
         durationSeconds: command.durationSeconds,
         summary: command.summary,
         result: command.result,
@@ -407,6 +456,7 @@ export async function correctSupportCommunication(
         direction: Content["direction"];
         occurredAt: Date;
         contactNumber: string;
+        contactId: string | null;
         durationSeconds: number | null;
         summary: string;
         result: Content["result"];
@@ -414,7 +464,7 @@ export async function correctSupportCommunication(
         version: number;
       }>
     >(
-      Prisma.sql`SELECT "id", "companyId", "customerId", "channel", "direction", "occurredAt", "contactNumber", "durationSeconds", "summary", "result", "incidentId", "version" FROM "support_communications" WHERE "id" = ${id}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "companyId", "customerId", "channel", "direction", "occurredAt", "contactNumber", "contactId", "durationSeconds", "summary", "result", "incidentId", "version" FROM "support_communications" WHERE "id" = ${id}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`,
     );
     const old = rows[0];
     if (!old)
@@ -436,6 +486,20 @@ export async function correctSupportCommunication(
       command.incidentId,
     );
     if (incidentFailure) return incidentFailure;
+    const preservesHistoricalContact =
+      command.contactId === old.contactId &&
+      command.contactNumber === old.contactNumber &&
+      command.channel === old.channel;
+    if (!preservesHistoricalContact) {
+      const contactFailure = await validateContact(
+        tx,
+        old.customerId,
+        command.contactId,
+        command.channel,
+        command.contactNumber,
+      );
+      if (contactFailure) return contactFailure;
+    }
     const occurredAt = new Date(command.occurredAt);
     if (occurredAt.getTime() > Date.now() + 300_000)
       return fail(
@@ -458,6 +522,8 @@ export async function correctSupportCommunication(
         correctedOccurredAt: occurredAt,
         previousContactNumber: old.contactNumber,
         correctedContactNumber: command.contactNumber,
+        previousContactId: old.contactId,
+        correctedContactId: command.contactId,
         previousDurationSeconds: old.durationSeconds,
         correctedDurationSeconds: command.durationSeconds,
         previousSummary: old.summary,
@@ -476,6 +542,7 @@ export async function correctSupportCommunication(
         direction: command.direction,
         occurredAt,
         contactNumber: command.contactNumber,
+        contactId: command.contactId,
         durationSeconds: command.durationSeconds,
         summary: command.summary,
         result: command.result,
@@ -662,6 +729,31 @@ async function validateIncident(
         "La incidencia no pertenece al cliente seleccionado.",
       );
 }
+async function validateContact(
+  tx: Prisma.TransactionClient,
+  customerId: string,
+  contactId: string | null,
+  channel: Content["channel"],
+  contactNumber: string,
+): Promise<Failure | null> {
+  if (!contactId) return null;
+  const contact = await tx.customerContact.findFirst({
+    where: { id: contactId, customerId, status: "ACTIVE" },
+    select: { phone: true, mobile: true, whatsapp: true },
+  });
+  const validNumbers = contact
+    ? channel === "WHATSAPP"
+      ? [contact.whatsapp]
+      : [contact.phone, contact.mobile]
+    : [];
+  return validNumbers.includes(contactNumber)
+    ? null
+    : fail(
+        422,
+        "SUPPORT_COMMUNICATION_CONTACT_INVALID",
+        "El contacto o el número no son válidos para el canal seleccionado.",
+      );
+}
 function validateContent(
   value: {
     channel: string;
@@ -694,6 +786,7 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
     direction: row.direction,
     occurredAt: row.occurredAt.toISOString(),
     contactNumber: row.contactNumber,
+    contactId: row.contactId,
     durationSeconds: row.durationSeconds,
     summary: row.summary,
     result: row.result,
@@ -704,6 +797,7 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
     ...current,
     customer: row.customer,
     incident: row.incident,
+    contact: row.contact,
     registeredBy: row.registeredBy,
     version: row.version,
     recordedAt: row.recordedAt.toISOString(),
@@ -715,6 +809,7 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
         direction: item.previousDirection,
         occurredAt: item.previousOccurredAt.toISOString(),
         contactNumber: item.previousContactNumber,
+        contactId: item.previousContactId,
         durationSeconds: item.previousDurationSeconds,
         summary: item.previousSummary,
         result: item.previousResult,
@@ -725,6 +820,7 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
         direction: item.correctedDirection,
         occurredAt: item.correctedOccurredAt.toISOString(),
         contactNumber: item.correctedContactNumber,
+        contactId: item.correctedContactId,
         durationSeconds: item.correctedDurationSeconds,
         summary: item.correctedSummary,
         result: item.correctedResult,

@@ -118,12 +118,12 @@ export function CustomerEditForm({ customer }: { customer: CustomerListItem }) {
           </select>
         </label>
         <label>
-          Email
-          <input name="email" type="email" maxLength={254} defaultValue={customer.email ?? ""} />
+          Email (maestro de contactos)
+          <input name="email" type="email" maxLength={254} readOnly defaultValue={customer.email ?? ""} />
         </label>
         <label>
-          Telefono
-          <input name="phone" maxLength={40} defaultValue={customer.phone ?? ""} />
+          Telefono (maestro de contactos)
+          <input name="phone" maxLength={40} readOnly defaultValue={customer.phone ?? ""} />
         </label>
         <label>
           Direccion fiscal

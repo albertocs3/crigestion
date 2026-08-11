@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
-import { GET as incidentsGet, POST as incidentsPost } from "@/app/api/support/incidents/route";
+import {
+  GET as incidentsGet,
+  POST as incidentsPost,
+} from "@/app/api/support/incidents/route";
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
@@ -12,10 +15,19 @@ import {
 } from "@/app/api/support/communications/route";
 import { GET as communicationGet } from "@/app/api/support/communications/[communicationId]/route";
 import { POST as communicationIncidentPost } from "@/app/api/support/communications/[communicationId]/incident/route";
+import {
+  GET as contactsGet,
+  POST as contactsPost,
+} from "@/app/api/customers/[customerId]/contacts/route";
+import { PATCH as contactsPatch } from "@/app/api/customers/[customerId]/contacts/[contactId]/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
-import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
+import {
+  hashRequestBody,
+  initializePlatform,
+  type InitializeCommand,
+} from "@/modules/platform/application/installation";
 
 const cookieMock = vi.hoisted(() => {
   const values = new Map<string, string>();
@@ -64,13 +76,17 @@ describe("support incidents HTTP contracts", () => {
   it("rejects unauthenticated listing with no-store", async () => {
     const response = await incidentsGet(request("/api/support/incidents"));
     expect(response.status).toBe(401);
-    expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
     expect(await response.json()).toMatchObject({ code: "UNAUTHENTICATED" });
   });
 
   it("requires CSRF before creating an incident", async () => {
     await loginAs("admin", password);
-    const response = await incidentsPost(jsonRequest("/api/support/incidents", await payload()));
+    const response = await incidentsPost(
+      jsonRequest("/api/support/incidents", await payload()),
+    );
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
   });
@@ -96,7 +112,9 @@ describe("support incidents HTTP contracts", () => {
     });
     await loginAs("creator", "Cambiar-creator-2026");
     const csrf = await csrfToken();
-    const response = await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf }));
+    const response = await incidentsPost(
+      jsonRequest("/api/support/incidents", await payload(), { csrf }),
+    );
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: "FORBIDDEN" });
   });
@@ -106,12 +124,20 @@ describe("support incidents HTTP contracts", () => {
     const csrf = await csrfToken();
     const body = await payload();
     const key = randomUUID();
-    const first = await incidentsPost(jsonRequest("/api/support/incidents", body, { csrf, key }));
-    const replay = await incidentsPost(jsonRequest("/api/support/incidents", body, { csrf, key }));
+    const first = await incidentsPost(
+      jsonRequest("/api/support/incidents", body, { csrf, key }),
+    );
+    const replay = await incidentsPost(
+      jsonRequest("/api/support/incidents", body, { csrf, key }),
+    );
     expect(first.status).toBe(201);
     expect(replay.status).toBe(200);
-    expect(responseId(await first.json())).toBe(responseId(await replay.json()));
-    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(responseId(await first.json())).toBe(
+      responseId(await replay.json()),
+    );
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
     expect(await prisma.supportIncident.count()).toBe(1);
     expect(
       await prisma.auditEvent.count({
@@ -156,7 +182,9 @@ describe("support incidents HTTP contracts", () => {
     );
     expect(first.status).toBe(201);
     expect(replay.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
     const firstBody = (await first.json()) as {
       action: { id: string };
       incident: { status: string; version: number };
@@ -186,11 +214,27 @@ describe("support incidents HTTP contracts", () => {
     };
     const key = randomUUID();
     const context = { params: Promise.resolve({ incidentId: incident.id }) };
-    const first = await transitionsPost(jsonRequest(`/api/support/incidents/${incident.id}/status-transitions`, body, { csrf, key }), context);
-    const replay = await transitionsPost(jsonRequest(`/api/support/incidents/${incident.id}/status-transitions`, body, { csrf, key }), context);
+    const first = await transitionsPost(
+      jsonRequest(
+        `/api/support/incidents/${incident.id}/status-transitions`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
+    const replay = await transitionsPost(
+      jsonRequest(
+        `/api/support/incidents/${incident.id}/status-transitions`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
     expect(first.status).toBe(201);
     expect(replay.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
     const firstBody = (await first.json()) as {
       transition: { id: string };
       incident: { status: string; version: number };
@@ -206,19 +250,64 @@ describe("support incidents HTTP contracts", () => {
   it("adds a collaborator once through the protected participant contract", async () => {
     await loginAs("admin", password);
     const csrf = await csrfToken();
-    const role = await prisma.role.create({ data: { code: "SupportRouteCollaborator", name: "Colaborador API", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
-    const user = await prisma.user.create({ data: { displayName: "Colaborador API", userName: "collaborator-api", normalizedUserName: "collaborator-api", passwordHash: hashPassword("Cambiar-collaborator-2026"), roleId: role.id } });
-    const created = await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    const role = await prisma.role.create({
+      data: {
+        code: "SupportRouteCollaborator",
+        name: "Colaborador API",
+        permissions: {
+          create: ["Support.View", "Support.AddActions"].map((code) => ({
+            permission: { connect: { code } },
+          })),
+        },
+      },
+    });
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Colaborador API",
+        userName: "collaborator-api",
+        normalizedUserName: "collaborator-api",
+        passwordHash: hashPassword("Cambiar-collaborator-2026"),
+        roleId: role.id,
+      },
+    });
+    const created = await incidentsPost(
+      jsonRequest("/api/support/incidents", await payload(), {
+        csrf,
+        key: randomUUID(),
+      }),
+    );
     const incident = (await created.json()) as { id: string; version: number };
-    const body = { action: "add-collaborator", expectedVersion: incident.version, userId: user.id };
+    const body = {
+      action: "add-collaborator",
+      expectedVersion: incident.version,
+      userId: user.id,
+    };
     const key = randomUUID();
     const context = { params: Promise.resolve({ incidentId: incident.id }) };
-    const first = await participantsPost(jsonRequest(`/api/support/incidents/${incident.id}/participant-changes`, body, { csrf, key }), context);
-    const replay = await participantsPost(jsonRequest(`/api/support/incidents/${incident.id}/participant-changes`, body, { csrf, key }), context);
+    const first = await participantsPost(
+      jsonRequest(
+        `/api/support/incidents/${incident.id}/participant-changes`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
+    const replay = await participantsPost(
+      jsonRequest(
+        `/api/support/incidents/${incident.id}/participant-changes`,
+        body,
+        { csrf, key },
+      ),
+      context,
+    );
     expect(first.status).toBe(201);
     expect(replay.status).toBe(200);
-    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
-    const firstBody = (await first.json()) as { change: { id: string; type: string } };
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    const firstBody = (await first.json()) as {
+      change: { id: string; type: string };
+    };
     const replayBody = (await replay.json()) as { change: { id: string } };
     expect(firstBody.change.type).toBe("COLLABORATOR_ADDED");
     expect(replayBody.change.id).toBe(firstBody.change.id);
@@ -291,7 +380,9 @@ describe("support incidents HTTP contracts", () => {
       }),
     ).toBe(1);
 
-    const list = await communicationsGet(request("/api/support/communications"));
+    const list = await communicationsGet(
+      request("/api/support/communications"),
+    );
     const detail = await communicationGet(
       request(`/api/support/communications/${firstBody.id}`),
       { params: Promise.resolve({ communicationId: firstBody.id }) },
@@ -301,10 +392,7 @@ describe("support incidents HTTP contracts", () => {
     const readAudits = await prisma.auditEvent.findMany({
       where: {
         eventType: {
-          in: [
-            "SUPPORT_COMMUNICATIONS_VIEWED",
-            "SUPPORT_COMMUNICATION_VIEWED",
-          ],
+          in: ["SUPPORT_COMMUNICATIONS_VIEWED", "SUPPORT_COMMUNICATION_VIEWED"],
         },
       },
       select: { payload: true },
@@ -441,11 +529,125 @@ describe("support incidents HTTP contracts", () => {
       }),
     ).toMatchObject({ incidentId: firstBody.id, version: 2 });
   });
+
+  it("creates and lists a protected customer contact without caching", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const customer = await payload();
+    const installation = await prisma.installation.findFirstOrThrow();
+    const store = await prisma.customerStore.create({
+      data: {
+        customerId: customer.customerId,
+        code: "T00001",
+        name: "Tienda API",
+        addressLine: "Calle API 1",
+        postalCode: "28001",
+        city: "Madrid",
+        country: "ES",
+        createdById: installation.initialAdministratorId!,
+      },
+    });
+    const body = {
+      storeId: store.id,
+      name: "Contacto API",
+      role: "Soporte",
+      phone: "+34910000008",
+      mobile: null,
+      whatsapp: "+34600000008",
+      email: "contacto-api@example.test",
+    };
+    const key = randomUUID();
+    const context = {
+      params: Promise.resolve({ customerId: customer.customerId }),
+    };
+    const first = await contactsPost(
+      jsonRequest(`/api/customers/${customer.customerId}/contacts`, body, {
+        csrf,
+        key,
+      }),
+      context,
+    );
+    const replay = await contactsPost(
+      jsonRequest(`/api/customers/${customer.customerId}/contacts`, body, {
+        csrf,
+        key,
+      }),
+      context,
+    );
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    const created = (await first.json()) as { id: string; version: number };
+    const patch = await contactsPatch(
+      jsonRequest(
+        `/api/customers/${customer.customerId}/contacts/${created.id}`,
+        {
+          action: "update",
+          contact: {
+            expectedVersion: created.version,
+            name: "Contacto API actualizado",
+            role: body.role,
+            phone: body.phone,
+            mobile: body.mobile,
+            whatsapp: body.whatsapp,
+            email: body.email,
+          },
+        },
+        { csrf, key: randomUUID(), method: "PATCH" },
+      ),
+      {
+        params: Promise.resolve({
+          customerId: customer.customerId,
+          contactId: created.id,
+        }),
+      },
+    );
+    expect(patch.status).toBe(200);
+    expect(patch.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(await patch.json()).toMatchObject({
+      id: created.id,
+      name: "Contacto API actualizado",
+      version: 2,
+    });
+    const list = await contactsGet(
+      request(`/api/customers/${customer.customerId}/contacts`),
+      context,
+    );
+    expect(list.status).toBe(200);
+    expect(list.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(
+      ((await list.json()) as { contacts: unknown[] }).contacts,
+    ).toHaveLength(1);
+  });
+
+  it("does not expose customer contacts without an authenticated session", async () => {
+    const customerId = randomUUID();
+    const response = await contactsGet(
+      request(`/api/customers/${customerId}/contacts`),
+      { params: Promise.resolve({ customerId }) },
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(await response.json()).toMatchObject({ code: "UNAUTHENTICATED" });
+  });
 });
 
 async function initialize() {
   const raw = JSON.stringify(base);
-  const result = await initializePlatform(base, randomUUID(), hashRequestBody(raw));
+  const result = await initializePlatform(
+    base,
+    randomUUID(),
+    hashRequestBody(raw),
+  );
   if (!result.ok) throw new Error(result.error.code);
   const row = await prisma.installation.findFirstOrThrow();
   await prisma.supportIncidentCategory.create({
@@ -488,7 +690,9 @@ async function payload() {
   };
 }
 async function loginAs(userName: string, userPassword: string) {
-  const response = await loginPost(jsonRequest("/api/auth/login", { userName, password: userPassword }));
+  const response = await loginPost(
+    jsonRequest("/api/auth/login", { userName, password: userPassword }),
+  );
   expect(response.status).toBe(200);
   expect(cookieMock.values.has(sessionCookieName)).toBe(true);
 }
@@ -500,7 +704,11 @@ async function csrfToken() {
 function request(path: string) {
   return new Request(`http://localhost${path}`);
 }
-function jsonRequest(path: string, body: unknown, options: { csrf?: string; key?: string } = {}) {
+function jsonRequest(
+  path: string,
+  body: unknown,
+  options: { csrf?: string; key?: string; method?: "POST" | "PATCH" } = {},
+) {
   const headers = new Headers({
     "Content-Type": "application/json",
     Origin: "http://localhost:3000",
@@ -508,23 +716,42 @@ function jsonRequest(path: string, body: unknown, options: { csrf?: string; key?
   if (options.csrf) headers.set("X-CSRF-Token", options.csrf);
   if (options.key) headers.set("Idempotency-Key", options.key);
   return new Request(`http://localhost${path}`, {
-    method: "POST",
+    method: options.method ?? "POST",
     headers,
     body: JSON.stringify(body),
   });
 }
 function responseId(value: unknown): string | undefined {
-  return typeof value === "object" && value !== null && "id" in value ? String(value.id) : undefined;
+  return typeof value === "object" && value !== null && "id" in value
+    ? String(value.id)
+    : undefined;
 }
 async function reset() {
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"');
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
@@ -533,13 +760,31 @@ async function reset() {
     await tx.supportIncidentStatusTransition.deleteMany();
     await tx.supportIncidentAction.deleteMany();
     await tx.supportIncident.deleteMany();
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" ENABLE TRIGGER "support_incident_participant_changes_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"');
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_participant_changes" ENABLE TRIGGER "support_incident_participant_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();
@@ -548,6 +793,7 @@ async function reset() {
   await prisma.auditEvent.deleteMany();
   await prisma.installation.deleteMany();
   await prisma.session.deleteMany();
+  await prisma.customerStore.deleteMany();
   await prisma.customer.deleteMany();
   await prisma.reservedUserName.deleteMany();
   await prisma.user.deleteMany();

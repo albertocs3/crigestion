@@ -140,7 +140,13 @@ Eventos actuales:
 
 Los payloads evitan guardar direccion, contacto, email, telefono y observaciones completas.
 
-## 9. Decisiones Pendientes
+## 9. Contactos estructurados
+
+`customer_contacts` materializa el contacto general y el contacto único de cada tienda. Un índice parcial único garantiza un solo contacto con `storeId IS NULL` por cliente; la unicidad de `storeId` garantiza uno por tienda y una FK compuesta evita cruces entre clientes. El registro incluye canales de contacto, estado, versión y usuarios de alta/última modificación. No admite `DELETE` y toda actualización incrementa exactamente una versión.
+
+`support_communications.contactId` es una referencia opcional al contacto del mismo cliente. El número usado sigue guardándose como instantánea en `contactNumber`; las correcciones conservan también `previousContactId` y `correctedContactId` y el trigger diferido exige que coincidan con la proyección vigente.
+
+## 10. Decisiones Pendientes
 
 - Extraer identidad fiscal comun a `Party` si proveedores comparten NIF/VAT con clientes.
 - Extraer direcciones a tabla comun si proveedores, empresas propias o tiendas necesitan compartir la misma estructura.

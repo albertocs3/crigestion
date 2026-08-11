@@ -8,12 +8,12 @@ import {
   getCustomerDetail,
   listCustomers,
   updateCustomer,
-  updateCustomerStatus
+  updateCustomerStatus,
 } from "@/modules/customers/application/customers";
 import {
   hashRequestBody,
   initializePlatform,
-  type InitializeCommand
+  type InitializeCommand,
 } from "@/modules/platform/application/installation";
 
 const adminPassword = "Cambiar-esta-clave-2026";
@@ -21,13 +21,13 @@ const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
     taxId: "B12345678",
-    email: "admin@example.test"
+    email: "admin@example.test",
   },
   administrator: {
     displayName: "Administrador",
     userName: "admin",
-    password: adminPassword
-  }
+    password: adminPassword,
+  },
 };
 
 describe("customers application service", () => {
@@ -45,16 +45,16 @@ describe("customers application service", () => {
   it("creates customers with automatic codes and safe audit payloads", async () => {
     const actor = await loginAsAdmin();
     const result = await createCustomer(customerPayload(), actor, {
-      correlationId: "customer-test-0001"
+      correlationId: "customer-test-0001",
     });
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_CREATED" }
+      where: { eventType: "CUSTOMER_CREATED" },
     });
     const accountingAudit = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "ACCOUNTING_ACCOUNT_CREATED" }
+      where: { eventType: "ACCOUNTING_ACCOUNT_CREATED" },
     });
     const accountingAccount = await prisma.accountingAccount.findFirstOrThrow({
-      where: { code: "430000001" }
+      where: { code: "430000001" },
     });
     const auditPayload = JSON.stringify(auditEvent.payload);
 
@@ -72,31 +72,31 @@ describe("customers application service", () => {
             reference: "SEPA-CLIENTE-1",
             status: "ACTIVE",
             signedAt: "2026-07-01",
-            revokedAt: null
-          }
-        }
-      }
+            revokedAt: null,
+          },
+        },
+      },
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
       customerCode: "1",
       type: "COMPANY",
       fiscalTreatment: "DOMESTIC",
-      correlationId: "customer-test-0001"
+      correlationId: "customer-test-0001",
     });
     expect(accountingAccount).toMatchObject({
       code: "430000001",
       name: "Cliente Demo SL",
       type: "ACTIVO",
       level: 9,
-      isPostable: true
+      isPostable: true,
     });
     expect(accountingAudit.payload).toMatchObject({
       actorUserId: actor.id,
       accountId: accountingAccount.id,
       code: "430000001",
       customerCode: "1",
-      correlationId: "customer-test-0001"
+      correlationId: "customer-test-0001",
     });
     expect(auditPayload).not.toContain("B12345674");
     expect(auditPayload).not.toContain("ES9121000418450200051332");
@@ -113,14 +113,18 @@ describe("customers application service", () => {
     if (!result.ok) throw new Error(result.error.code);
     expect(result.value.code).toBe("20");
     const account = await prisma.accountingAccount.findFirstOrThrow({
-      where: { code: "430000020" }
+      where: { code: "430000020" },
     });
     expect(account.name).toBe("Cliente Demo SL");
   });
 
   it("rolls back the customer when no accounting fiscal year is open", async () => {
     await prisma.accountingFiscalYear.updateMany({
-      data: { status: "CLOSED", closedAt: new Date(), closedById: (await prisma.user.findFirstOrThrow()).id }
+      data: {
+        status: "CLOSED",
+        closedAt: new Date(),
+        closedById: (await prisma.user.findFirstOrThrow()).id,
+      },
     });
     const actor = await loginAsAdmin();
     const result = await createCustomer(customerPayload(), actor);
@@ -128,7 +132,7 @@ describe("customers application service", () => {
     expect(result).toMatchObject({
       ok: false,
       status: 409,
-      error: { code: "CUSTOMER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN" }
+      error: { code: "CUSTOMER_ACCOUNTING_FISCAL_YEAR_NOT_OPEN" },
     });
     expect(await prisma.customer.count()).toBe(0);
     expect(await prisma.accountingAccount.count()).toBe(0);
@@ -138,30 +142,36 @@ describe("customers application service", () => {
     const actor = await loginAsAdmin();
 
     await createCustomer(customerPayload({ taxId: "B-12345674" }), actor);
-    const result = await createCustomer(customerPayload({ taxId: "B 12345674" }), actor);
+    const result = await createCustomer(
+      customerPayload({ taxId: "B 12345674" }),
+      actor,
+    );
 
     expect(result).toEqual({
       ok: false,
       status: 409,
       error: {
         code: "CUSTOMER_TAX_ID_ALREADY_USED",
-        message: "El identificador fiscal ya esta asignado a otro cliente."
-      }
+        message: "El identificador fiscal ya esta asignado a otro cliente.",
+      },
     });
   });
 
   it("lists and filters customers without exposing notes", async () => {
     const actor = await loginAsAdmin();
 
-    await createCustomer(customerPayload({ legalName: "Cliente Demo SL" }), actor);
+    await createCustomer(
+      customerPayload({ legalName: "Cliente Demo SL" }),
+      actor,
+    );
     await createCustomer(
       customerPayload({
         legalName: "Otro Cliente SL",
         tradeName: "Otro Cliente",
         taxId: "B00000000",
-        email: "otro@example.test"
+        email: "otro@example.test",
       }),
-      actor
+      actor,
     );
 
     const result = await listCustomers({ limit: 25, search: "demo" }, actor);
@@ -169,7 +179,7 @@ describe("customers application service", () => {
     expect(result.customers).toHaveLength(1);
     expect(result.customers[0]).toMatchObject({
       legalName: "Cliente Demo SL",
-      status: "ACTIVE"
+      status: "ACTIVE",
     });
     expect(JSON.stringify(result)).not.toContain("Observacion interna");
   });
@@ -184,7 +194,7 @@ describe("customers application service", () => {
 
     const result = await getCustomerDetail(created.value.id, actor);
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_VIEWED" }
+      where: { eventType: "CUSTOMER_VIEWED" },
     });
     const serializedResult = JSON.stringify(result);
     const auditPayload = JSON.stringify(auditEvent.payload);
@@ -195,16 +205,16 @@ describe("customers application service", () => {
       legalName: "Cliente Demo SL",
       storeCounts: {
         active: 0,
-        inactive: 0
+        inactive: 0,
       },
-      stores: []
+      stores: [],
     });
     expect(serializedResult).not.toContain("Observacion interna");
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
       customerId: created.value.id,
       customerCode: "1",
-      storeCount: 0
+      storeCount: 0,
     });
     expect(auditPayload).not.toContain("B12345674");
     expect(auditPayload).not.toContain("cliente@example.test");
@@ -221,10 +231,10 @@ describe("customers application service", () => {
     const result = await updateCustomerStatus(
       created.value.id,
       { action: "deactivate" },
-      actor
+      actor,
     );
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_DEACTIVATED" }
+      where: { eventType: "CUSTOMER_DEACTIVATED" },
     });
 
     expect(result).toMatchObject({
@@ -232,14 +242,14 @@ describe("customers application service", () => {
       status: 200,
       value: {
         id: created.value.id,
-        status: "INACTIVE"
-      }
+        status: "INACTIVE",
+      },
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
       customerId: created.value.id,
       previousStatus: "ACTIVE",
-      newStatus: "INACTIVE"
+      newStatus: "INACTIVE",
     });
   });
 
@@ -259,8 +269,8 @@ describe("customers application service", () => {
         tradeName: null,
         taxId: "B11111119",
         fiscalTreatment: "EU",
-        email: "nuevo@example.test",
-        phone: null,
+        email: "cliente@example.test",
+        phone: "+34910000000",
         fiscalAddressLine: "Avenida Nueva 2",
         fiscalPostalCode: "08001",
         fiscalCity: "Barcelona",
@@ -274,14 +284,17 @@ describe("customers application service", () => {
         bankIban: "ES79 2100 0813 6101 2345 6789",
         sepaMandate: {
           reference: "SEPA-CLIENTE-2",
-          signedAt: "2026-07-02"
-        }
+          signedAt: "2026-07-02",
+        },
       },
       actor,
-      { correlationId: "customer-update-0001" }
+      { correlationId: "customer-update-0001" },
     );
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_UPDATED" }
+      where: { eventType: "CUSTOMER_UPDATED" },
+    });
+    const generalContact = await prisma.customerContact.findFirstOrThrow({
+      where: { customerId: created.value.id, storeId: null },
     });
     const auditPayload = JSON.stringify(auditEvent.payload);
 
@@ -294,14 +307,14 @@ describe("customers application service", () => {
         tradeName: null,
         taxId: "B11111119",
         fiscalTreatment: "EU",
-        email: "nuevo@example.test",
-        phone: null,
+        email: "cliente@example.test",
+        phone: "+34910000000",
         commercialTerms: {
           defaultPaymentMethod: "DIRECT_DEBIT",
           paymentTermsType: "DAYS",
           paymentDays: 30,
           paymentFixedDay: null,
-          creditLimit: "1500.50"
+          creditLimit: "1500.50",
         },
         bankAccount: {
           iban: "ES7921000813610123456789",
@@ -309,10 +322,10 @@ describe("customers application service", () => {
             reference: "SEPA-CLIENTE-2",
             status: "ACTIVE",
             signedAt: "2026-07-02",
-            revokedAt: null
-          }
-        }
-      }
+            revokedAt: null,
+          },
+        },
+      },
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
@@ -324,8 +337,6 @@ describe("customers application service", () => {
         "tradeName",
         "taxId",
         "fiscalTreatment",
-        "email",
-        "phone",
         "fiscalAddressLine",
         "fiscalPostalCode",
         "fiscalCity",
@@ -335,9 +346,15 @@ describe("customers application service", () => {
         "paymentDays",
         "creditLimit",
         "bankIban",
-        "sepaMandate"
+        "sepaMandate",
       ],
-      correlationId: "customer-update-0001"
+      correlationId: "customer-update-0001",
+    });
+    expect(generalContact).toMatchObject({
+      email: "cliente@example.test",
+      phone: "+34910000000",
+      status: "ACTIVE",
+      version: 1,
     });
     expect(auditPayload).not.toContain("B11111119");
     expect(auditPayload).not.toContain("ES7921000813610123456789");
@@ -358,13 +375,13 @@ describe("customers application service", () => {
     const result = await updateCustomer(
       created.value.id,
       updateCustomerPayload({
-        taxId: "B11111119"
+        taxId: "B11111119",
       }),
-      actor
+      actor,
     );
     const customer = await prisma.customer.findUniqueOrThrow({
       where: { id: created.value.id },
-      select: { taxId: true, normalizedTaxId: true }
+      select: { taxId: true, normalizedTaxId: true },
     });
 
     expect(result).toEqual({
@@ -372,12 +389,31 @@ describe("customers application service", () => {
       status: 409,
       error: {
         code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
-        message: "El NIF del cliente no puede cambiarse cuando existen facturas emitidas."
-      }
+        message:
+          "El NIF del cliente no puede cambiarse cuando existen facturas emitidas.",
+      },
     });
     expect(customer).toEqual({
       taxId: "B12345674",
-      normalizedTaxId: "B12345674"
+      normalizedTaxId: "B12345674",
+    });
+  });
+
+  it("rejects contact changes from the legacy customer editor", async () => {
+    const actor = await loginAsAdmin();
+    const created = await createCustomer(customerPayload(), actor);
+    if (!created.ok) throw new Error(created.error.code);
+
+    expect(
+      await updateCustomer(
+        created.value.id,
+        updateCustomerPayload({ email: "obsoleto@example.test" }),
+        actor,
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY" },
     });
   });
 
@@ -396,9 +432,8 @@ describe("customers application service", () => {
       updateCustomerPayload({
         legalName: "Cliente Actualizado SL",
         taxId: "B12345674",
-        email: "nuevo@example.test"
       }),
-      actor
+      actor,
     );
 
     expect(result).toMatchObject({
@@ -408,8 +443,8 @@ describe("customers application service", () => {
         id: created.value.id,
         legalName: "Cliente Actualizado SL",
         taxId: "B12345674",
-        email: "nuevo@example.test"
-      }
+        email: "cliente@example.test",
+      },
     });
   });
 
@@ -417,9 +452,9 @@ describe("customers application service", () => {
     const actor = await loginAsAdmin();
     const created = await createCustomer(
       customerPayload({
-        defaultPaymentMethod: "DIRECT_DEBIT"
+        defaultPaymentMethod: "DIRECT_DEBIT",
       }),
-      actor
+      actor,
     );
 
     if (!created.ok) {
@@ -449,10 +484,10 @@ describe("customers application service", () => {
         bankIban: "ES79 2100 0813 6101 2345 6789",
         sepaMandate: {
           reference: "SEPA-CLIENTE-2",
-          signedAt: "2026-07-02"
-        }
+          signedAt: "2026-07-02",
+        },
       },
-      actor
+      actor,
     );
     const mandates = await prisma.customerSepaMandate.findMany({
       where: { customerId: created.value.id },
@@ -460,8 +495,8 @@ describe("customers application service", () => {
       select: {
         reference: true,
         status: true,
-        revokedAt: true
-      }
+        revokedAt: true,
+      },
     });
 
     expect(result).toMatchObject({
@@ -471,21 +506,21 @@ describe("customers application service", () => {
           iban: "ES7921000813610123456789",
           sepaMandate: {
             reference: "SEPA-CLIENTE-2",
-            status: "ACTIVE"
-          }
-        }
-      }
+            status: "ACTIVE",
+          },
+        },
+      },
     });
     expect(mandates).toMatchObject([
       {
         reference: "SEPA-CLIENTE-1",
-        status: "INVALIDATED"
+        status: "INVALIDATED",
       },
       {
         reference: "SEPA-CLIENTE-2",
         status: "ACTIVE",
-        revokedAt: null
-      }
+        revokedAt: null,
+      },
     ]);
     expect(mandates[0].revokedAt).toBeInstanceOf(Date);
   });
@@ -497,20 +532,20 @@ describe("customers application service", () => {
         taxId: "B11111119",
         sepaMandate: {
           reference: "SEPA-CLIENTE-1",
-          signedAt: "2026-07-01"
-        }
+          signedAt: "2026-07-01",
+        },
       }),
-      actor
+      actor,
     );
     const second = await createCustomer(
       customerPayload({
         taxId: "B22222228",
         sepaMandate: {
           reference: "SEPA-CLIENTE-2",
-          signedAt: "2026-07-01"
-        }
+          signedAt: "2026-07-01",
+        },
       }),
-      actor
+      actor,
     );
 
     if (!first.ok || !second.ok) {
@@ -525,8 +560,8 @@ describe("customers application service", () => {
         tradeName: "Segundo",
         taxId: "B-11111119",
         fiscalTreatment: "DOMESTIC",
-        email: "segundo@example.test",
-        phone: "+34910000002",
+        email: "cliente@example.test",
+        phone: "+34910000000",
         fiscalAddressLine: "Calle Segunda 2",
         fiscalPostalCode: "28002",
         fiscalCity: "Madrid",
@@ -538,9 +573,9 @@ describe("customers application service", () => {
         paymentFixedDay: null,
         creditLimit: null,
         bankIban: null,
-        sepaMandate: null
+        sepaMandate: null,
       },
-      actor
+      actor,
     );
 
     expect(result).toEqual({
@@ -548,8 +583,8 @@ describe("customers application service", () => {
       status: 409,
       error: {
         code: "CUSTOMER_TAX_ID_ALREADY_USED",
-        message: "El identificador fiscal ya esta asignado a otro cliente."
-      }
+        message: "El identificador fiscal ya esta asignado a otro cliente.",
+      },
     });
   });
 
@@ -557,8 +592,8 @@ describe("customers application service", () => {
     const result = createCustomerSchema.safeParse(
       customerPayload({
         paymentTermsType: "DAYS",
-        paymentDays: null
-      })
+        paymentDays: null,
+      }),
     );
 
     expect(result.success).toBe(false);
@@ -568,8 +603,8 @@ describe("customers application service", () => {
     const result = createCustomerSchema.safeParse(
       customerPayload({
         taxId: "B12345678",
-        fiscalCountry: "ES"
-      })
+        fiscalCountry: "ES",
+      }),
     );
 
     expect(result.success).toBe(false);
@@ -579,8 +614,8 @@ describe("customers application service", () => {
     const result = createCustomerSchema.safeParse(
       customerPayload({
         taxId: "FR12345678901",
-        fiscalCountry: "FR"
-      })
+        fiscalCountry: "FR",
+      }),
     );
 
     expect(result.success).toBe(true);
@@ -589,8 +624,8 @@ describe("customers application service", () => {
   it("rejects invalid IBAN values", async () => {
     const result = createCustomerSchema.safeParse(
       customerPayload({
-        bankIban: "ES00 0000 0000 0000 0000 0000"
-      })
+        bankIban: "ES00 0000 0000 0000 0000 0000",
+      }),
     );
 
     expect(result.success).toBe(false);
@@ -601,22 +636,22 @@ describe("customers application service", () => {
       customerPayload({
         defaultPaymentMethod: "DIRECT_DEBIT",
         bankIban: undefined,
-        sepaMandate: undefined
-      })
+        sepaMandate: undefined,
+      }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.flatten().fieldErrors).toMatchObject({
         bankIban: ["La domiciliacion requiere informar el IBAN."],
-        sepaMandate: ["La domiciliacion requiere un mandato SEPA firmado."]
+        sepaMandate: ["La domiciliacion requiere un mandato SEPA firmado."],
       });
     }
   });
 });
 
 function customerPayload(
-  overrides: Partial<Parameters<typeof createCustomer>[0]> = {}
+  overrides: Partial<Parameters<typeof createCustomer>[0]> = {},
 ): Parameters<typeof createCustomer>[0] {
   return {
     type: "COMPANY",
@@ -639,15 +674,15 @@ function customerPayload(
     bankIban: "ES91 2100 0418 4502 0005 1332",
     sepaMandate: {
       reference: "SEPA-CLIENTE-1",
-      signedAt: "2026-07-01"
+      signedAt: "2026-07-01",
     },
     notes: "Observacion interna",
-    ...overrides
+    ...overrides,
   };
 }
 
 function updateCustomerPayload(
-  overrides: Partial<Parameters<typeof updateCustomer>[1]> = {}
+  overrides: Partial<Parameters<typeof updateCustomer>[1]> = {},
 ): Parameters<typeof updateCustomer>[1] {
   return {
     type: "COMPANY",
@@ -670,16 +705,16 @@ function updateCustomerPayload(
     bankIban: "ES9121000418450200051332",
     sepaMandate: {
       reference: "SEPA-CLIENTE-1",
-      signedAt: "2026-07-01"
+      signedAt: "2026-07-01",
     },
-    ...overrides
+    ...overrides,
   };
 }
 
 async function loginAsAdmin() {
   const result = await login({
     userName: "admin",
-    password: adminPassword
+    password: adminPassword,
   });
 
   if (!result.ok) {
@@ -694,7 +729,7 @@ async function initializeForCustomers(): Promise<void> {
   const result = await initializePlatform(
     baseCommand,
     randomUUID(),
-    hashRequestBody(rawBody)
+    hashRequestBody(rawBody),
   );
 
   if (!result.ok) {
@@ -704,19 +739,23 @@ async function initializeForCustomers(): Promise<void> {
   const installation = await prisma.installation.findFirstOrThrow();
   await prisma.accountingFiscalYear.create({
     data: {
-      companyId: installation.companyId!, year: 2026,
-      startDate: new Date("2026-01-01T00:00:00.000Z"), endDate: new Date("2026-12-31T00:00:00.000Z"),
-      planCode: "PGC_PYMES", planVersion: "2021.1", createdById: installation.initialAdministratorId!
-    }
+      companyId: installation.companyId!,
+      year: 2026,
+      startDate: new Date("2026-01-01T00:00:00.000Z"),
+      endDate: new Date("2026-12-31T00:00:00.000Z"),
+      planCode: "PGC_PYMES",
+      planVersion: "2021.1",
+      createdById: installation.initialAdministratorId!,
+    },
   });
 }
 
 async function createIssuedInvoiceForCustomer(
   customerId: string,
-  actorUserId: string
+  actorUserId: string,
 ): Promise<void> {
   const customer = await prisma.customer.findUniqueOrThrow({
-    where: { id: customerId }
+    where: { id: customerId },
   });
 
   await prisma.invoice.create({
@@ -737,19 +776,20 @@ async function createIssuedInvoiceForCustomer(
         postalCode: customer.fiscalPostalCode,
         city: customer.fiscalCity,
         province: customer.fiscalProvince,
-        country: customer.fiscalCountry
+        country: customer.fiscalCountry,
       },
       issueDate: new Date("2026-07-07T00:00:00.000Z"),
       operationDate: new Date("2026-07-07T00:00:00.000Z"),
       issuedAt: new Date("2026-07-07T10:00:00.000Z"),
       total: "0.00",
       createdById: actorUserId,
-      issuedById: actorUserId
-    }
+      issuedById: actorUserId,
+    },
   });
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await deleteCustomerContactsForTest();
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
@@ -787,8 +827,20 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
     prisma.role.deleteMany(),
-    prisma.company.deleteMany()
+    prisma.company.deleteMany(),
   ]);
+}
+
+async function deleteCustomerContactsForTest(): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
+  });
 }
 
 async function resetCustomerCodeSequence(): Promise<void> {

@@ -2,12 +2,12 @@ import Link from "next/link";
 import { z } from "zod";
 import {
   listCustomerAddresses,
-  type CustomerAddressListItem
+  type CustomerAddressListItem,
 } from "@/modules/customers/application/addresses";
 import {
   getCustomerDetail,
   type CustomerDetail,
-  type CustomerListItem
+  type CustomerListItem,
 } from "@/modules/customers/application/customers";
 import { listCustomerStores } from "@/modules/customers/application/stores";
 import { CustomerEditForm } from "@/modules/customers/presentation/CustomerEditForm";
@@ -23,10 +23,12 @@ type CustomerDetailPageProps = {
 };
 
 const paramsSchema = z.object({
-  customerId: z.string().uuid()
+  customerId: z.string().uuid(),
 });
 
-export default async function CustomerDetailPage({ params }: CustomerDetailPageProps) {
+export default async function CustomerDetailPage({
+  params,
+}: CustomerDetailPageProps) {
   const authorization = await authorizePagePermission("Customers.View");
   const parsedParams = paramsSchema.safeParse(await params);
 
@@ -68,12 +70,23 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
     );
   }
 
-  const customer = await getCustomerDetail(parsedParams.data.customerId, authorization.user);
+  const customer = await getCustomerDetail(
+    parsedParams.data.customerId,
+    authorization.user,
+  );
   const addresses = customer
-    ? await listCustomerAddresses(customer.id, { status: "ACTIVE" }, authorization.user)
+    ? await listCustomerAddresses(
+        customer.id,
+        { status: "ACTIVE" },
+        authorization.user,
+      )
     : null;
   const stores = customer
-    ? await listCustomerStores(customer.id, { status: "ACTIVE" }, authorization.user)
+    ? await listCustomerStores(
+        customer.id,
+        { status: "ACTIVE" },
+        authorization.user,
+      )
     : null;
   const canManage = authorization.user.permissions.includes("Customers.Manage");
 
@@ -98,6 +111,12 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 href={`/app/customers/${customer.id}/stores`}
               >
                 Tiendas
+              </Link>
+              <Link
+                className="button button-secondary"
+                href={`/app/customers/${customer.id}/contacts`}
+              >
+                Contactos
               </Link>
             </>
           ) : null}
@@ -142,12 +161,16 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 </div>
                 <div>
                   <span className="muted">Tratamiento fiscal</span>
-                  <strong>{fiscalTreatmentLabel(customer.fiscalTreatment)}</strong>
+                  <strong>
+                    {fiscalTreatmentLabel(customer.fiscalTreatment)}
+                  </strong>
                 </div>
                 <div>
                   <span className="muted">Metodo de pago</span>
                   <strong>
-                    {paymentMethodLabel(customer.commercialTerms.defaultPaymentMethod)}
+                    {paymentMethodLabel(
+                      customer.commercialTerms.defaultPaymentMethod,
+                    )}
                   </strong>
                 </div>
                 <div>
@@ -164,7 +187,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 </div>
                 <div>
                   <span className="muted">Tiendas activas</span>
-                  <strong>{stores?.stores.length ?? customer.storeCounts.active}</strong>
+                  <strong>
+                    {stores?.stores.length ?? customer.storeCounts.active}
+                  </strong>
                 </div>
               </div>
             </div>
@@ -173,7 +198,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               <div className="split-header">
                 <div>
                   <h2>Datos fiscales y contacto</h2>
-                  <p className="muted">Identidad, contacto general y domicilio fiscal.</p>
+                  <p className="muted">
+                    Identidad, contacto general y domicilio fiscal.
+                  </p>
                 </div>
               </div>
               <div className="data-grid">
@@ -196,7 +223,8 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 <div>
                   <span className="muted">Poblacion</span>
                   <strong>
-                    {customer.fiscalAddress.postalCode} {customer.fiscalAddress.city}
+                    {customer.fiscalAddress.postalCode}{" "}
+                    {customer.fiscalAddress.city}
                   </strong>
                 </div>
                 <div>
@@ -210,7 +238,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
               <div className="split-header">
                 <div>
                   <h2>Banco y SEPA</h2>
-                  <p className="muted">Cuenta bancaria y mandato activo para domiciliacion.</p>
+                  <p className="muted">
+                    Cuenta bancaria y mandato activo para domiciliacion.
+                  </p>
                 </div>
               </div>
               <div className="data-grid">
@@ -220,28 +250,39 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 </div>
                 <div>
                   <span className="muted">Mandato SEPA</span>
-                  <strong>{customer.bankAccount.sepaMandate?.reference ?? "-"}</strong>
+                  <strong>
+                    {customer.bankAccount.sepaMandate?.reference ?? "-"}
+                  </strong>
                 </div>
                 <div>
                   <span className="muted">Estado mandato</span>
                   <strong>
                     {customer.bankAccount.sepaMandate
-                      ? sepaMandateStatusLabel(customer.bankAccount.sepaMandate.status)
+                      ? sepaMandateStatusLabel(
+                          customer.bankAccount.sepaMandate.status,
+                        )
                       : "-"}
                   </strong>
                 </div>
                 <div>
                   <span className="muted">Fecha firma</span>
-                  <strong>{customer.bankAccount.sepaMandate?.signedAt ?? "-"}</strong>
+                  <strong>
+                    {customer.bankAccount.sepaMandate?.signedAt ?? "-"}
+                  </strong>
                 </div>
                 <div>
                   <span className="muted">Revocado</span>
-                  <strong>{formatDateTime(customer.bankAccount.sepaMandate?.revokedAt)}</strong>
+                  <strong>
+                    {formatDateTime(
+                      customer.bankAccount.sepaMandate?.revokedAt,
+                    )}
+                  </strong>
                 </div>
                 <div>
                   <span className="muted">Uso previsto</span>
                   <strong>
-                    {customer.commercialTerms.defaultPaymentMethod === "DIRECT_DEBIT"
+                    {customer.commercialTerms.defaultPaymentMethod ===
+                    "DIRECT_DEBIT"
                       ? "Domiciliacion"
                       : "No domiciliado"}
                   </strong>
@@ -254,8 +295,8 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 <div>
                   <h2>Direcciones</h2>
                   <p className="muted">
-                    {addresses?.addresses.length ?? 0} activas de facturacion, envio y otras
-                    ubicaciones.
+                    {addresses?.addresses.length ?? 0} activas de facturacion,
+                    envio y otras ubicaciones.
                   </p>
                 </div>
                 <Link
@@ -278,19 +319,27 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   <tbody>
                     {!addresses || addresses.addresses.length === 0 ? (
                       <tr>
-                        <td colSpan={4}>No hay direcciones activas para mostrar.</td>
+                        <td colSpan={4}>
+                          No hay direcciones activas para mostrar.
+                        </td>
                       </tr>
                     ) : (
                       addresses.addresses.map((address) => (
                         <tr key={address.id}>
                           <td>
                             <strong>{address.label}</strong>
-                            <span className="cell-detail">{address.address.line}</span>
                             <span className="cell-detail">
-                              {address.address.postalCode} {address.address.city}
+                              {address.address.line}
                             </span>
                             <span className="cell-detail">
-                              {[address.address.province, address.address.country]
+                              {address.address.postalCode}{" "}
+                              {address.address.city}
+                            </span>
+                            <span className="cell-detail">
+                              {[
+                                address.address.province,
+                                address.address.country,
+                              ]
                                 .filter(Boolean)
                                 .join(", ")}
                             </span>
@@ -303,8 +352,12 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                           </td>
                           <td>
                             <strong>{address.contact.name ?? "-"}</strong>
-                            <span className="cell-detail">{address.contact.email ?? "-"}</span>
-                            <span className="cell-detail">{address.contact.phone ?? "-"}</span>
+                            <span className="cell-detail">
+                              {address.contact.email ?? "-"}
+                            </span>
+                            <span className="cell-detail">
+                              {address.contact.phone ?? "-"}
+                            </span>
                           </td>
                           <td>{renderAddressStatus(address.status)}</td>
                         </tr>
@@ -320,8 +373,8 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                 <div>
                   <h2>Tiendas</h2>
                   <p className="muted">
-                    {customer.storeCounts.active} activas · {customer.storeCounts.inactive}{" "}
-                    inactivas
+                    {customer.storeCounts.active} activas ·{" "}
+                    {customer.storeCounts.inactive} inactivas
                   </p>
                 </div>
                 <Link
@@ -344,7 +397,9 @@ export default async function CustomerDetailPage({ params }: CustomerDetailPageP
                   <tbody>
                     {!stores || stores.stores.length === 0 ? (
                       <tr>
-                        <td colSpan={4}>No hay tiendas activas para mostrar.</td>
+                        <td colSpan={4}>
+                          No hay tiendas activas para mostrar.
+                        </td>
                       </tr>
                     ) : (
                       stores.stores.map((store) => (
@@ -430,7 +485,7 @@ function typeLabel(type: CustomerListItem["type"]): string {
 }
 
 function fiscalTreatmentLabel(
-  fiscalTreatment: CustomerListItem["fiscalTreatment"]
+  fiscalTreatment: CustomerListItem["fiscalTreatment"],
 ): string {
   switch (fiscalTreatment) {
     case "DOMESTIC":
@@ -445,7 +500,7 @@ function fiscalTreatmentLabel(
 }
 
 function paymentMethodLabel(
-  paymentMethod: CustomerListItem["commercialTerms"]["defaultPaymentMethod"]
+  paymentMethod: CustomerListItem["commercialTerms"]["defaultPaymentMethod"],
 ): string {
   switch (paymentMethod) {
     case "BANK_TRANSFER":
@@ -469,7 +524,7 @@ function addressTypeLabel(type: CustomerAddressListItem["type"]): string {
 }
 
 function sepaMandateStatusLabel(
-  status: NonNullable<CustomerListItem["bankAccount"]["sepaMandate"]>["status"]
+  status: NonNullable<CustomerListItem["bankAccount"]["sepaMandate"]>["status"],
 ): string {
   switch (status) {
     case "ACTIVE":
@@ -507,6 +562,6 @@ function formatDateTime(value: string | null | undefined): string {
 
   return new Intl.DateTimeFormat("es-ES", {
     dateStyle: "short",
-    timeStyle: "short"
+    timeStyle: "short",
   }).format(new Date(value));
 }

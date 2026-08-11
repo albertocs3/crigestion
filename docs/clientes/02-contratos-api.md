@@ -10,9 +10,9 @@
 
 ## 2. Permisos
 
-| Permiso | Uso |
-|---|---|
-| `Customers.View` | Consultar listado de clientes. |
+| Permiso            | Uso                                                              |
+| ------------------ | ---------------------------------------------------------------- |
+| `Customers.View`   | Consultar listado de clientes.                                   |
 | `Customers.Manage` | Crear clientes, cambiar estado, gestionar tiendas y direcciones. |
 
 ## 3. `GET /api/customers`
@@ -21,12 +21,12 @@ Permiso requerido: `Customers.View`.
 
 Query:
 
-| Parametro | Tipo | Uso |
-|---|---|---|
-| `limit` | entero 1-100 | Tamano de pagina. Por defecto 25. |
-| `cursor` | UUID | Cursor de paginacion. |
-| `status` | `ACTIVE` o `INACTIVE` | Filtro de estado. |
-| `search` | texto 1-120 | Busca por codigo, razon social, nombre comercial o NIF/VAT. |
+| Parametro | Tipo                  | Uso                                                         |
+| --------- | --------------------- | ----------------------------------------------------------- |
+| `limit`   | entero 1-100          | Tamano de pagina. Por defecto 25.                           |
+| `cursor`  | UUID                  | Cursor de paginacion.                                       |
+| `status`  | `ACTIVE` o `INACTIVE` | Filtro de estado.                                           |
+| `search`  | texto 1-120           | Busca por codigo, razon social, nombre comercial o NIF/VAT. |
 
 Respuesta `200`:
 
@@ -124,15 +124,15 @@ Validacion fiscal:
 
 Errores:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `400` | `IDEMPOTENCY_KEY_REQUIRED` / `IDEMPOTENCY_KEY_INVALID` | Falta la cabecera idempotente o supera la longitud permitida. |
-| `401` | `UNAUTHENTICATED` | No hay sesion valida. |
-| `403` | `FORBIDDEN` / `CSRF_TOKEN_INVALID` / `ORIGIN_NOT_ALLOWED` | Falta permiso o defensa CSRF/origen. |
-| `409` | `CUSTOMER_TAX_ID_ALREADY_USED` | El identificador fiscal normalizado ya existe. |
-| `415` | `UNSUPPORTED_MEDIA_TYPE` | El cuerpo no es JSON. |
-| `422` | `VALIDATION_ERROR` | Body invalido. |
-| `423` | `MAINTENANCE_MODE_ACTIVE` | La plataforma esta en mantenimiento. |
+| Estado | Codigo                                                    | Uso                                                           |
+| ------ | --------------------------------------------------------- | ------------------------------------------------------------- |
+| `400`  | `IDEMPOTENCY_KEY_REQUIRED` / `IDEMPOTENCY_KEY_INVALID`    | Falta la cabecera idempotente o supera la longitud permitida. |
+| `401`  | `UNAUTHENTICATED`                                         | No hay sesion valida.                                         |
+| `403`  | `FORBIDDEN` / `CSRF_TOKEN_INVALID` / `ORIGIN_NOT_ALLOWED` | Falta permiso o defensa CSRF/origen.                          |
+| `409`  | `CUSTOMER_TAX_ID_ALREADY_USED`                            | El identificador fiscal normalizado ya existe.                |
+| `415`  | `UNSUPPORTED_MEDIA_TYPE`                                  | El cuerpo no es JSON.                                         |
+| `422`  | `VALIDATION_ERROR`                                        | Body invalido.                                                |
+| `423`  | `MAINTENANCE_MODE_ACTIVE`                                 | La plataforma esta en mantenimiento.                          |
 
 Audita `CUSTOMER_CREATED` con `customerId`, `customerCode`, tipo y tratamiento fiscal. Si se informa mandato, audita `CUSTOMER_SEPA_MANDATE_CREATED` sin incluir IBAN.
 
@@ -202,12 +202,12 @@ Respuesta `200`: DTO de cliente actualizado.
 
 Errores propios:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `404` | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
-| `409` | `CUSTOMER_TAX_ID_ALREADY_USED` | El identificador fiscal normalizado ya existe. |
-| `409` | `CUSTOMER_SEPA_MANDATE_REFERENCE_ALREADY_USED` | La referencia SEPA normalizada ya existe. |
-| `409` | `CUSTOMER_STATUS_ALREADY_SET` | El cliente ya estaba en el estado solicitado. |
+| Estado | Codigo                                         | Uso                                            |
+| ------ | ---------------------------------------------- | ---------------------------------------------- |
+| `404`  | `CUSTOMER_NOT_FOUND`                           | El cliente no existe.                          |
+| `409`  | `CUSTOMER_TAX_ID_ALREADY_USED`                 | El identificador fiscal normalizado ya existe. |
+| `409`  | `CUSTOMER_SEPA_MANDATE_REFERENCE_ALREADY_USED` | La referencia SEPA normalizada ya existe.      |
+| `409`  | `CUSTOMER_STATUS_ALREADY_SET`                  | El cliente ya estaba en el estado solicitado.  |
 
 Audita `CUSTOMER_DEACTIVATED` o `CUSTOMER_REACTIVATED`.
 
@@ -217,10 +217,10 @@ Permiso requerido: `Customers.View`.
 
 Query:
 
-| Parametro | Tipo | Uso |
-|---|---|---|
-| `type` | `BILLING`, `SHIPPING` u `OTHER` | Filtro por tipo. |
-| `status` | `ACTIVE` o `INACTIVE` | Filtro de estado. |
+| Parametro | Tipo                            | Uso               |
+| --------- | ------------------------------- | ----------------- |
+| `type`    | `BILLING`, `SHIPPING` u `OTHER` | Filtro por tipo.  |
+| `status`  | `ACTIVE` o `INACTIVE`           | Filtro de estado. |
 
 Respuesta `200`:
 
@@ -290,9 +290,9 @@ Si `isPrimary` es `true`, el sistema desmarca cualquier otra direccion principal
 
 Errores propios:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `404` | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
+| Estado | Codigo               | Uso                   |
+| ------ | -------------------- | --------------------- |
+| `404`  | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
 
 Audita `CUSTOMER_ADDRESS_CREATED` sin incluir valores completos de direccion, contacto, telefono, email ni observaciones.
 
@@ -342,11 +342,11 @@ Al desactivar una direccion, `isPrimary` pasa a `false`.
 
 Errores propios:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `404` | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
-| `404` | `CUSTOMER_ADDRESS_NOT_FOUND` | La direccion no existe o no pertenece al cliente. |
-| `409` | `CUSTOMER_ADDRESS_STATUS_ALREADY_SET` | La direccion ya estaba en el estado solicitado. |
+| Estado | Codigo                                | Uso                                               |
+| ------ | ------------------------------------- | ------------------------------------------------- |
+| `404`  | `CUSTOMER_NOT_FOUND`                  | El cliente no existe.                             |
+| `404`  | `CUSTOMER_ADDRESS_NOT_FOUND`          | La direccion no existe o no pertenece al cliente. |
+| `409`  | `CUSTOMER_ADDRESS_STATUS_ALREADY_SET` | La direccion ya estaba en el estado solicitado.   |
 
 Audita `CUSTOMER_ADDRESS_UPDATED`, `CUSTOMER_ADDRESS_DEACTIVATED` o `CUSTOMER_ADDRESS_REACTIVATED`.
 
@@ -356,9 +356,9 @@ Permiso requerido: `Customers.View`.
 
 Query:
 
-| Parametro | Tipo | Uso |
-|---|---|---|
-| `status` | `ACTIVE` o `INACTIVE` | Filtro de estado. |
+| Parametro | Tipo                  | Uso               |
+| --------- | --------------------- | ----------------- |
+| `status`  | `ACTIVE` o `INACTIVE` | Filtro de estado. |
 
 Respuesta `200`:
 
@@ -439,9 +439,9 @@ Si `isPrimary` es `true`, el sistema desmarca cualquier otra tienda principal de
 
 Errores propios:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `404` | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
+| Estado | Codigo               | Uso                   |
+| ------ | -------------------- | --------------------- |
+| `404`  | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
 
 Audita `CUSTOMER_STORE_CREATED`.
 
@@ -496,10 +496,18 @@ o:
 
 Errores propios:
 
-| Estado | Codigo | Uso |
-|---|---|---|
-| `404` | `CUSTOMER_NOT_FOUND` | El cliente no existe. |
-| `404` | `CUSTOMER_STORE_NOT_FOUND` | La tienda no existe o no pertenece al cliente. |
-| `409` | `CUSTOMER_STORE_STATUS_ALREADY_SET` | La tienda ya estaba en el estado solicitado. |
+| Estado | Codigo                              | Uso                                            |
+| ------ | ----------------------------------- | ---------------------------------------------- |
+| `404`  | `CUSTOMER_NOT_FOUND`                | El cliente no existe.                          |
+| `404`  | `CUSTOMER_STORE_NOT_FOUND`          | La tienda no existe o no pertenece al cliente. |
+| `409`  | `CUSTOMER_STORE_STATUS_ALREADY_SET` | La tienda ya estaba en el estado solicitado.   |
 
 Audita `CUSTOMER_STORE_DEACTIVATED` o `CUSTOMER_STORE_REACTIVATED`.
+
+## `/api/customers/{customerId}/contacts`
+
+`GET` exige `Customers.View`; `POST` y `PATCH /{contactId}` exigen además `Customers.Manage`, Origin/CSRF, mantenimiento, JSON estricto de hasta 4 KiB e `Idempotency-Key`. Se admite un contacto general (`storeId=null`) y uno por tienda. Cada contacto conserva nombre, función, teléfono, móvil, WhatsApp, correo, estado y versión optimista.
+
+Las mutaciones nunca eliminan contactos: `deactivate` y `reactivate` preservan las referencias históricas. Durante la transición, los campos generales del cliente y `contact*` de tienda se sincronizan en la misma transacción con el maestro. Las pantallas heredadas los muestran en modo lectura y un payload obsoleto que intente cambiarlos recibe `409 CUSTOMER_CONTACT_MANAGED_SEPARATELY`; los cambios se realizan exclusivamente desde el maestro. PostgreSQL impide borrar, cambiar cliente/tienda de pertenencia o actualizar sin incrementar exactamente una versión.
+
+Errores estables: `CUSTOMER_CONTACT_NOT_FOUND`, `CUSTOMER_CONTACT_STORE_INVALID`, `CUSTOMER_CONTACT_SLOT_OCCUPIED`, `CUSTOMER_CONTACT_VERSION_CONFLICT`, `CUSTOMER_CONTACT_STATUS_ALREADY_SET` y `503 CUSTOMER_CONTACT_BUSY` con `Retry-After: 3`. La auditoría contiene identificadores, versión y nombres de campos modificados, nunca valores de correo o teléfono.

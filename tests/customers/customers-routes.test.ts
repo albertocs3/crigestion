@@ -4,7 +4,7 @@ import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import {
   GET as customersGet,
-  POST as customersPost
+  POST as customersPost,
 } from "@/app/api/customers/route";
 import { PATCH as customerPatch } from "@/app/api/customers/[customerId]/route";
 import { prisma } from "@/lib/prisma";
@@ -14,7 +14,7 @@ import { hashPassword } from "@/modules/platform/application/passwords";
 import {
   hashRequestBody,
   initializePlatform,
-  type InitializeCommand
+  type InitializeCommand,
 } from "@/modules/platform/application/installation";
 
 type CookieSetOptions = {
@@ -41,16 +41,16 @@ const cookieMock = vi.hoisted(() => {
       },
       delete(name: string) {
         values.delete(name);
-      }
+      },
     },
     reset() {
       values.clear();
-    }
+    },
   };
 });
 
 vi.mock("next/headers", () => ({
-  cookies: vi.fn(async () => cookieMock.store)
+  cookies: vi.fn(async () => cookieMock.store),
 }));
 
 const appBaseUrl = "http://localhost:3000";
@@ -60,13 +60,13 @@ const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
     taxId: "B12345678",
-    email: "admin@example.test"
+    email: "admin@example.test",
   },
   administrator: {
     displayName: "Administrador",
     userName: "admin",
-    password: adminPassword
-  }
+    password: adminPassword,
+  },
 };
 
 describe("customers HTTP contracts", () => {
@@ -92,7 +92,7 @@ describe("customers HTTP contracts", () => {
     expect(response.status).toBe(401);
     expect(body).toEqual({
       code: "UNAUTHENTICATED",
-      message: "No hay una sesion activa."
+      message: "No hay una sesion activa.",
     });
   });
 
@@ -100,14 +100,14 @@ describe("customers HTTP contracts", () => {
     await loginAsAdmin();
 
     const response = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload())
+      jsonRequest("/api/customers", createCustomerPayload()),
     );
     const body = await response.json();
 
     expect(response.status).toBe(403);
     expect(body).toEqual({
       code: "CSRF_TOKEN_INVALID",
-      message: "Token CSRF invalido."
+      message: "Token CSRF invalido.",
     });
   });
 
@@ -118,14 +118,14 @@ describe("customers HTTP contracts", () => {
     const response = await customersPost(
       jsonRequest("/api/customers", createCustomerPayload(), {
         csrfToken,
-        idempotencyKey: null
-      })
+        idempotencyKey: null,
+      }),
     );
     const body = await response.json();
 
     expect(response.status).toBe(400);
     expect(body).toMatchObject({
-      code: "IDEMPOTENCY_KEY_REQUIRED"
+      code: "IDEMPOTENCY_KEY_REQUIRED",
     });
   });
 
@@ -137,19 +137,19 @@ describe("customers HTTP contracts", () => {
     const listResponse = await customersGet(apiRequest("/api/customers"));
     const listBody = await listResponse.json();
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const createBody = await createResponse.json();
 
     expect(listResponse.status).toBe(403);
     expect(listBody).toEqual({
       code: "FORBIDDEN",
-      message: "No tienes permiso para realizar esta accion."
+      message: "No tienes permiso para realizar esta accion.",
     });
     expect(createResponse.status).toBe(403);
     expect(createBody).toEqual({
       code: "FORBIDDEN",
-      message: "No tienes permiso para realizar esta accion."
+      message: "No tienes permiso para realizar esta accion.",
     });
   });
 
@@ -158,18 +158,20 @@ describe("customers HTTP contracts", () => {
     const csrfToken = await getCsrfToken();
 
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const created = await createResponse.json();
-    const listResponse = await customersGet(apiRequest("/api/customers?search=demo"));
+    const listResponse = await customersGet(
+      apiRequest("/api/customers?search=demo"),
+    );
     const listBody = await listResponse.json();
     const patchResponse = await customerPatch(
       jsonRequest(
         `/api/customers/${created.id}`,
         { action: "deactivate" },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: created.id }) }
+      { params: Promise.resolve({ customerId: created.id }) },
     );
     const patched = await patchResponse.json();
 
@@ -184,9 +186,9 @@ describe("customers HTTP contracts", () => {
           reference: "SEPA-CLIENTE-1",
           status: "ACTIVE",
           signedAt: "2026-07-01",
-          revokedAt: null
-        }
-      }
+          revokedAt: null,
+        },
+      },
     });
     expect(listResponse.status).toBe(200);
     expect(listBody.customers).toHaveLength(1);
@@ -200,11 +202,9 @@ describe("customers HTTP contracts", () => {
     const csrfToken = await getCsrfToken();
 
     const response = await customersPost(
-      jsonRequest(
-        "/api/customers",
-        createCustomerPayload({ taxId: "123" }),
-        { csrfToken }
-      )
+      jsonRequest("/api/customers", createCustomerPayload({ taxId: "123" }), {
+        csrfToken,
+      }),
     );
     const body = await response.json();
 
@@ -214,9 +214,9 @@ describe("customers HTTP contracts", () => {
       message: "taxId: El NIF, NIE o CIF no es valido.",
       issues: {
         fieldErrors: {
-          taxId: ["El NIF, NIE o CIF no es valido."]
-        }
-      }
+          taxId: ["El NIF, NIE o CIF no es valido."],
+        },
+      },
     });
   });
 
@@ -224,7 +224,7 @@ describe("customers HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const created = await createResponse.json();
 
@@ -239,8 +239,8 @@ describe("customers HTTP contracts", () => {
             tradeName: null,
             taxId: "B11111119",
             fiscalTreatment: "EU",
-            email: "nuevo@example.test",
-            phone: null,
+            email: "cliente@example.test",
+            phone: "+34910000000",
             fiscalAddressLine: "Avenida Nueva 2",
             fiscalPostalCode: "08001",
             fiscalCity: "Barcelona",
@@ -254,13 +254,13 @@ describe("customers HTTP contracts", () => {
             bankIban: "ES79 2100 0813 6101 2345 6789",
             sepaMandate: {
               reference: "SEPA-CLIENTE-2",
-              signedAt: "2026-07-02"
-            }
-          }
+              signedAt: "2026-07-02",
+            },
+          },
         },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: created.id }) }
+      { params: Promise.resolve({ customerId: created.id }) },
     );
     const body = await response.json();
 
@@ -272,21 +272,21 @@ describe("customers HTTP contracts", () => {
       tradeName: null,
       taxId: "B11111119",
       fiscalTreatment: "EU",
-      email: "nuevo@example.test",
-      phone: null,
+      email: "cliente@example.test",
+      phone: "+34910000000",
       fiscalAddress: {
         line: "Avenida Nueva 2",
         postalCode: "08001",
         city: "Barcelona",
         province: "Barcelona",
-        country: "ES"
+        country: "ES",
       },
       commercialTerms: {
         defaultPaymentMethod: "DIRECT_DEBIT",
         paymentTermsType: "FIXED_DAY_OF_MONTH",
         paymentDays: null,
         paymentFixedDay: 15,
-        creditLimit: "2500.00"
+        creditLimit: "2500.00",
       },
       bankAccount: {
         iban: "ES7921000813610123456789",
@@ -294,9 +294,9 @@ describe("customers HTTP contracts", () => {
           reference: "SEPA-CLIENTE-2",
           status: "ACTIVE",
           signedAt: "2026-07-02",
-          revokedAt: null
-        }
-      }
+          revokedAt: null,
+        },
+      },
     });
   });
 
@@ -304,7 +304,7 @@ describe("customers HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const created = await createResponse.json();
     await createIssuedInvoiceForCustomer(created.id);
@@ -314,26 +314,27 @@ describe("customers HTTP contracts", () => {
         `/api/customers/${created.id}`,
         {
           action: "update",
-          customer: updateCustomerPayload({ taxId: "B11111119" })
+          customer: updateCustomerPayload({ taxId: "B11111119" }),
         },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: created.id }) }
+      { params: Promise.resolve({ customerId: created.id }) },
     );
     const body = await response.json();
     const customer = await prisma.customer.findUniqueOrThrow({
       where: { id: created.id },
-      select: { taxId: true, normalizedTaxId: true }
+      select: { taxId: true, normalizedTaxId: true },
     });
 
     expect(response.status).toBe(409);
     expect(body).toEqual({
       code: "CUSTOMER_TAX_ID_LOCKED_BY_ISSUED_INVOICES",
-      message: "El NIF del cliente no puede cambiarse cuando existen facturas emitidas."
+      message:
+        "El NIF del cliente no puede cambiarse cuando existen facturas emitidas.",
     });
     expect(customer).toEqual({
       taxId: "B12345674",
-      normalizedTaxId: "B12345674"
+      normalizedTaxId: "B12345674",
     });
   });
 
@@ -341,7 +342,7 @@ describe("customers HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const created = await createResponse.json();
 
@@ -349,15 +350,15 @@ describe("customers HTTP contracts", () => {
       jsonRequest(
         `/api/customers/${created.id}`,
         { action: "deactivate" },
-        { csrfToken, idempotencyKey: null, method: "PATCH" }
+        { csrfToken, idempotencyKey: null, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: created.id }) }
+      { params: Promise.resolve({ customerId: created.id }) },
     );
     const body = await response.json();
 
     expect(response.status).toBe(400);
     expect(body).toMatchObject({
-      code: "IDEMPOTENCY_KEY_REQUIRED"
+      code: "IDEMPOTENCY_KEY_REQUIRED",
     });
   });
 
@@ -366,21 +367,29 @@ describe("customers HTTP contracts", () => {
     const csrfToken = await getCsrfToken();
 
     await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload({ taxId: "B-12345674" }), {
-        csrfToken
-      })
+      jsonRequest(
+        "/api/customers",
+        createCustomerPayload({ taxId: "B-12345674" }),
+        {
+          csrfToken,
+        },
+      ),
     );
     const response = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload({ taxId: "B 12345674" }), {
-        csrfToken
-      })
+      jsonRequest(
+        "/api/customers",
+        createCustomerPayload({ taxId: "B 12345674" }),
+        {
+          csrfToken,
+        },
+      ),
     );
     const body = await response.json();
 
     expect(response.status).toBe(409);
     expect(body).toEqual({
       code: "CUSTOMER_TAX_ID_ALREADY_USED",
-      message: "El identificador fiscal ya esta asignado a otro cliente."
+      message: "El identificador fiscal ya esta asignado a otro cliente.",
     });
   });
 
@@ -392,9 +401,9 @@ describe("customers HTTP contracts", () => {
       jsonRequest(
         "/api/customers/not-a-uuid",
         { action: "deactivate" },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: "not-a-uuid" }) }
+      { params: Promise.resolve({ customerId: "not-a-uuid" }) },
     );
     const body = await response.json();
 
@@ -406,7 +415,7 @@ describe("customers HTTP contracts", () => {
     await loginAsAdmin();
     const csrfToken = await getCsrfToken();
     const createResponse = await customersPost(
-      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken })
+      jsonRequest("/api/customers", createCustomerPayload(), { csrfToken }),
     );
     const created = await createResponse.json();
 
@@ -415,11 +424,11 @@ describe("customers HTTP contracts", () => {
         `/api/customers/${created.id}`,
         {
           action: "deactivate",
-          customer: createCustomerPayload()
+          customer: createCustomerPayload(),
         },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: created.id }) }
+      { params: Promise.resolve({ customerId: created.id }) },
     );
     const body = await response.json();
 
@@ -436,8 +445,8 @@ async function loginWith(userName: string, password: string): Promise<void> {
   const response = await loginPost(
     jsonRequest("/api/auth/login", {
       userName,
-      password
-    })
+      password,
+    }),
   );
 
   expect(response.status).toBe(200);
@@ -479,10 +488,10 @@ function createCustomerPayload(overrides: Record<string, unknown> = {}) {
     bankIban: "ES91 2100 0418 4502 0005 1332",
     sepaMandate: {
       reference: "SEPA-CLIENTE-1",
-      signedAt: "2026-07-01"
+      signedAt: "2026-07-01",
     },
     notes: "Observacion interna",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -508,9 +517,9 @@ function updateCustomerPayload(overrides: Record<string, unknown> = {}) {
     bankIban: "ES9121000418450200051332",
     sepaMandate: {
       reference: "SEPA-CLIENTE-1",
-      signedAt: "2026-07-01"
+      signedAt: "2026-07-01",
     },
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -522,11 +531,11 @@ function jsonRequest(
     csrfToken?: string;
     idempotencyKey?: string | null;
     method?: string;
-  } = {}
+  } = {},
 ): Request {
   const headers = new Headers({
     "Content-Type": "application/json",
-    "X-Forwarded-For": uniqueTestIp()
+    "X-Forwarded-For": uniqueTestIp(),
   });
 
   if (options.origin) {
@@ -544,7 +553,7 @@ function jsonRequest(
   return new Request(`http://localhost${path}`, {
     method: options.method ?? "POST",
     headers,
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -561,7 +570,7 @@ async function initializeForRoutes(): Promise<void> {
   const result = await initializePlatform(
     baseCommand,
     randomUUID(),
-    hashRequestBody(rawBody)
+    hashRequestBody(rawBody),
   );
 
   if (!result.ok) {
@@ -579,12 +588,12 @@ async function createLimitedUserWithoutCustomers(): Promise<void> {
         create: {
           permission: {
             connect: {
-              code: "Platform.ViewAudit"
-            }
-          }
-        }
-      }
-    }
+              code: "Platform.ViewAudit",
+            },
+          },
+        },
+      },
+    },
   });
 
   await prisma.user.create({
@@ -594,18 +603,20 @@ async function createLimitedUserWithoutCustomers(): Promise<void> {
       normalizedUserName: "auditor",
       passwordHash: hashPassword(limitedPassword),
       status: "ACTIVE",
-      roleId: role.id
-    }
+      roleId: role.id,
+    },
   });
 }
 
-async function createIssuedInvoiceForCustomer(customerId: string): Promise<void> {
+async function createIssuedInvoiceForCustomer(
+  customerId: string,
+): Promise<void> {
   const admin = await prisma.user.findUniqueOrThrow({
     where: { normalizedUserName: "admin" },
-    select: { id: true }
+    select: { id: true },
   });
   const customer = await prisma.customer.findUniqueOrThrow({
-    where: { id: customerId }
+    where: { id: customerId },
   });
 
   await prisma.invoice.create({
@@ -626,19 +637,20 @@ async function createIssuedInvoiceForCustomer(customerId: string): Promise<void>
         postalCode: customer.fiscalPostalCode,
         city: customer.fiscalCity,
         province: customer.fiscalProvince,
-        country: customer.fiscalCountry
+        country: customer.fiscalCountry,
       },
       issueDate: new Date("2026-07-07T00:00:00.000Z"),
       operationDate: new Date("2026-07-07T00:00:00.000Z"),
       issuedAt: new Date("2026-07-07T10:00:00.000Z"),
       total: "0.00",
       createdById: admin.id,
-      issuedById: admin.id
-    }
+      issuedById: admin.id,
+    },
   });
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await deleteCustomerContactsForTest();
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
@@ -676,8 +688,20 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
     prisma.role.deleteMany(),
-    prisma.company.deleteMany()
+    prisma.company.deleteMany(),
   ]);
+}
+
+async function deleteCustomerContactsForTest(): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
+  });
 }
 
 async function resetCustomerCodeSequence(): Promise<void> {

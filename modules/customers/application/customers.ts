@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { syncGeneralContactFromCustomer } from "@/modules/customers/application/contactSync";
 import { isValidSpanishTaxId } from "@/modules/customers/application/taxIds";
 import type {
   RequestContext,
@@ -212,6 +213,15 @@ type CustomerTaxIdLockedByIssuedInvoicesResult = {
   };
 };
 
+type CustomerContactManagedSeparatelyResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY";
+    message: string;
+  };
+};
+
 type CustomerAccountingAccountResult = {
   ok: false;
   status: 409;
@@ -246,6 +256,7 @@ export type UpdateCustomerResult =
   | CustomerTaxIdAlreadyUsedResult
   | CustomerSepaMandateReferenceAlreadyUsedResult
   | CustomerTaxIdLockedByIssuedInvoicesResult
+  | CustomerContactManagedSeparatelyResult
   | {
       ok: false;
       status: 404;
@@ -418,6 +429,12 @@ export async function createCustomer(
           fiscalTreatment: true
         }
       });
+      await syncGeneralContactFromCustomer(
+        tx,
+        createdCustomer.id,
+        actor.id,
+        { phone: command.phone ?? null, email: command.email ?? null }
+      );
       const accountingAccount = await tx.accountingAccount.create({
         data: {
           fiscalYearId: fiscalYear.id,
@@ -652,6 +669,10 @@ export async function updateCustomer(
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      const lockedCustomers = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "customers" WHERE "id" = ${customerId}::uuid FOR UPDATE`
+      );
+      if (!lockedCustomers[0]) return { kind: "not-found" as const };
       const existingCustomer = await tx.customer.findUnique({
         where: { id: customerId },
         select: {
@@ -690,9 +711,13 @@ export async function updateCustomer(
         }
       });
 
-      if (!existingCustomer) {
-        return { kind: "not-found" as const };
-      }
+      if (!existingCustomer) return { kind: "not-found" as const };
+
+      if (
+        existingCustomer.email !== command.email ||
+        existingCustomer.phone !== command.phone
+      )
+        return { kind: "contact-managed-separately" as const };
 
       const taxIdChanged =
         existingCustomer.taxId !== command.taxId ||
@@ -782,6 +807,10 @@ export async function updateCustomer(
         },
         select: customerListSelect
       });
+      await syncGeneralContactFromCustomer(tx, customerId, actor.id, {
+        phone: command.phone,
+        email: command.email
+      });
 
       if (nextSepaMandate && shouldReplaceSepaMandate) {
         const createdMandate = await tx.customerSepaMandate.create({
@@ -855,6 +884,16 @@ export async function updateCustomer(
     if (result.kind === "tax-id-locked") {
       return customerTaxIdLockedByIssuedInvoices();
     }
+
+    if (result.kind === "contact-managed-separately")
+      return {
+        ok: false,
+        status: 409,
+        error: {
+          code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY",
+          message: "El contacto se modifica desde el maestro de contactos. Recarga el cliente."
+        }
+      };
 
     return {
       ok: true,

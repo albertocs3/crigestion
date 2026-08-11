@@ -3,6 +3,7 @@ import "server-only";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { syncStoreContactFromStore } from "@/modules/customers/application/contactSync";
 import type {
   RequestContext,
   SessionUser
@@ -32,7 +33,23 @@ const storeDataSchema = z.object({
   contactWhatsapp: z.string().trim().min(3).max(40).nullable(),
   contactEmail: z.string().trim().email().nullable(),
   notes: z.string().trim().min(1).max(1000).nullable()
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (
+    value.contactRole &&
+    ![
+      value.contactName,
+      value.contactPhone,
+      value.contactMobile,
+      value.contactWhatsapp,
+      value.contactEmail
+    ].some(Boolean)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["contactRole"],
+      message: "La función requiere al menos un dato identificativo del contacto."
+    });
+});
 
 export const listCustomerStoresSchema = z.object({
   status: storeStatusSchema.optional()
@@ -113,13 +130,23 @@ type CustomerStoreStatusAlreadySetResult = {
   };
 };
 
+type CustomerContactManagedSeparatelyResult = {
+  ok: false;
+  status: 409;
+  error: {
+    code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY";
+    message: string;
+  };
+};
+
 export type CreateCustomerStoreResult =
   | { ok: true; status: 201; value: CustomerStoreListItem }
   | CustomerStoreNotFoundResult;
 
 export type UpdateCustomerStoreResult =
   | { ok: true; status: 200; value: CustomerStoreListItem }
-  | CustomerStoreNotFoundResult;
+  | CustomerStoreNotFoundResult
+  | CustomerContactManagedSeparatelyResult;
 
 export type UpdateCustomerStoreStatusResult =
   | { ok: true; status: 200; value: CustomerStoreListItem }
@@ -181,13 +208,10 @@ export async function createCustomerStore(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<CreateCustomerStoreResult> {
   const result = await prisma.$transaction(async (tx) => {
-    const customer = await tx.customer.findUnique({
-      where: { id: customerId },
-      select: {
-        id: true,
-        code: true
-      }
-    });
+    const customers = await tx.$queryRaw<Array<{ id: string; code: string }>>(
+      Prisma.sql`SELECT "id", "code" FROM "customers" WHERE "id" = ${customerId}::uuid FOR UPDATE`
+    );
+    const customer = customers[0];
 
     if (!customer) {
       return { kind: "customer-not-found" as const };
@@ -210,6 +234,14 @@ export async function createCustomerStore(
         createdById: actor.id
       },
       select: customerStoreSelect
+    });
+    await syncStoreContactFromStore(tx, customerId, store.id, actor.id, {
+      name: command.contactName,
+      role: command.contactRole,
+      phone: command.contactPhone,
+      mobile: command.contactMobile,
+      whatsapp: command.contactWhatsapp,
+      email: command.contactEmail
     });
 
     await tx.auditEvent.create({
@@ -250,6 +282,10 @@ export async function updateCustomerStore(
   context: Pick<RequestContext, "correlationId"> = {}
 ): Promise<UpdateCustomerStoreResult> {
   const result = await prisma.$transaction(async (tx) => {
+    const customers = await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "customers" WHERE "id" = ${customerId}::uuid FOR UPDATE`
+    );
+    if (!customers[0]) return { kind: "customer-not-found" as const };
     const existingStore = await tx.customerStore.findFirst({
       where: { id: storeId, customerId },
       select: {
@@ -280,16 +316,17 @@ export async function updateCustomerStore(
       }
     });
 
-    if (!existingStore) {
-      const customer = await tx.customer.findUnique({
-        where: { id: customerId },
-        select: { id: true }
-      });
+    if (!existingStore) return { kind: "store-not-found" as const };
 
-      return customer
-        ? { kind: "store-not-found" as const }
-        : { kind: "customer-not-found" as const };
-    }
+    if (
+      existingStore.contactName !== command.contactName ||
+      existingStore.contactRole !== command.contactRole ||
+      existingStore.contactPhone !== command.contactPhone ||
+      existingStore.contactMobile !== command.contactMobile ||
+      existingStore.contactWhatsapp !== command.contactWhatsapp ||
+      existingStore.contactEmail !== command.contactEmail
+    )
+      return { kind: "contact-managed-separately" as const };
 
     if (command.isPrimary) {
       await tx.customerStore.updateMany({
@@ -306,6 +343,14 @@ export async function updateCustomerStore(
         updatedById: actor.id
       },
       select: customerStoreSelect
+    });
+    await syncStoreContactFromStore(tx, customerId, store.id, actor.id, {
+      name: command.contactName,
+      role: command.contactRole,
+      phone: command.contactPhone,
+      mobile: command.contactMobile,
+      whatsapp: command.contactWhatsapp,
+      email: command.contactEmail
     });
 
     await tx.auditEvent.create({
@@ -334,6 +379,16 @@ export async function updateCustomerStore(
   if (result.kind === "store-not-found") {
     return customerStoreNotFound();
   }
+
+  if (result.kind === "contact-managed-separately")
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY",
+        message: "El contacto se modifica desde el maestro de contactos. Recarga la tienda."
+      }
+    };
 
   return {
     ok: true,

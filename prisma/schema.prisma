@@ -75,6 +75,11 @@ enum CustomerStatus {
   INACTIVE
 }
 
+enum CustomerContactStatus {
+  ACTIVE
+  INACTIVE
+}
+
 enum SupplierStatus {
   ACTIVE
   INACTIVE
@@ -839,6 +844,7 @@ model Customer {
   subscriptionRenewalWaiverSnapshots SubscriptionRenewalWaiverSnapshot[]
   supportIncidents                   SupportIncident[]
   supportCommunications              SupportCommunication[]
+  contacts                           CustomerContact[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -1262,12 +1268,43 @@ model CustomerStore {
   createdBy        User              @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy        User?             @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
   supportIncidents SupportIncident[]
+  contact          CustomerContact?
 
   @@unique([id, customerId])
   @@index([customerId, status, name, id])
   @@index([customerId, isPrimary])
   @@index([createdById, createdAt])
   @@map("customer_stores")
+}
+
+model CustomerContact {
+  id          String                @id @default(uuid()) @db.Uuid
+  customerId  String                @db.Uuid
+  storeId     String?               @unique @db.Uuid
+  name        String?               @db.VarChar(160)
+  role        String?               @db.VarChar(120)
+  phone       String?               @db.VarChar(40)
+  mobile      String?               @db.VarChar(40)
+  whatsapp    String?               @db.VarChar(40)
+  email       String?               @db.VarChar(254)
+  status      CustomerContactStatus @default(ACTIVE)
+  version     Int                   @default(1)
+  createdById String                @db.Uuid
+  updatedById String?               @db.Uuid
+  createdAt   DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime              @updatedAt @db.Timestamptz(3)
+
+  customer       Customer               @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  store          CustomerStore?         @relation(fields: [storeId, customerId], references: [id, customerId], onDelete: Restrict)
+  createdBy      User                   @relation("CustomerContactsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy      User?                  @relation("CustomerContactsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  communications SupportCommunication[]
+
+  @@unique([id, customerId])
+  @@unique([storeId, customerId])
+  @@index([customerId, status, name, id])
+  @@index([createdById, createdAt])
+  @@map("customer_contacts")
 }
 
 model SupportIncidentCategory {
@@ -1463,6 +1500,7 @@ model SupportCommunication {
   id                 String                        @id @default(uuid()) @db.Uuid
   companyId          String                        @db.Uuid
   customerId         String                        @db.Uuid
+  contactId          String?                       @db.Uuid
   incidentId         String?                       @db.Uuid
   registeredByUserId String                        @db.Uuid
   channel            SupportCommunicationChannel
@@ -1478,6 +1516,7 @@ model SupportCommunication {
 
   company      Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
   customer     Customer                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  contact      CustomerContact?                 @relation(fields: [contactId, customerId], references: [id, customerId], onDelete: Restrict)
   incident     SupportIncident?                 @relation(fields: [incidentId, companyId, customerId], references: [id, companyId, customerId], onDelete: Restrict)
   registeredBy User                             @relation("SupportCommunicationsRegisteredBy", fields: [registeredByUserId], references: [id], onDelete: Restrict)
   corrections  SupportCommunicationCorrection[]
@@ -1485,6 +1524,7 @@ model SupportCommunication {
   @@unique([id, companyId])
   @@index([companyId, occurredAt, id])
   @@index([companyId, customerId, occurredAt, id])
+  @@index([contactId, occurredAt, id])
   @@index([incidentId, occurredAt, id])
   @@map("support_communications")
 }
@@ -1511,6 +1551,8 @@ model SupportCommunicationCorrection {
   correctedResult          SupportCommunicationResult
   previousIncidentId       String?                       @db.Uuid
   correctedIncidentId      String?                       @db.Uuid
+  previousContactId        String?                       @db.Uuid
+  correctedContactId       String?                       @db.Uuid
   reason                   String                        @db.VarChar(500)
   correctedAt              DateTime                      @default(now()) @db.Timestamptz(3)
 
@@ -1568,6 +1610,8 @@ model User {
   disabledMaintenances                    PlatformMaintenanceState[]                   @relation("MaintenanceDisabledBy")
   createdCustomers                        Customer[]                                   @relation("CustomersCreatedBy")
   updatedCustomers                        Customer[]                                   @relation("CustomersUpdatedBy")
+  createdCustomerContacts                 CustomerContact[]                            @relation("CustomerContactsCreatedBy")
+  updatedCustomerContacts                 CustomerContact[]                            @relation("CustomerContactsUpdatedBy")
   createdSuppliers                        Supplier[]                                   @relation("SuppliersCreatedBy")
   updatedSuppliers                        Supplier[]                                   @relation("SuppliersUpdatedBy")
   createdPurchaseInvoices                 PurchaseInvoice[]                            @relation("PurchaseInvoicesCreatedBy")

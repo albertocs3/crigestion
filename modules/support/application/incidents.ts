@@ -786,6 +786,7 @@ export async function createIncidentFromCommunication(
         id: string;
         customerId: string;
         incidentId: string | null;
+        contactId: string | null;
         registeredByUserId: string;
         channel: "PHONE" | "WHATSAPP";
         direction: "INBOUND" | "OUTBOUND";
@@ -802,7 +803,7 @@ export async function createIncidentFromCommunication(
         version: number;
       }>
     >(Prisma.sql`
-      SELECT "id", "customerId", "incidentId", "registeredByUserId", "channel", "direction",
+      SELECT "id", "customerId", "incidentId", "contactId", "registeredByUserId", "channel", "direction",
         "occurredAt", "contactNumber", "durationSeconds", "summary", "result", "version"
       FROM "support_communications"
       WHERE "id" = ${communicationId}::uuid AND "companyId" = ${companyId}::uuid
@@ -922,6 +923,8 @@ export async function createIncidentFromCommunication(
         correctedOccurredAt: communication.occurredAt,
         previousContactNumber: communication.contactNumber,
         correctedContactNumber: communication.contactNumber,
+        previousContactId: communication.contactId,
+        correctedContactId: communication.contactId,
         previousDurationSeconds: communication.durationSeconds,
         correctedDurationSeconds: communication.durationSeconds,
         previousSummary: communication.summary,

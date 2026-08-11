@@ -5,15 +5,16 @@ import { createTestAccountingFiscalYear } from "@/tests/helpers/accountingFiscal
 import { createCustomer } from "@/modules/customers/application/customers";
 import {
   createCustomerStore,
+  createCustomerStoreSchema,
   listCustomerStores,
   updateCustomerStore,
-  updateCustomerStoreStatus
+  updateCustomerStoreStatus,
 } from "@/modules/customers/application/stores";
 import { login } from "@/modules/platform/application/auth";
 import {
   hashRequestBody,
   initializePlatform,
-  type InitializeCommand
+  type InitializeCommand,
 } from "@/modules/platform/application/installation";
 
 const adminPassword = "Cambiar-esta-clave-2026";
@@ -21,13 +22,13 @@ const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
     taxId: "B12345678",
-    email: "admin@example.test"
+    email: "admin@example.test",
   },
   administrator: {
     displayName: "Administrador",
     userName: "admin",
-    password: adminPassword
-  }
+    password: adminPassword,
+  },
 };
 
 describe("customer stores application service", () => {
@@ -51,12 +52,22 @@ describe("customer stores application service", () => {
       throw new Error(customer.error.code);
     }
 
-    const result = await createCustomerStore(customer.value.id, storePayload(), actor, {
-      correlationId: "store-test-0001"
-    });
+    const result = await createCustomerStore(
+      customer.value.id,
+      storePayload(),
+      actor,
+      {
+        correlationId: "store-test-0001",
+      },
+    );
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_STORE_CREATED" }
+      where: { eventType: "CUSTOMER_STORE_CREATED" },
     });
+    const contact = result.ok
+      ? await prisma.customerContact.findUniqueOrThrow({
+          where: { storeId: result.value.id },
+        })
+      : null;
     const auditPayload = JSON.stringify(auditEvent.payload);
 
     expect(result).toMatchObject({
@@ -66,8 +77,8 @@ describe("customer stores application service", () => {
         code: "1",
         name: "Tienda Centro",
         status: "ACTIVE",
-        isPrimary: true
-      }
+        isPrimary: true,
+      },
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
@@ -75,11 +86,28 @@ describe("customer stores application service", () => {
       customerCode: customer.value.code,
       storeCode: "1",
       isPrimary: true,
-      correlationId: "store-test-0001"
+      correlationId: "store-test-0001",
+    });
+    expect(contact).toMatchObject({
+      name: "Contacto Tienda",
+      phone: "+34910000003",
+      status: "ACTIVE",
+      version: 1,
     });
     expect(auditPayload).not.toContain("Calle Tienda");
     expect(auditPayload).not.toContain("tienda@example.test");
     expect(auditPayload).not.toContain("Contacto Tienda");
+    expect(
+      createCustomerStoreSchema.safeParse(
+        storePayload({
+          contactName: null,
+          contactPhone: null,
+          contactMobile: null,
+          contactWhatsapp: null,
+          contactEmail: null,
+        }),
+      ).success,
+    ).toBe(false);
   });
 
   it("keeps a single primary store per customer", async () => {
@@ -90,11 +118,15 @@ describe("customer stores application service", () => {
       throw new Error(customer.error.code);
     }
 
-    const first = await createCustomerStore(customer.value.id, storePayload(), actor);
+    const first = await createCustomerStore(
+      customer.value.id,
+      storePayload(),
+      actor,
+    );
     const second = await createCustomerStore(
       customer.value.id,
       storePayload({ name: "Tienda Norte" }),
-      actor
+      actor,
     );
 
     if (!first.ok || !second.ok) {
@@ -106,8 +138,8 @@ describe("customer stores application service", () => {
     expect(stores?.stores).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: first.value.id, isPrimary: false }),
-        expect.objectContaining({ id: second.value.id, isPrimary: true })
-      ])
+        expect.objectContaining({ id: second.value.id, isPrimary: true }),
+      ]),
     );
   });
 
@@ -119,7 +151,11 @@ describe("customer stores application service", () => {
       throw new Error(customer.error.code);
     }
 
-    const created = await createCustomerStore(customer.value.id, storePayload(), actor);
+    const created = await createCustomerStore(
+      customer.value.id,
+      storePayload(),
+      actor,
+    );
 
     if (!created.ok) {
       throw new Error(created.error.code);
@@ -133,13 +169,15 @@ describe("customer stores application service", () => {
         isPrimary: false,
         addressLine: "Avenida Tienda 2",
         email: "nueva-tienda@example.test",
-        contactName: "Nuevo Contacto"
       }),
       actor,
-      { correlationId: "store-update-0001" }
+      { correlationId: "store-update-0001" },
     );
     const auditEvent = await prisma.auditEvent.findFirstOrThrow({
-      where: { eventType: "CUSTOMER_STORE_UPDATED" }
+      where: { eventType: "CUSTOMER_STORE_UPDATED" },
+    });
+    const contact = await prisma.customerContact.findUniqueOrThrow({
+      where: { storeId: created.value.id },
     });
     const auditPayload = JSON.stringify(auditEvent.payload);
 
@@ -151,9 +189,9 @@ describe("customer stores application service", () => {
         isPrimary: false,
         email: "nueva-tienda@example.test",
         contact: {
-          name: "Nuevo Contacto"
-        }
-      }
+          name: "Contacto Tienda",
+        },
+      },
     });
     expect(auditEvent.payload).toMatchObject({
       actorUserId: actor.id,
@@ -165,13 +203,42 @@ describe("customer stores application service", () => {
         "isPrimary",
         "addressLine",
         "email",
-        "contactName"
       ],
-      correlationId: "store-update-0001"
+      correlationId: "store-update-0001",
+    });
+    expect(contact).toMatchObject({
+      name: "Contacto Tienda",
+      email: "contacto@example.test",
+      version: 1,
     });
     expect(auditPayload).not.toContain("Avenida Tienda");
     expect(auditPayload).not.toContain("nueva-tienda@example.test");
     expect(auditPayload).not.toContain("Nuevo Contacto");
+  });
+
+  it("rejects contact changes from the legacy store editor", async () => {
+    const actor = await loginAsAdmin();
+    const customer = await createCustomer(customerPayload(), actor);
+    if (!customer.ok) throw new Error(customer.error.code);
+    const created = await createCustomerStore(
+      customer.value.id,
+      storePayload(),
+      actor,
+    );
+    if (!created.ok) throw new Error(created.error.code);
+
+    expect(
+      await updateCustomerStore(
+        customer.value.id,
+        created.value.id,
+        storePayload({ contactName: "Valor obsoleto" }),
+        actor,
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CUSTOMER_CONTACT_MANAGED_SEPARATELY" },
+    });
   });
 
   it("changes store status", async () => {
@@ -182,7 +249,11 @@ describe("customer stores application service", () => {
       throw new Error(customer.error.code);
     }
 
-    const created = await createCustomerStore(customer.value.id, storePayload(), actor);
+    const created = await createCustomerStore(
+      customer.value.id,
+      storePayload(),
+      actor,
+    );
 
     if (!created.ok) {
       throw new Error(created.error.code);
@@ -192,7 +263,7 @@ describe("customer stores application service", () => {
       customer.value.id,
       created.value.id,
       { action: "deactivate" },
-      actor
+      actor,
     );
 
     expect(result).toMatchObject({
@@ -200,8 +271,8 @@ describe("customer stores application service", () => {
       status: 200,
       value: {
         id: created.value.id,
-        status: "INACTIVE"
-      }
+        status: "INACTIVE",
+      },
     });
   });
 });
@@ -225,12 +296,12 @@ function customerPayload(): Parameters<typeof createCustomer>[0] {
     paymentDays: null,
     paymentFixedDay: null,
     creditLimit: null,
-    notes: "Observacion interna"
+    notes: "Observacion interna",
   };
 }
 
 function storePayload(
-  overrides: Partial<Parameters<typeof createCustomerStore>[1]> = {}
+  overrides: Partial<Parameters<typeof createCustomerStore>[1]> = {},
 ): Parameters<typeof createCustomerStore>[1] {
   return {
     name: "Tienda Centro",
@@ -250,14 +321,14 @@ function storePayload(
     contactWhatsapp: "+34600000002",
     contactEmail: "contacto@example.test",
     notes: "Observacion tienda",
-    ...overrides
+    ...overrides,
   };
 }
 
 async function loginAsAdmin() {
   const result = await login({
     userName: "admin",
-    password: adminPassword
+    password: adminPassword,
   });
 
   if (!result.ok) {
@@ -272,7 +343,7 @@ async function initializeForStores(): Promise<void> {
   const result = await initializePlatform(
     baseCommand,
     randomUUID(),
-    hashRequestBody(rawBody)
+    hashRequestBody(rawBody),
   );
 
   if (!result.ok) {
@@ -281,6 +352,7 @@ async function initializeForStores(): Promise<void> {
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await deleteCustomerContactsForTest();
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
@@ -316,8 +388,20 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
     prisma.role.deleteMany(),
-    prisma.company.deleteMany()
+    prisma.company.deleteMany(),
   ]);
+}
+
+async function deleteCustomerContactsForTest(): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
+  });
 }
 
 async function resetSequences(): Promise<void> {

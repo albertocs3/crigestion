@@ -179,21 +179,21 @@ export function StoreFields({
       <div className="form-two-columns">
         <label>
           Contacto
-          <input name="contactName" maxLength={160} defaultValue={defaults?.contact.name ?? ""} />
+          <input name="contactName" maxLength={160} readOnly={Boolean(defaults)} defaultValue={defaults?.contact.name ?? ""} />
         </label>
         <label>
           Funcion
-          <input name="contactRole" maxLength={120} defaultValue={defaults?.contact.role ?? ""} />
+          <input name="contactRole" maxLength={120} readOnly={Boolean(defaults)} defaultValue={defaults?.contact.role ?? ""} />
         </label>
       </div>
       <div className="form-three-columns">
         <label>
           Telefono contacto
-          <input name="contactPhone" maxLength={40} defaultValue={defaults?.contact.phone ?? ""} />
+          <input name="contactPhone" maxLength={40} readOnly={Boolean(defaults)} defaultValue={defaults?.contact.phone ?? ""} />
         </label>
         <label>
           Movil contacto
-          <input name="contactMobile" maxLength={40} defaultValue={defaults?.contact.mobile ?? ""} />
+          <input name="contactMobile" maxLength={40} readOnly={Boolean(defaults)} defaultValue={defaults?.contact.mobile ?? ""} />
         </label>
         <label>
           Email contacto
@@ -201,6 +201,7 @@ export function StoreFields({
             name="contactEmail"
             type="email"
             maxLength={254}
+            readOnly={Boolean(defaults)}
             defaultValue={defaults?.contact.email ?? ""}
           />
         </label>
@@ -210,6 +211,7 @@ export function StoreFields({
         <input
           name="contactWhatsapp"
           maxLength={40}
+          readOnly={Boolean(defaults)}
           defaultValue={defaults?.contact.whatsapp ?? ""}
         />
       </label>

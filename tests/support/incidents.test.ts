@@ -2,13 +2,47 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { createCustomer } from "@/modules/customers/application/customers";
+import {
+  changeCustomerContact,
+  createCustomerContact,
+  createCustomerContactSchema,
+  hashCustomerContactRequest,
+  listCustomerContacts,
+} from "@/modules/customers/application/contacts";
 import { login } from "@/modules/platform/application/auth";
-import { hashRequestBody, initializePlatform, type InitializeCommand } from "@/modules/platform/application/installation";
-import { createSupportAction, hashSupportActionRequest } from "@/modules/support/application/actions";
-import { createIncidentFromCommunication, createSupportCategory, createSupportIncident, getSupportIncident, hashSupportRequest, listSupportIncidents, listSupportReferences } from "@/modules/support/application/incidents";
-import { hashSupportStatusTransitionRequest, transitionSupportIncident } from "@/modules/support/application/statusTransitions";
-import { changeSupportParticipants, hashSupportParticipantRequest } from "@/modules/support/application/participants";
-import { correctSupportCommunication, createSupportCommunication, createSupportCommunicationSchema, getSupportCommunication, hashSupportCommunicationRequest } from "@/modules/support/application/communications";
+import {
+  hashRequestBody,
+  initializePlatform,
+  type InitializeCommand,
+} from "@/modules/platform/application/installation";
+import {
+  createSupportAction,
+  hashSupportActionRequest,
+} from "@/modules/support/application/actions";
+import {
+  createIncidentFromCommunication,
+  createSupportCategory,
+  createSupportIncident,
+  getSupportIncident,
+  hashSupportRequest,
+  listSupportIncidents,
+  listSupportReferences,
+} from "@/modules/support/application/incidents";
+import {
+  hashSupportStatusTransitionRequest,
+  transitionSupportIncident,
+} from "@/modules/support/application/statusTransitions";
+import {
+  changeSupportParticipants,
+  hashSupportParticipantRequest,
+} from "@/modules/support/application/participants";
+import {
+  correctSupportCommunication,
+  createSupportCommunication,
+  createSupportCommunicationSchema,
+  getSupportCommunication,
+  hashSupportCommunicationRequest,
+} from "@/modules/support/application/communications";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -40,7 +74,8 @@ describe("support incidents application", () => {
       categoryId: references.categories[0]!.id,
       responsibleUserId: actor.id,
       title: "Error al acceder al servicio",
-      description: "El usuario informa de un error reproducible al iniciar sesión.",
+      description:
+        "El usuario informa de un error reproducible al iniciar sesión.",
       priority: "URGENT" as const,
     };
     const context = {
@@ -116,8 +151,18 @@ describe("support incidents application", () => {
       scope: `incident:${incident.value.id}:action:create`,
       correlationId: "support-action-0001",
     };
-    const created = await createSupportAction(incident.value.id, actionCommand, actor, context);
-    const replay = await createSupportAction(incident.value.id, actionCommand, actor, context);
+    const created = await createSupportAction(
+      incident.value.id,
+      actionCommand,
+      actor,
+      context,
+    );
+    const replay = await createSupportAction(
+      incident.value.id,
+      actionCommand,
+      actor,
+      context,
+    );
     expect(created).toMatchObject({
       ok: true,
       status: 201,
@@ -138,7 +183,9 @@ describe("support incidents application", () => {
     expect(stored).toMatchObject({ status: "IN_PROGRESS", version: 2 });
     expect(stored.firstActionAt?.toISOString()).toBe(actionCommand.performedAt);
     expect(stored.actions).toHaveLength(1);
-    expect(stored.events.filter((event) => event.eventType === "ACTION_ADDED")).toHaveLength(1);
+    expect(
+      stored.events.filter((event) => event.eventType === "ACTION_ADDED"),
+    ).toHaveLength(1);
     const audit = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "SUPPORT_INCIDENT_ACTION_ADDED" },
     });
@@ -173,7 +220,10 @@ describe("support incidents application", () => {
         await tx.supportIncident.update({
           where: { id: stored.id },
           data: {
-            firstActionAt: stored.firstActionAt && stored.firstActionAt < performedAt ? stored.firstActionAt : performedAt,
+            firstActionAt:
+              stored.firstActionAt && stored.firstActionAt < performedAt
+                ? stored.firstActionAt
+                : performedAt,
             version: { increment: 1 },
           },
         });
@@ -232,14 +282,19 @@ describe("support incidents application", () => {
       text: "Intento de actuación no asignada.",
       performedAt: new Date().toISOString(),
     };
-    const denied = await createSupportAction(incident.value.id, command, technician, {
-      idempotencyKey: randomUUID(),
-      requestHash: hashSupportActionRequest({
-        incidentId: incident.value.id,
-        ...command,
-      }),
-      scope: `incident:${incident.value.id}:action:create`,
-    });
+    const denied = await createSupportAction(
+      incident.value.id,
+      command,
+      technician,
+      {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportActionRequest({
+          incidentId: incident.value.id,
+          ...command,
+        }),
+        scope: `incident:${incident.value.id}:action:create`,
+      },
+    );
     expect(denied).toMatchObject({
       ok: false,
       status: 403,
@@ -280,20 +335,30 @@ describe("support incidents application", () => {
       expectedVersion: 2,
       solution: "Se corrige la configuración y se valida el acceso.",
     };
-    const resolved = await transitionSupportIncident(incident.value.id, resolveCommand, actor, transitionContext(incident.value.id, resolveCommand));
+    const resolved = await transitionSupportIncident(
+      incident.value.id,
+      resolveCommand,
+      actor,
+      transitionContext(incident.value.id, resolveCommand),
+    );
     expect(resolved).toMatchObject({
       ok: true,
       value: { incident: { status: "RESOLVED", version: 3 } },
     });
     const finalizedCommand = { ...command, expectedVersion: 3 };
-    const finalized = await createSupportAction(incident.value.id, finalizedCommand, actor, {
-      idempotencyKey: randomUUID(),
-      requestHash: hashSupportActionRequest({
-        incidentId: incident.value.id,
-        ...finalizedCommand,
-      }),
-      scope: `incident:${incident.value.id}:action:create`,
-    });
+    const finalized = await createSupportAction(
+      incident.value.id,
+      finalizedCommand,
+      actor,
+      {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportActionRequest({
+          incidentId: incident.value.id,
+          ...finalizedCommand,
+        }),
+        scope: `incident:${incident.value.id}:action:create`,
+      },
+    );
     expect(finalized).toMatchObject({
       ok: false,
       status: 409,
@@ -326,7 +391,14 @@ describe("support incidents application", () => {
       targetStatus: "PENDING_CUSTOMER" as const,
       reason: "Esperamos confirmación del cliente.",
     };
-    expect(await transitionSupportIncident(incident.value.id, pending, actor, transitionContext(incident.value.id, pending))).toMatchObject({
+    expect(
+      await transitionSupportIncident(
+        incident.value.id,
+        pending,
+        actor,
+        transitionContext(incident.value.id, pending),
+      ),
+    ).toMatchObject({
       ok: true,
       status: 201,
       value: { incident: { status: "PENDING_CUSTOMER", version: 2 } },
@@ -336,7 +408,14 @@ describe("support incidents application", () => {
       expectedVersion: 2,
       reason: "El cliente aporta la información solicitada.",
     };
-    expect(await transitionSupportIncident(incident.value.id, resume, actor, transitionContext(incident.value.id, resume))).toMatchObject({
+    expect(
+      await transitionSupportIncident(
+        incident.value.id,
+        resume,
+        actor,
+        transitionContext(incident.value.id, resume),
+      ),
+    ).toMatchObject({
       ok: true,
       value: { incident: { status: "IN_PROGRESS", version: 3 } },
     });
@@ -346,7 +425,14 @@ describe("support incidents application", () => {
       closeReason: "OTHER" as const,
       detail: "Caso absorbido por una actuación preventiva.",
     };
-    expect(await transitionSupportIncident(incident.value.id, close, actor, transitionContext(incident.value.id, close))).toMatchObject({
+    expect(
+      await transitionSupportIncident(
+        incident.value.id,
+        close,
+        actor,
+        transitionContext(incident.value.id, close),
+      ),
+    ).toMatchObject({
       ok: true,
       value: { incident: { status: "CLOSED", version: 4 } },
     });
@@ -355,8 +441,18 @@ describe("support incidents application", () => {
       expectedVersion: 4,
       reason: "El problema vuelve a reproducirse.",
     };
-    const reopened = await transitionSupportIncident(incident.value.id, reopen, actor, transitionContext(incident.value.id, reopen));
-    const replay = await transitionSupportIncident(incident.value.id, reopen, actor, transitionContext(incident.value.id, reopen, "reopen-key"));
+    const reopened = await transitionSupportIncident(
+      incident.value.id,
+      reopen,
+      actor,
+      transitionContext(incident.value.id, reopen),
+    );
+    const replay = await transitionSupportIncident(
+      incident.value.id,
+      reopen,
+      actor,
+      transitionContext(incident.value.id, reopen, "reopen-key"),
+    );
     expect(reopened).toMatchObject({
       ok: true,
       value: { incident: { status: "IN_PROGRESS", version: 5 } },
@@ -399,51 +495,269 @@ describe("support incidents application", () => {
     const actor = await admin();
     const customer = await createCustomerRecord(actor);
     const refs = await listSupportReferences();
-    const role = await prisma.role.create({ data: { code: "SupportCollaborator", name: "Colaborador soporte", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
-    const user = await prisma.user.create({ data: { displayName: "Técnica colaboradora", userName: "collaborator", normalizedUserName: "collaborator", passwordHash: "not-used", roleId: role.id } });
-    const collaboratorActor = { id: user.id, displayName: user.displayName, userName: user.userName, role: { code: role.code, name: role.name }, permissions: ["Support.View", "Support.AddActions"] };
-    const create = { customerId: customer.id, storeId: null, categoryId: refs.categories[0]!.id, responsibleUserId: actor.id, title: "Trabajo compartido", description: "Intervención coordinada entre dos técnicas.", priority: "MEDIUM" as const };
-    const incident = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    const role = await prisma.role.create({
+      data: {
+        code: "SupportCollaborator",
+        name: "Colaborador soporte",
+        permissions: {
+          create: ["Support.View", "Support.AddActions"].map((code) => ({
+            permission: { connect: { code } },
+          })),
+        },
+      },
+    });
+    const user = await prisma.user.create({
+      data: {
+        displayName: "Técnica colaboradora",
+        userName: "collaborator",
+        normalizedUserName: "collaborator",
+        passwordHash: "not-used",
+        roleId: role.id,
+      },
+    });
+    const collaboratorActor = {
+      id: user.id,
+      displayName: user.displayName,
+      userName: user.userName,
+      role: { code: role.code, name: role.name },
+      permissions: ["Support.View", "Support.AddActions"],
+    };
+    const create = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: refs.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Trabajo compartido",
+      description: "Intervención coordinada entre dos técnicas.",
+      priority: "MEDIUM" as const,
+    };
+    const incident = await createSupportIncident(create, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportRequest(create),
+      scope: "incident:create",
+    });
     if (!incident.ok) throw new Error(incident.error.code);
-    const add = { action: "add-collaborator" as const, expectedVersion: 1, userId: user.id };
-    const added = await changeSupportParticipants(incident.value.id, add, actor, participantContext(incident.value.id, add));
-    expect(added).toMatchObject({ ok: true, value: { incident: { version: 2 }, change: { type: "COLLABORATOR_ADDED" } } });
-    const action = { expectedVersion: 2, text: "La colaboradora reproduce y documenta el problema.", performedAt: new Date().toISOString() };
-    expect(await createSupportAction(incident.value.id, action, collaboratorActor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: incident.value.id, ...action }), scope: `incident:${incident.value.id}:action:create` })).toMatchObject({ ok: true, value: { incident: { version: 3 } } });
+    const add = {
+      action: "add-collaborator" as const,
+      expectedVersion: 1,
+      userId: user.id,
+    };
+    const added = await changeSupportParticipants(
+      incident.value.id,
+      add,
+      actor,
+      participantContext(incident.value.id, add),
+    );
+    expect(added).toMatchObject({
+      ok: true,
+      value: {
+        incident: { version: 2 },
+        change: { type: "COLLABORATOR_ADDED" },
+      },
+    });
+    const action = {
+      expectedVersion: 2,
+      text: "La colaboradora reproduce y documenta el problema.",
+      performedAt: new Date().toISOString(),
+    };
+    expect(
+      await createSupportAction(incident.value.id, action, collaboratorActor, {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportActionRequest({
+          incidentId: incident.value.id,
+          ...action,
+        }),
+        scope: `incident:${incident.value.id}:action:create`,
+      }),
+    ).toMatchObject({ ok: true, value: { incident: { version: 3 } } });
     const collaboratorId = added.ok ? added.value.change.collaboratorId! : "";
-    const remove = { action: "remove-collaborator" as const, expectedVersion: 3, collaboratorId, reason: "Finaliza su intervención especializada." };
-    expect(await changeSupportParticipants(incident.value.id, remove, actor, participantContext(incident.value.id, remove))).toMatchObject({ ok: true, value: { incident: { version: 4 }, change: { type: "COLLABORATOR_REMOVED" } } });
+    const remove = {
+      action: "remove-collaborator" as const,
+      expectedVersion: 3,
+      collaboratorId,
+      reason: "Finaliza su intervención especializada.",
+    };
+    expect(
+      await changeSupportParticipants(
+        incident.value.id,
+        remove,
+        actor,
+        participantContext(incident.value.id, remove),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        incident: { version: 4 },
+        change: { type: "COLLABORATOR_REMOVED" },
+      },
+    });
     const deniedAction = { ...action, expectedVersion: 4 };
-    expect(await createSupportAction(incident.value.id, deniedAction, collaboratorActor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: incident.value.id, ...deniedAction }), scope: `incident:${incident.value.id}:action:create` })).toMatchObject({ ok: false, status: 403 });
-    const reassign = { action: "reassign" as const, expectedVersion: 4, responsibleUserId: user.id, reason: "Asume la continuidad y seguimiento del caso." };
-    expect(await changeSupportParticipants(incident.value.id, reassign, actor, participantContext(incident.value.id, reassign))).toMatchObject({ ok: true, value: { incident: { version: 5, responsibleUserId: user.id }, change: { type: "RESPONSIBLE_CHANGED" } } });
+    expect(
+      await createSupportAction(
+        incident.value.id,
+        deniedAction,
+        collaboratorActor,
+        {
+          idempotencyKey: randomUUID(),
+          requestHash: hashSupportActionRequest({
+            incidentId: incident.value.id,
+            ...deniedAction,
+          }),
+          scope: `incident:${incident.value.id}:action:create`,
+        },
+      ),
+    ).toMatchObject({ ok: false, status: 403 });
+    const reassign = {
+      action: "reassign" as const,
+      expectedVersion: 4,
+      responsibleUserId: user.id,
+      reason: "Asume la continuidad y seguimiento del caso.",
+    };
+    expect(
+      await changeSupportParticipants(
+        incident.value.id,
+        reassign,
+        actor,
+        participantContext(incident.value.id, reassign),
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        incident: { version: 5, responsibleUserId: user.id },
+        change: { type: "RESPONSIBLE_CHANGED" },
+      },
+    });
     const stored = await getSupportIncident(incident.value.id, actor);
     expect(stored?.collaborators).toHaveLength(1);
     expect(stored?.collaborators[0]?.removedAt).not.toBeNull();
     expect(stored?.participantChanges).toHaveLength(3);
-    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_RESPONSIBLE_CHANGED" } });
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_INCIDENT_RESPONSIBLE_CHANGED" },
+    });
     expect(JSON.stringify(audit.payload)).not.toContain(reassign.reason);
-    await expect(prisma.supportIncidentParticipantChange.update({ where: { id: stored!.participantChanges[0]!.id }, data: { reason: "Alterado" } })).rejects.toThrow();
+    await expect(
+      prisma.supportIncidentParticipantChange.update({
+        where: { id: stored!.participantChanges[0]!.id },
+        data: { reason: "Alterado" },
+      }),
+    ).rejects.toThrow();
   });
 
   it("records and corrects communications while preserving the original values", async () => {
-    const actor = await admin(); const customer = await createCustomerRecord(actor); const occurredAt = new Date().toISOString();
-    const command = { customerId: customer.id, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt, contactNumber: "+34910000001", durationSeconds: 180, summary: "El cliente solicita información sobre el servicio.", result: "INFORMATION_PROVIDED" as const, incidentId: null };
-    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(command), scope: "communication:create", correlationId: "communication-create-1" };
-    const created = await createSupportCommunication(command, actor, context); const replay = await createSupportCommunication(command, actor, context);
-    expect(created).toMatchObject({ ok: true, status: 201, value: { version: 1, summary: command.summary } }); expect(replay).toMatchObject({ ok: true, status: 200 }); if (!created.ok) throw new Error("not created");
-    const storedReplay = await prisma.idempotencyRecord.findFirstOrThrow({ where: { requestHash: context.requestHash } });
-    await prisma.idempotencyRecord.update({ where: { id: storedReplay.id }, data: { responseBody: { id: created.value.id, version: 1 } } });
-    expect(await createSupportCommunication(command, actor, context)).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID" } });
-    const correction = { expectedVersion: 1, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt, contactNumber: "+34910000002", durationSeconds: 240, summary: "El cliente recibe la información completa y confirma recepción.", result: "RESOLVED_NO_FOLLOW_UP" as const, incidentId: null, reason: "Se corrigen número, duración y resultado tras revisar la nota." };
-    const corrected = await correctSupportCommunication(created.value.id, correction, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: created.value.id, ...correction }), scope: `communication:${created.value.id}:correct`, correlationId: "communication-correct-1" });
-    expect(corrected).toMatchObject({ ok: true, value: { version: 2, contactNumber: correction.contactNumber, corrections: [{ previous: { summary: command.summary }, corrected: { summary: correction.summary } }] } });
-    const detail = await getSupportCommunication(created.value.id, actor); expect(detail?.corrections).toHaveLength(1);
-    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_COMMUNICATION_CORRECTED" } }); expect(JSON.stringify(audit.payload)).not.toContain(correction.reason); expect(JSON.stringify(audit.payload)).not.toContain(correction.summary);
-    const readAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_COMMUNICATION_VIEWED" } }); expect(JSON.stringify(readAudit.payload)).not.toContain(command.summary); expect(JSON.stringify(readAudit.payload)).not.toContain(command.contactNumber);
-    expect(createSupportCommunicationSchema.safeParse({ ...command, result: "REQUIRES_FOLLOW_UP" }).success).toBe(false);
-    await expect(prisma.supportCommunication.delete({ where: { id: created.value.id } })).rejects.toThrow();
-    await expect(prisma.supportCommunication.update({ where: { id: created.value.id }, data: { summary: "Cambio sin evidencia", version: 3 } })).rejects.toThrow();
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const occurredAt = new Date().toISOString();
+    const command = {
+      customerId: customer.id,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt,
+      contactId: null,
+      contactNumber: "+34910000001",
+      durationSeconds: 180,
+      summary: "El cliente solicita información sobre el servicio.",
+      result: "INFORMATION_PROVIDED" as const,
+      incidentId: null,
+    };
+    const context = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportCommunicationRequest(command),
+      scope: "communication:create",
+      correlationId: "communication-create-1",
+    };
+    const created = await createSupportCommunication(command, actor, context);
+    const replay = await createSupportCommunication(command, actor, context);
+    expect(created).toMatchObject({
+      ok: true,
+      status: 201,
+      value: { version: 1, summary: command.summary },
+    });
+    expect(replay).toMatchObject({ ok: true, status: 200 });
+    if (!created.ok) throw new Error("not created");
+    const storedReplay = await prisma.idempotencyRecord.findFirstOrThrow({
+      where: { requestHash: context.requestHash },
+    });
+    await prisma.idempotencyRecord.update({
+      where: { id: storedReplay.id },
+      data: { responseBody: { id: created.value.id, version: 1 } },
+    });
+    expect(
+      await createSupportCommunication(command, actor, context),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "IDEMPOTENCY_REPLAY_INVALID" },
+    });
+    const correction = {
+      expectedVersion: 1,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt,
+      contactId: null,
+      contactNumber: "+34910000002",
+      durationSeconds: 240,
+      summary:
+        "El cliente recibe la información completa y confirma recepción.",
+      result: "RESOLVED_NO_FOLLOW_UP" as const,
+      incidentId: null,
+      reason: "Se corrigen número, duración y resultado tras revisar la nota.",
+    };
+    const corrected = await correctSupportCommunication(
+      created.value.id,
+      correction,
+      actor,
+      {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportCommunicationRequest({
+          communicationId: created.value.id,
+          ...correction,
+        }),
+        scope: `communication:${created.value.id}:correct`,
+        correlationId: "communication-correct-1",
+      },
+    );
+    expect(corrected).toMatchObject({
+      ok: true,
+      value: {
+        version: 2,
+        contactNumber: correction.contactNumber,
+        corrections: [
+          {
+            previous: { summary: command.summary },
+            corrected: { summary: correction.summary },
+          },
+        ],
+      },
+    });
+    const detail = await getSupportCommunication(created.value.id, actor);
+    expect(detail?.corrections).toHaveLength(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_COMMUNICATION_CORRECTED" },
+    });
+    expect(JSON.stringify(audit.payload)).not.toContain(correction.reason);
+    expect(JSON.stringify(audit.payload)).not.toContain(correction.summary);
+    const readAudit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_COMMUNICATION_VIEWED" },
+    });
+    expect(JSON.stringify(readAudit.payload)).not.toContain(command.summary);
+    expect(JSON.stringify(readAudit.payload)).not.toContain(
+      command.contactNumber,
+    );
+    expect(
+      createSupportCommunicationSchema.safeParse({
+        ...command,
+        result: "REQUIRES_FOLLOW_UP",
+      }).success,
+    ).toBe(false);
+    await expect(
+      prisma.supportCommunication.delete({ where: { id: created.value.id } }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.supportCommunication.update({
+        where: { id: created.value.id },
+        data: { summary: "Cambio sin evidencia", version: 3 },
+      }),
+    ).rejects.toThrow();
   });
 
   it("creates an incident from a communication atomically and replays it", async () => {
@@ -455,8 +769,10 @@ describe("support incidents application", () => {
       direction: "INBOUND" as const,
       occurredAt: new Date().toISOString(),
       contactNumber: "+34910000005",
+      contactId: null,
       durationSeconds: null,
-      summary: "El cliente comunica una incidencia que requiere seguimiento técnico.",
+      summary:
+        "El cliente comunica una incidencia que requiere seguimiento técnico.",
       result: "INFORMATION_PROVIDED" as const,
       incidentId: null,
     };
@@ -511,10 +827,11 @@ describe("support incidents application", () => {
     });
     expect(replay).toMatchObject({ ok: true, status: 200 });
     if (!created.ok) throw new Error("incident not created");
-    const storedCommunication = await prisma.supportCommunication.findUniqueOrThrow({
-      where: { id: communication.value.id },
-      include: { corrections: true },
-    });
+    const storedCommunication =
+      await prisma.supportCommunication.findUniqueOrThrow({
+        where: { id: communication.value.id },
+        include: { corrections: true },
+      });
     expect(storedCommunication).toMatchObject({
       incidentId: created.value.id,
       result: "REFERRED_TO_INCIDENT",
@@ -542,6 +859,179 @@ describe("support incidents application", () => {
     expect(JSON.stringify(audit.payload)).not.toContain(
       communicationCommand.contactNumber,
     );
+  });
+
+  it("manages a structured customer contact and links its number to a communication", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor, {
+      email: undefined,
+      phone: undefined,
+    });
+    const contactCommand = {
+      storeId: null,
+      name: "Ana Soporte",
+      role: "Operaciones",
+      phone: "+34910000007",
+      mobile: null,
+      whatsapp: "+34600000007",
+      email: "ana@example.test",
+    };
+    const contactContext = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashCustomerContactRequest(contactCommand),
+      scope: `customer:${customer.id}:contact:create`,
+    };
+    const contact = await createCustomerContact(
+      customer.id,
+      contactCommand,
+      actor,
+      contactContext,
+    );
+    const replay = await createCustomerContact(
+      customer.id,
+      contactCommand,
+      actor,
+      contactContext,
+    );
+    expect(contact).toMatchObject({
+      ok: true,
+      status: 201,
+      value: { version: 1, name: "Ana Soporte" },
+    });
+    expect(replay).toMatchObject({ ok: true, status: 200 });
+    if (!contact.ok) throw new Error("contact not created");
+    const duplicateCommand = { ...contactCommand, name: "Segundo contacto" };
+    expect(
+      await createCustomerContact(customer.id, duplicateCommand, actor, {
+        idempotencyKey: randomUUID(),
+        requestHash: hashCustomerContactRequest(duplicateCommand),
+        scope: `customer:${customer.id}:contact:create`,
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: 409,
+      error: { code: "CUSTOMER_CONTACT_SLOT_OCCUPIED" },
+    });
+    const communication = {
+      customerId: customer.id,
+      channel: "PHONE" as const,
+      direction: "OUTBOUND" as const,
+      occurredAt: new Date().toISOString(),
+      contactId: contact.value.id,
+      contactNumber: contactCommand.phone,
+      durationSeconds: 60,
+      summary: "Seguimiento realizado con el contacto maestro.",
+      result: "INFORMATION_PROVIDED" as const,
+      incidentId: null,
+    };
+    const linked = await createSupportCommunication(communication, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportCommunicationRequest(communication),
+      scope: "communication:create",
+    });
+    expect(linked).toMatchObject({
+      ok: true,
+      value: {
+        contact: { id: contact.value.id },
+        contactNumber: contactCommand.phone,
+      },
+    });
+    expect(
+      await createSupportCommunication(
+        { ...communication, contactNumber: "+34919999999" },
+        actor,
+        {
+          idempotencyKey: randomUUID(),
+          requestHash: hashSupportCommunicationRequest({
+            ...communication,
+            contactNumber: "+34919999999",
+          }),
+          scope: "communication:create",
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      status: 422,
+      error: { code: "SUPPORT_COMMUNICATION_CONTACT_INVALID" },
+    });
+    const update = {
+      action: "update" as const,
+      contact: {
+        expectedVersion: 1,
+        name: "Ana Soporte",
+        role: "Coordinación",
+        phone: "+34910000009",
+        mobile: null,
+        whatsapp: contactCommand.whatsapp,
+        email: contactCommand.email,
+      },
+    };
+    expect(
+      await changeCustomerContact(
+        customer.id,
+        contact.value.id,
+        update,
+        actor,
+        {
+          idempotencyKey: randomUUID(),
+          requestHash: hashCustomerContactRequest(update),
+          scope: `customer:${customer.id}:contact:${contact.value.id}:change`,
+        },
+      ),
+    ).toMatchObject({ ok: true, value: { version: 2, role: "Coordinación" } });
+    expect(
+      await prisma.customer.findUniqueOrThrow({ where: { id: customer.id } }),
+    ).toMatchObject({ phone: "+34910000009", email: contactCommand.email });
+    if (!linked.ok) throw new Error("communication not created");
+    const correction = {
+      expectedVersion: 1,
+      channel: communication.channel,
+      direction: communication.direction,
+      occurredAt: communication.occurredAt,
+      contactId: contact.value.id,
+      contactNumber: contactCommand.phone,
+      durationSeconds: communication.durationSeconds,
+      summary: "Seguimiento histórico corregido sin cambiar el contacto.",
+      result: communication.result,
+      incidentId: null,
+      reason: "Se completa el resumen tras revisar la llamada.",
+    };
+    expect(
+      await correctSupportCommunication(linked.value.id, correction, actor, {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportCommunicationRequest({
+          communicationId: linked.value.id,
+          ...correction,
+        }),
+        scope: `communication:${linked.value.id}:correct`,
+      }),
+    ).toMatchObject({ ok: true, value: { version: 2 } });
+    expect(
+      (await listCustomerContacts(customer.id, actor))?.contacts,
+    ).toHaveLength(1);
+    await expect(
+      prisma.customerContact.delete({ where: { id: contact.value.id } }),
+    ).rejects.toThrow();
+    await expect(
+      prisma.customerContact.update({
+        where: { id: contact.value.id },
+        data: { role: "Cambio directo" },
+      }),
+    ).rejects.toThrow();
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "CUSTOMER_CONTACT_CREATED" },
+    });
+    expect(JSON.stringify(audit.payload)).not.toContain(contactCommand.email);
+    expect(JSON.stringify(audit.payload)).not.toContain(contactCommand.phone);
+    expect(
+      createCustomerContactSchema.safeParse({
+        ...contactCommand,
+        name: null,
+        phone: null,
+        whatsapp: null,
+        email: null,
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects a store belonging to another customer", async () => {
@@ -607,7 +1097,10 @@ describe("support incidents application", () => {
       scope: "incident:create",
     });
     if (!created.ok) throw new Error(created.error.code);
-    const list = await listSupportIncidents({ limit: 25, search: "Texto interno" }, actor);
+    const list = await listSupportIncidents(
+      { limit: 25, search: "Texto interno" },
+      actor,
+    );
     const detail = await getSupportIncident(created.value.id, actor);
     expect(list.incidents).toHaveLength(1);
     expect(JSON.stringify(list)).not.toContain(command.description);
@@ -651,7 +1144,11 @@ describe("support incidents application", () => {
 
 async function initialize() {
   const body = JSON.stringify(installation);
-  const result = await initializePlatform(installation, randomUUID(), hashRequestBody(body));
+  const result = await initializePlatform(
+    installation,
+    randomUUID(),
+    hashRequestBody(body),
+  );
   if (!result.ok) throw new Error(result.error.code);
   const row = await prisma.installation.findFirstOrThrow();
   await prisma.supportIncidentCategory.create({
@@ -680,7 +1177,10 @@ async function admin() {
   if (!result.ok) throw new Error(result.error.code);
   return result.value.user;
 }
-async function createCustomerRecord(actor: Awaited<ReturnType<typeof admin>>, overrides: Record<string, unknown> = {}) {
+async function createCustomerRecord(
+  actor: Awaited<ReturnType<typeof admin>>,
+  overrides: Record<string, unknown> = {},
+) {
   const result = await createCustomer(
     {
       type: "COMPANY",
@@ -710,7 +1210,11 @@ async function createCustomerRecord(actor: Awaited<ReturnType<typeof admin>>, ov
   if (!result.ok) throw new Error(result.error.code);
   return result.value;
 }
-function transitionContext(incidentId: string, command: unknown, key: string = randomUUID()) {
+function transitionContext(
+  incidentId: string,
+  command: unknown,
+  key: string = randomUUID(),
+) {
   return {
     idempotencyKey: key,
     requestHash: hashSupportStatusTransitionRequest({
@@ -721,17 +1225,41 @@ function transitionContext(incidentId: string, command: unknown, key: string = r
   };
 }
 function participantContext(incidentId: string, command: unknown) {
-  return { idempotencyKey: randomUUID(), requestHash: hashSupportParticipantRequest({ incidentId, ...(command as object) }), scope: `incident:${incidentId}:participant-change` };
+  return {
+    idempotencyKey: randomUUID(),
+    requestHash: hashSupportParticipantRequest({
+      incidentId,
+      ...(command as object),
+    }),
+    scope: `incident:${incidentId}:participant-change`,
+  };
 }
 async function reset() {
   await prisma.$transaction(async (tx) => {
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"');
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
@@ -740,13 +1268,31 @@ async function reset() {
     await tx.supportIncidentStatusTransition.deleteMany();
     await tx.supportIncidentAction.deleteMany();
     await tx.supportIncident.deleteMany();
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" ENABLE TRIGGER "support_incident_participant_changes_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"');
-    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"');
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_participant_changes" ENABLE TRIGGER "support_incident_participant_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

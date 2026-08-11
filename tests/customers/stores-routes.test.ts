@@ -5,7 +5,7 @@ import { POST as loginPost } from "@/app/api/auth/login/route";
 import { POST as customersPost } from "@/app/api/customers/route";
 import {
   GET as storesGet,
-  POST as storesPost
+  POST as storesPost,
 } from "@/app/api/customers/[customerId]/stores/route";
 import { PATCH as storePatch } from "@/app/api/customers/[customerId]/stores/[storeId]/route";
 import { prisma } from "@/lib/prisma";
@@ -15,7 +15,7 @@ import { hashPassword } from "@/modules/platform/application/passwords";
 import {
   hashRequestBody,
   initializePlatform,
-  type InitializeCommand
+  type InitializeCommand,
 } from "@/modules/platform/application/installation";
 
 type CookieSetOptions = {
@@ -42,16 +42,16 @@ const cookieMock = vi.hoisted(() => {
       },
       delete(name: string) {
         values.delete(name);
-      }
+      },
     },
     reset() {
       values.clear();
-    }
+    },
   };
 });
 
 vi.mock("next/headers", () => ({
-  cookies: vi.fn(async () => cookieMock.store)
+  cookies: vi.fn(async () => cookieMock.store),
 }));
 
 const appBaseUrl = "http://localhost:3000";
@@ -61,13 +61,13 @@ const baseCommand: InitializeCommand = {
   company: {
     legalName: "CriGestion Test SL",
     taxId: "B12345678",
-    email: "admin@example.test"
+    email: "admin@example.test",
   },
   administrator: {
     displayName: "Administrador",
     userName: "admin",
-    password: adminPassword
-  }
+    password: adminPassword,
+  },
 };
 
 describe("customer stores HTTP contracts", () => {
@@ -87,15 +87,18 @@ describe("customer stores HTTP contracts", () => {
   });
 
   it("rejects unauthenticated store listing", async () => {
-    const response = await storesGet(apiRequest("/api/customers/not-a-uuid/stores"), {
-      params: Promise.resolve({ customerId: "not-a-uuid" })
-    });
+    const response = await storesGet(
+      apiRequest("/api/customers/not-a-uuid/stores"),
+      {
+        params: Promise.resolve({ customerId: "not-a-uuid" }),
+      },
+    );
     const body = await response.json();
 
     expect(response.status).toBe(401);
     expect(body).toEqual({
       code: "UNAUTHENTICATED",
-      message: "No hay una sesion activa."
+      message: "No hay una sesion activa.",
     });
   });
 
@@ -105,13 +108,15 @@ describe("customer stores HTTP contracts", () => {
     const customer = await createCustomerThroughHttp(csrfToken);
 
     const createResponse = await storesPost(
-      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), { csrfToken }),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
+        csrfToken,
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const created = await createResponse.json();
     const listResponse = await storesGet(
       apiRequest(`/api/customers/${customer.id}/stores`),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const listBody = await listResponse.json();
     const updateResponse = await storePatch(
@@ -122,21 +127,31 @@ describe("customer stores HTTP contracts", () => {
           store: storePayload({
             name: "Tienda Actualizada",
             isPrimary: false,
-            email: "actualizada@example.test"
-          })
+            email: "actualizada@example.test",
+          }),
         },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: customer.id, storeId: created.id }) }
+      {
+        params: Promise.resolve({
+          customerId: customer.id,
+          storeId: created.id,
+        }),
+      },
     );
     const updated = await updateResponse.json();
     const statusResponse = await storePatch(
       jsonRequest(
         `/api/customers/${customer.id}/stores/${created.id}`,
         { action: "deactivate" },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: customer.id, storeId: created.id }) }
+      {
+        params: Promise.resolve({
+          customerId: customer.id,
+          storeId: created.id,
+        }),
+      },
     );
     const deactivated = await statusResponse.json();
 
@@ -144,7 +159,7 @@ describe("customer stores HTTP contracts", () => {
     expect(created).toMatchObject({
       code: "1",
       name: "Tienda Centro",
-      status: "ACTIVE"
+      status: "ACTIVE",
     });
     expect(listResponse.status).toBe(200);
     expect(listBody.stores).toHaveLength(1);
@@ -153,7 +168,7 @@ describe("customer stores HTTP contracts", () => {
     expect(updated).toMatchObject({
       id: created.id,
       name: "Tienda Actualizada",
-      email: "actualizada@example.test"
+      email: "actualizada@example.test",
     });
     expect(statusResponse.status).toBe(200);
     expect(deactivated.status).toBe("INACTIVE");
@@ -167,15 +182,15 @@ describe("customer stores HTTP contracts", () => {
     const response = await storesPost(
       jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
         csrfToken,
-        idempotencyKey: null
+        idempotencyKey: null,
       }),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const body = await response.json();
 
     expect(response.status).toBe(400);
     expect(body).toMatchObject({
-      code: "IDEMPOTENCY_KEY_REQUIRED"
+      code: "IDEMPOTENCY_KEY_REQUIRED",
     });
   });
 
@@ -184,8 +199,10 @@ describe("customer stores HTTP contracts", () => {
     const csrfToken = await getCsrfToken();
     const customer = await createCustomerThroughHttp(csrfToken);
     const createResponse = await storesPost(
-      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), { csrfToken }),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
+        csrfToken,
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const created = await createResponse.json();
 
@@ -193,15 +210,20 @@ describe("customer stores HTTP contracts", () => {
       jsonRequest(
         `/api/customers/${customer.id}/stores/${created.id}`,
         { action: "deactivate" },
-        { csrfToken, idempotencyKey: null, method: "PATCH" }
+        { csrfToken, idempotencyKey: null, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: customer.id, storeId: created.id }) }
+      {
+        params: Promise.resolve({
+          customerId: customer.id,
+          storeId: created.id,
+        }),
+      },
     );
     const body = await response.json();
 
     expect(response.status).toBe(400);
     expect(body).toMatchObject({
-      code: "IDEMPOTENCY_KEY_REQUIRED"
+      code: "IDEMPOTENCY_KEY_REQUIRED",
     });
   });
 
@@ -212,14 +234,14 @@ describe("customer stores HTTP contracts", () => {
 
     const response = await storesPost(
       jsonRequest(`/api/customers/${customer.id}/stores`, storePayload()),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const body = await response.json();
 
     expect(response.status).toBe(403);
     expect(body).toEqual({
       code: "CSRF_TOKEN_INVALID",
-      message: "Token CSRF invalido."
+      message: "Token CSRF invalido.",
     });
   });
 
@@ -235,26 +257,26 @@ describe("customer stores HTTP contracts", () => {
 
     const listResponse = await storesGet(
       apiRequest(`/api/customers/${customer.id}/stores`),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const listBody = await listResponse.json();
     const createResponse = await storesPost(
       jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
-        csrfToken: limitedCsrfToken
+        csrfToken: limitedCsrfToken,
       }),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const createBody = await createResponse.json();
 
     expect(listResponse.status).toBe(403);
     expect(listBody).toEqual({
       code: "FORBIDDEN",
-      message: "No tienes permiso para realizar esta accion."
+      message: "No tienes permiso para realizar esta accion.",
     });
     expect(createResponse.status).toBe(403);
     expect(createBody).toEqual({
       code: "FORBIDDEN",
-      message: "No tienes permiso para realizar esta accion."
+      message: "No tienes permiso para realizar esta accion.",
     });
   });
 
@@ -263,8 +285,10 @@ describe("customer stores HTTP contracts", () => {
     const csrfToken = await getCsrfToken();
     const customer = await createCustomerThroughHttp(csrfToken);
     const createResponse = await storesPost(
-      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), { csrfToken }),
-      { params: Promise.resolve({ customerId: customer.id }) }
+      jsonRequest(`/api/customers/${customer.id}/stores`, storePayload(), {
+        csrfToken,
+      }),
+      { params: Promise.resolve({ customerId: customer.id }) },
     );
     const created = await createResponse.json();
 
@@ -273,11 +297,16 @@ describe("customer stores HTTP contracts", () => {
         `/api/customers/${customer.id}/stores/${created.id}`,
         {
           action: "deactivate",
-          store: storePayload()
+          store: storePayload(),
         },
-        { csrfToken, method: "PATCH" }
+        { csrfToken, method: "PATCH" },
       ),
-      { params: Promise.resolve({ customerId: customer.id, storeId: created.id }) }
+      {
+        params: Promise.resolve({
+          customerId: customer.id,
+          storeId: created.id,
+        }),
+      },
     );
     const body = await response.json();
 
@@ -294,8 +323,8 @@ async function loginWith(userName: string, password: string): Promise<void> {
   const response = await loginPost(
     jsonRequest("/api/auth/login", {
       userName,
-      password
-    })
+      password,
+    }),
   );
 
   expect(response.status).toBe(200);
@@ -315,9 +344,11 @@ async function getCsrfToken(): Promise<string> {
   return body.csrfToken;
 }
 
-async function createCustomerThroughHttp(csrfToken: string): Promise<{ id: string }> {
+async function createCustomerThroughHttp(
+  csrfToken: string,
+): Promise<{ id: string }> {
   const response = await customersPost(
-    jsonRequest("/api/customers", customerPayload(), { csrfToken })
+    jsonRequest("/api/customers", customerPayload(), { csrfToken }),
   );
   const body = (await response.json()) as { id?: string };
 
@@ -349,7 +380,7 @@ function customerPayload() {
     paymentDays: null,
     paymentFixedDay: null,
     creditLimit: null,
-    notes: "Observacion interna"
+    notes: "Observacion interna",
   };
 }
 
@@ -372,7 +403,7 @@ function storePayload(overrides: Record<string, unknown> = {}) {
     contactWhatsapp: "+34600000002",
     contactEmail: "contacto@example.test",
     notes: "Observacion tienda",
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -384,11 +415,11 @@ function jsonRequest(
     csrfToken?: string;
     idempotencyKey?: string | null;
     method?: string;
-  } = {}
+  } = {},
 ): Request {
   const headers = new Headers({
     "Content-Type": "application/json",
-    "X-Forwarded-For": uniqueTestIp()
+    "X-Forwarded-For": uniqueTestIp(),
   });
 
   if (options.origin) {
@@ -406,7 +437,7 @@ function jsonRequest(
   return new Request(`http://localhost${path}`, {
     method: options.method ?? "POST",
     headers,
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -423,7 +454,7 @@ async function initializeForRoutes(): Promise<void> {
   const result = await initializePlatform(
     baseCommand,
     randomUUID(),
-    hashRequestBody(rawBody)
+    hashRequestBody(rawBody),
   );
 
   if (!result.ok) {
@@ -441,12 +472,12 @@ async function createLimitedUserWithoutCustomers(): Promise<void> {
         create: {
           permission: {
             connect: {
-              code: "Platform.ViewAudit"
-            }
-          }
-        }
-      }
-    }
+              code: "Platform.ViewAudit",
+            },
+          },
+        },
+      },
+    },
   });
 
   await prisma.user.create({
@@ -456,12 +487,13 @@ async function createLimitedUserWithoutCustomers(): Promise<void> {
       normalizedUserName: "auditor",
       passwordHash: hashPassword(limitedPassword),
       status: "ACTIVE",
-      roleId: role.id
-    }
+      roleId: role.id,
+    },
   });
 }
 
 async function resetPlatformTables(): Promise<void> {
+  await deleteCustomerContactsForTest();
   await prisma.$transaction([
     prisma.platformMaintenanceState.deleteMany(),
     prisma.idempotencyRecord.deleteMany(),
@@ -497,8 +529,20 @@ async function resetPlatformTables(): Promise<void> {
     prisma.rolePermission.deleteMany(),
     prisma.permission.deleteMany(),
     prisma.role.deleteMany(),
-    prisma.company.deleteMany()
+    prisma.company.deleteMany(),
   ]);
+}
+
+async function deleteCustomerContactsForTest(): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
+    );
+    await tx.customerContact.deleteMany();
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
+  });
 }
 
 async function resetSequences(): Promise<void> {

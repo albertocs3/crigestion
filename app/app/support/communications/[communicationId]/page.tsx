@@ -81,6 +81,10 @@ export default async function CommunicationPage({
               <dd>{item.contactNumber}</dd>
             </div>
             <div>
+              <dt>Contacto</dt>
+              <dd>{item.contact ? item.contact.name ?? item.contact.role ?? "Contacto maestro" : "Sin contacto maestro"}</dd>
+            </div>
+            <div>
               <dt>Registrada por</dt>
               <dd>{item.registeredBy.displayName}</dd>
             </div>
