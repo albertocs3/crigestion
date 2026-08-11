@@ -55,9 +55,10 @@ export async function createSupportAction(incidentId: string, command: CreateSup
         `);
         const incident = rows[0];
         if (!incident) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
-        if (actor.id !== incident.responsibleUserId && actor.role.code !== "Administrador") {
+        const isCollaborator = actor.id === incident.responsibleUserId || actor.role.code === "Administrador" ? false : Boolean(await tx.supportIncidentCollaborator.findFirst({ where: { incidentId: incident.id, companyId, userId: actor.id, removedAt: null }, select: { id: true } }));
+        if (actor.id !== incident.responsibleUserId && actor.role.code !== "Administrador" && !isCollaborator) {
           await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: incident.id, reason: "NOT_RESPONSIBLE", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
-          return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "Solo el responsable o un administrador puede registrar actuaciones.");
+          return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "Solo el responsable, un colaborador o un administrador puede registrar actuaciones.");
         }
         if (incident.version !== command.expectedVersion) return failure(409, "SUPPORT_INCIDENT_VERSION_CONFLICT", "La incidencia ha cambiado. Recarga antes de continuar.");
         if (incident.status === "RESOLVED" || incident.status === "CLOSED") return failure(409, "SUPPORT_INCIDENT_FINALIZED", "La incidencia debe reabrirse antes de registrar actuaciones.");

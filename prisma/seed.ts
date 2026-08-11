@@ -18,6 +18,7 @@ async function main() {
     ["Support.AddActions", "Registrar actuaciones en incidencias asignadas"],
     ["Support.ManageAssigned", "Gestionar el estado de incidencias asignadas"],
     ["Support.Reopen", "Reabrir incidencias finalizadas"],
+    ["Support.ManageParticipants", "Gestionar colaboradores y responsable de incidencias"],
     ["Support.ManageCategories", "Gestionar categorias de incidencias"],
     ["Suppliers.View", "Consultar proveedores"],
     ["Suppliers.Manage", "Gestionar proveedores"],

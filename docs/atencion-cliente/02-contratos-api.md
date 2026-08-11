@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite consultar y crear incidencias y categorías, registrar actuaciones y recorrer el ciclo de estados con evidencia histórica. Colaboradores, comunicaciones, adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
+La rebanada actual permite consultar y crear incidencias y categorías, registrar actuaciones, recorrer el ciclo de estados y gestionar responsable y colaboradores con evidencia histórica. Comunicaciones, adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
 
 ## Permisos
 
@@ -11,6 +11,7 @@ La rebanada actual permite consultar y crear incidencias y categorías, registra
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
 - `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución y cierre por el responsable o un administrador.
 - `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
+- `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
 - `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
@@ -49,7 +50,7 @@ Requiere `Support.View`. Devuelve el detalle y sus eventos o `404 SUPPORT_INCIDE
 
 ## `POST /api/support/incidents/{incidentId}/actions`
 
-Requiere `Support.AddActions` y `Support.View`, además de ser el responsable vigente o Administrador. Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 8 KiB e idempotencia.
+Requiere `Support.AddActions` y `Support.View`, además de ser el responsable vigente, un colaborador activo o Administrador. Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 8 KiB e idempotencia.
 
 ```json
 {
@@ -77,6 +78,18 @@ Los cuerpos admitidos son estrictos:
 
 Resolver y cerrar son estados finales: no admiten actuaciones hasta reabrir. Cada transición incrementa una sola versión, crea evidencia append-only y un evento enlazado. Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_TRANSITION_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
 
+## `POST /api/support/incidents/{incidentId}/participant-changes`
+
+Requiere `Support.ManageParticipants` + `Support.View` y ser el responsable vigente o Administrador. Usa Origin/CSRF, mantenimiento, JSON estricto, máximo de 4 KiB, `expectedVersion` e idempotencia.
+
+- alta: `{ "action":"add-collaborator", "expectedVersion":2, "userId":"uuid" }`;
+- retirada: `{ "action":"remove-collaborator", "expectedVersion":3, "collaboratorId":"uuid", "reason":"..." }`;
+- reasignación: `{ "action":"reassign", "expectedVersion":4, "responsibleUserId":"uuid", "reason":"..." }`.
+
+Los participantes deben estar activos y conservar `Support.View` + `Support.AddActions`. Un responsable no puede ser simultáneamente colaborador activo; si se desea reasignar a un colaborador se le retira primero. Los colaboradores activos pueden registrar actuaciones. La retirada no borra su historial y una reasignación no altera las colaboraciones restantes.
+
+Respuesta `201`; replay idéntico `200`. Errores: `SUPPORT_INCIDENT_PARTICIPANT_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_PARTICIPANT_NOT_AVAILABLE`, `SUPPORT_COLLABORATOR_ALREADY_ACTIVE`, `SUPPORT_COLLABORATOR_NOT_ACTIVE`, `SUPPORT_RESPONSIBLE_UNCHANGED`, `SUPPORT_RESPONSIBLE_IS_COLLABORATOR` y los comunes de idempotencia.
+
 ## `/api/support/categories`
 
 `GET` requiere `Support.View`. `POST` requiere `Support.ManageCategories`, Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 2 KiB e idempotencia.
@@ -101,4 +114,5 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 - Los eventos son append-only; `UPDATE` y `DELETE` se rechazan en PostgreSQL.
 - Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
 - Las transiciones son append-only. PostgreSQL exige un único evento por versión resultante y mantiene coherentes estado, solución, motivo de cierre y marcas temporales.
+- Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
 - No existe borrado físico de incidencias en la API.
