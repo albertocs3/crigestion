@@ -17,13 +17,15 @@ MAX_OUTER_ENTRIES = 200_000
 MAX_OUTER_BYTES = 8 * 1024 * 1024 * 1024
 MAX_INNER_ENTRIES = 50_000
 MAX_INNER_BYTES = 2 * 1024 * 1024 * 1024
-MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024
+MAX_LOGO_BYTES = 5 * 1024 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_INVENTORY_BYTES = 64 * 1024 * 1024
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
 ATTACHMENT_PATTERN = re.compile(
-    rf"^company-logo/{UUID_PATTERN}/{UUID_PATTERN}\.(?:png|jpg)$"
+    rf"^(?:company-logo/{UUID_PATTERN}/{UUID_PATTERN}\.(?:png|jpg)|"
+    rf"support-incident/{UUID_PATTERN}/{UUID_PATTERN}/{UUID_PATTERN}\.(?:pdf|jpg))$"
 )
 
 
@@ -62,6 +64,8 @@ def main() -> None:
     for name in regular_attachments:
         if not ATTACHMENT_PATTERN.fullmatch(name):
             raise RecoveryPayloadError("RECOVERY_UPLOAD_PATH_INVALID")
+        if name.startswith("company-logo/") and (attachment_directory / name).stat().st_size > MAX_LOGO_BYTES:
+            raise RecoveryPayloadError("RECOVERY_UPLOAD_SIZE_INVALID")
 
     print(
         "RECOVERY_PAYLOAD_OK "

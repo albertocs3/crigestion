@@ -45,6 +45,7 @@ enum PlatformMaintenanceMode {
 
 enum AttachmentPurpose {
   COMPANY_LOGO
+  SUPPORT_INCIDENT
 }
 
 enum AttachmentStatus {
@@ -751,6 +752,7 @@ model Company {
   supportIncidents                           SupportIncident[]
   supportIncidentEvents                      SupportIncidentEvent[]
   supportIncidentActions                     SupportIncidentAction[]
+  supportIncidentAttachments                 SupportIncidentAttachment[]
   supportIncidentStatusTransitions           SupportIncidentStatusTransition[]
   supportIncidentCollaborators               SupportIncidentCollaborator[]
   supportIncidentParticipantChanges          SupportIncidentParticipantChange[]
@@ -787,11 +789,12 @@ model Attachment {
   uploadedAt           DateTime             @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime             @updatedAt @db.Timestamptz(3)
 
-  company     Company     @relation("CompanyAttachments", fields: [companyId], references: [id], onDelete: Restrict)
-  logoCompany Company?    @relation("CompanyLogo")
-  uploadedBy  User        @relation("AttachmentsUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
-  replaces    Attachment? @relation("AttachmentReplacement", fields: [replacesAttachmentId, companyId], references: [id, companyId], onDelete: Restrict)
-  replacedBy  Attachment? @relation("AttachmentReplacement")
+  company             Company                    @relation("CompanyAttachments", fields: [companyId], references: [id], onDelete: Restrict)
+  logoCompany         Company?                   @relation("CompanyLogo")
+  uploadedBy          User                       @relation("AttachmentsUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+  replaces            Attachment?                @relation("AttachmentReplacement", fields: [replacesAttachmentId, companyId], references: [id, companyId], onDelete: Restrict)
+  replacedBy          Attachment?                @relation("AttachmentReplacement")
+  supportIncidentLink SupportIncidentAttachment?
 
   @@unique([id, companyId])
   @@unique([replacesAttachmentId, companyId])
@@ -1375,6 +1378,7 @@ model SupportIncident {
   collaborators      SupportIncidentCollaborator[]
   participantChanges SupportIncidentParticipantChange[]
   communications     SupportCommunication[]
+  attachments        SupportIncidentAttachment[]
 
   @@unique([companyId, number])
   @@unique([companyId, year, sequenceNumber])
@@ -1574,15 +1578,38 @@ model SupportIncidentAction {
   performedAt  DateTime @db.Timestamptz(3)
   recordedAt   DateTime @default(now()) @db.Timestamptz(3)
 
-  company    Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  incident   SupportIncident       @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
-  authorUser User                  @relation("SupportIncidentActionsAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
-  event      SupportIncidentEvent?
+  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident    SupportIncident             @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  authorUser  User                        @relation("SupportIncidentActionsAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  event       SupportIncidentEvent?
+  attachments SupportIncidentAttachment[]
 
   @@unique([id, companyId])
+  @@unique([id, companyId, incidentId])
   @@index([incidentId, performedAt, id])
   @@index([companyId, authorUserId, recordedAt, id])
   @@map("support_incident_actions")
+}
+
+model SupportIncidentAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @db.Uuid
+  incidentId   String   @db.Uuid
+  actionId     String?  @db.Uuid
+  attachmentId String   @unique @db.Uuid
+  attachedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  company    Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident   SupportIncident        @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  action     SupportIncidentAction? @relation(fields: [actionId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict)
+  attachment Attachment             @relation(fields: [attachmentId, companyId], references: [id, companyId], onDelete: Restrict)
+
+  @@unique([id, companyId])
+  @@unique([attachmentId, companyId])
+  @@index([incidentId, attachedAt, id])
+  @@index([actionId, attachedAt, id])
+  @@index([companyId, attachedAt, id])
+  @@map("support_incident_attachments")
 }
 
 model User {

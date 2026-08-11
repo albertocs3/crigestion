@@ -14,6 +14,8 @@ import path from "node:path";
 
 const companyLogoStorageKeyPattern =
   /^company-logo\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:png|jpg)$/;
+const supportIncidentStorageKeyPattern =
+  /^support-incident\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:pdf|jpg)$/;
 const temporaryNamePattern = /^[0-9a-f-]{36}\.(?:upload|canonical)$/;
 
 export class AttachmentIntegrityError extends Error {
@@ -90,7 +92,7 @@ export class FileAttachmentStorage {
         !file.isFile() ||
         file.size !== expectedSize ||
         file.size < 1 ||
-        file.size > 5_242_880 ||
+        file.size > maximumBytesFor(storageKey) ||
         (process.platform !== "win32" && (file.mode & 0o077) !== 0)
       ) {
         throw new AttachmentIntegrityError();
@@ -135,7 +137,10 @@ export class FileAttachmentStorage {
   }
 
   private resolveStorageKey(storageKey: string): string {
-    if (!companyLogoStorageKeyPattern.test(storageKey)) {
+    if (
+      !companyLogoStorageKeyPattern.test(storageKey) &&
+      !supportIncidentStorageKeyPattern.test(storageKey)
+    ) {
       throw new Error("ATTACHMENT_STORAGE_KEY_INVALID");
     }
 
@@ -157,6 +162,12 @@ export class FileAttachmentStorage {
       throw new Error("ATTACHMENT_TEMPORARY_PATH_INVALID");
     }
   }
+}
+
+function maximumBytesFor(storageKey: string): number {
+  return supportIncidentStorageKeyPattern.test(storageKey)
+    ? 16 * 1024 * 1024
+    : 5 * 1024 * 1024;
 }
 
 async function ensureDirectory(directory: string): Promise<void> {

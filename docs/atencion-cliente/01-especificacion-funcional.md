@@ -331,6 +331,7 @@ Los adjuntos pertenecen directamente a la incidencia.
 - Formatos admitidos: JPG y PDF.
 - Tamaño máximo: 16 MB por archivo.
 - No existe límite total por incidencia.
+- La plataforma aplica un límite operativo de capacidad por empresa para proteger disco y copias integrales; no cambia la ausencia de una cuota funcional por expediente y requiere intervención administrativa cuando se alcanza.
 - Pueden añadirlos el responsable, los colaboradores y el administrador.
 - No se eliminan definitivamente.
 
@@ -554,7 +555,7 @@ El sistema deberá registrar los intervalos de estado para calcular correctament
 
 Estas decisiones no alteran la funcionalidad acordada, pero deberán resolverse antes de implementar:
 
-- Método de almacenamiento y descarga segura de adjuntos.
+- Evolución de capacidad y archivado cuando el volumen de adjuntos supere el techo operativo inicial.
 - Convención horaria para fechas reales y fechas de registro.
 - Estrategia de generación concurrente de números de incidencia.
 - Mecanismo de búsqueda sobre títulos, descripciones y actuaciones.

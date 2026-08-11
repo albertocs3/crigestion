@@ -28,6 +28,15 @@ describe("recovery payload safe extractor", () => {
       .resolves.toEqual(attachmentBytes);
   });
 
+  it("extracts an allowlisted incident PDF path", async () => {
+    const root = await temporaryDirectory();
+    const { archive, storageKey, attachmentBytes } = await createValidArchive(root, "support");
+    const result = runExtractor(root, archive);
+    expect(result.status).toBe(0);
+    expect(storageKey).toMatch(/^support-incident\//);
+    await expect(readFile(path.join(root, "attachments", ...storageKey.split("/")))).resolves.toEqual(attachmentBytes);
+  });
+
   it("rejects path traversal before writing outside the destination", async () => {
     const root = await temporaryDirectory();
     const archive = path.join(root, "traversal.tar.gz");
@@ -130,7 +139,7 @@ function runExtractor(root: string, archive: string, header?: string) {
   );
 }
 
-async function createValidArchive(root: string): Promise<{
+async function createValidArchive(root: string, purpose: "logo" | "support" = "logo"): Promise<{
   archive: string;
   storageKey: string;
   attachmentBytes: Buffer;
@@ -139,7 +148,7 @@ async function createValidArchive(root: string): Promise<{
   const databaseDirectory = path.join(source, "database");
   const uploadsDirectory = path.join(source, "uploads");
   const releaseDirectory = path.join(source, "release");
-  const attachmentSource = path.join(root, "logo.png");
+  const attachmentSource = path.join(root, purpose === "logo" ? "logo.png" : "evidence.pdf");
   await mkdir(databaseDirectory, { recursive: true });
   await mkdir(uploadsDirectory, { recursive: true });
   await mkdir(releaseDirectory, { recursive: true });
@@ -147,7 +156,7 @@ async function createValidArchive(root: string): Promise<{
   const attachmentBytes = Buffer.from("canonical-logo");
   const releaseBytes = Buffer.from("release-archive");
   const lockBytes = Buffer.from('{"lockfileVersion":3}');
-  const storageKey = `company-logo/${randomUUID()}/${randomUUID()}.png`;
+  const storageKey = purpose === "logo" ? `company-logo/${randomUUID()}/${randomUUID()}.png` : `support-incident/${randomUUID()}/${randomUUID()}/${randomUUID()}.pdf`;
   await writeFile(path.join(databaseDirectory, "crigestion_staging.dump"), databaseBytes);
   await writeFile(attachmentSource, attachmentBytes);
   await writeFile(path.join(releaseDirectory, "application-release.tar"), releaseBytes);

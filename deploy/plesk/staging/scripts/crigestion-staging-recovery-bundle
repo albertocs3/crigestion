@@ -17,7 +17,8 @@ KEY_ID="${RECOVERY_BUNDLE_KEY_ID:-}"
 RETENTION_DAYS='14'
 BACKUP_MAX_AGE_SECONDS='129600'
 MAX_ATTACHMENT_ENTRIES='50000'
-MAX_ATTACHMENT_BYTES='5242880'
+MAX_LOGO_BYTES='5242880'
+MAX_INCIDENT_ATTACHMENT_BYTES='16777216'
 MAX_UPLOAD_BYTES='2147483648'
 MAX_PAYLOAD_BYTES='8589934592'
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -347,7 +348,7 @@ UPLOAD_BYTES=0
 UPLOAD_ENTRIES=0
 while IFS= read -r -d '' upload_directory; do
   relative_directory="${upload_directory#"$ATTACHMENT_DIR"/}"
-  if ! [[ "$relative_directory" =~ ^company-logo(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?$ ]]; then
+  if ! [[ "$relative_directory" =~ ^(company-logo(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?|support-incident(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}){1,2})$ ]]; then
     echo 'RECOVERY_ATTACHMENT_DIRECTORY_REJECTED' >&2
     exit 1
   fi
@@ -358,13 +359,17 @@ done < <(find "$ATTACHMENT_DIR" -xdev -mindepth 1 -type d \
 
 while IFS= read -r -d '' upload_file; do
   relative_path="${upload_file#"$ATTACHMENT_DIR"/}"
-  if ! [[ "$relative_path" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]; then
+  if [[ "$relative_path" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]; then
+    max_file_bytes="$MAX_LOGO_BYTES"
+  elif [[ "$relative_path" =~ ^support-incident/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(pdf|jpg)$ ]]; then
+    max_file_bytes="$MAX_INCIDENT_ATTACHMENT_BYTES"
+  else
     echo 'RECOVERY_ATTACHMENT_PATH_REJECTED' >&2
     exit 1
   fi
   test "$(stat -c '%U|%G|%a|%h' "$upload_file")" = 'crigestion-staging|crigestion-staging|600|1'
   upload_size="$(stat -c '%s' "$upload_file")"
-  test "$upload_size" -le "$MAX_ATTACHMENT_BYTES"
+  test "$upload_size" -le "$max_file_bytes"
   UPLOAD_BYTES="$((UPLOAD_BYTES + upload_size))"
   UPLOAD_ENTRIES="$((UPLOAD_ENTRIES + 1))"
   test "$UPLOAD_BYTES" -le "$MAX_UPLOAD_BYTES"
@@ -372,7 +377,7 @@ while IFS= read -r -d '' upload_file; do
   snapshot_file="$UPLOAD_SNAPSHOT/$relative_path"
   mkdir -p -m 0700 "$(dirname -- "$snapshot_file")"
   (
-    ulimit -f "$((MAX_ATTACHMENT_BYTES / 1024))"
+    ulimit -f "$((max_file_bytes / 1024))"
     cp --no-dereference --reflink=auto --preserve=mode,timestamps -- \
       "$upload_file" "$snapshot_file"
   )
@@ -405,7 +410,7 @@ while IFS=$'\t' read -r storage_key expected_size expected_hash; do
   test -n "$storage_key"
   [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
   [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]]
-  [[ "$storage_key" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]
+  [[ "$storage_key" =~ ^(company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)|support-incident/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(pdf|jpg))$ ]]
   referenced_file="$UPLOAD_SNAPSHOT/$storage_key"
   test -f "$referenced_file"
   test ! -L "$referenced_file"

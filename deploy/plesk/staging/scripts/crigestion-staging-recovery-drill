@@ -210,7 +210,7 @@ runuser -u postgres -- "$PG_BIN_DIR/psql" -X -d "$DRILL_DB" -qAtF $'\t' -c \
    ORDER BY "storageKey"' > "$RESTORED_REFERENCES"
 while IFS=$'\t' read -r storage_key expected_size expected_hash; do
   test -n "$storage_key"
-  [[ "$storage_key" =~ ^company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)$ ]]
+  [[ "$storage_key" =~ ^(company-logo/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(png|jpg)|support-incident/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(pdf|jpg))$ ]]
   [[ "$expected_size" =~ ^[1-9][0-9]*$ ]]
   [[ "$expected_hash" =~ ^[a-f0-9]{64}$ ]]
   restored_file="$ATTACHMENTS/$storage_key"

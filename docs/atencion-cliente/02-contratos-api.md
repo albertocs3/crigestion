@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes y comunicaciones telefónicas/WhatsApp con correcciones históricas. Adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
+La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas y adjuntos seguros. Fusiones y notificaciones quedan fuera del contrato actual.
 
 ## Permisos
 
@@ -15,6 +15,8 @@ La rebanada actual permite gestionar incidencias, participantes y comunicaciones
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
 - `Support.ManageCommunications` + `Support.ViewCommunications`: alta y corrección de comunicaciones.
 - `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
+- `Support.ManageAttachments` + `Support.View`: carga de adjuntos por el responsable, un colaborador activo o Administrador.
+- `Support.DownloadAttachments` + `Support.View`: descarga de adjuntos de incidencias visibles.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
 
@@ -107,6 +109,28 @@ Respuesta `201`; replay idéntico `200`. Errores: `SUPPORT_INCIDENT_PARTICIPANT_
 El nombre es único por empresa tras normalizar mayúsculas y acentos. No se registran nombre, descripción, título ni texto de incidencia en auditoría.
 
 La migración crea la categoría `General` para empresas ya existentes. En una instalación nueva, el administrador crea al menos una categoría antes de registrar la primera incidencia.
+
+## Adjuntos de incidencia
+
+### `GET /api/support/incidents/{incidentId}/attachments`
+
+Requiere `Support.View`. Devuelve hasta 100 adjuntos disponibles y limpios, ordenados del más reciente al más antiguo, más `nextCursor`; `cursor` permite continuar sin omitir adjuntos antiguos. No expone clave de almacenamiento, hash, resultado interno del antivirus ni ruta física. Incidencia inexistente o de otra empresa devuelve `404 SUPPORT_INCIDENT_NOT_FOUND`.
+
+### `POST /api/support/incidents/{incidentId}/attachments`
+
+Requiere `Support.ManageAttachments` + `Support.View` y ser responsable, colaborador activo o Administrador. Aplica Origin, CSRF, mantenimiento, `Idempotency-Key`, multipart estricto y límite de 16 MiB por archivo más 64 KiB de envoltura. Solo admite un campo `file` JPG/JPEG o PDF y `actionId` opcional de la misma incidencia.
+
+El original se mantiene en cuarentena, se analiza, se valida y, para JPG, se recodifica sin metadatos. El artefacto final vuelve a analizarse antes de publicarse con clave opaca. PDF cifrado, activo, incremental o no inspeccionable se rechaza. La autorización se revalida bajo bloqueo al persistir. La respuesta `201` incluye solo metadatos observables. Replay válido devuelve `200`; clave reutilizada con otro archivo devuelve `409`.
+
+Errores específicos: `403 SUPPORT_ATTACHMENT_FORBIDDEN`, `404 SUPPORT_INCIDENT_NOT_FOUND`, `409 IDEMPOTENCY_KEY_REUSED|IDEMPOTENCY_REPLAY_INVALID`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, `422 SUPPORT_ATTACHMENT_*|SUPPORT_ATTACHMENT_FILE_REJECTED`, `429 SUPPORT_ATTACHMENT_RATE_LIMITED` con `Retry-After: 900`, y `503 ANTIVIRUS_UNAVAILABLE|SUPPORT_ATTACHMENT_CAPACITY_UNAVAILABLE|SUPPORT_ATTACHMENT_DATABASE_BUSY` con `Retry-After`.
+
+### `POST /api/support/incidents/{incidentId}/attachments/{attachmentId}/download`
+
+Requiere `Support.DownloadAttachments` + `Support.View`, Origin y CSRF. La relación empresa-incidencia-adjunto se comprueba conjuntamente. Solo descarga `AVAILABLE+CLEAN` y verifica tamaño y SHA-256 antes de responder. Usa `Content-Disposition: attachment`, `Content-Security-Policy: sandbox`, `nosniff`, `Cross-Origin-Resource-Policy: same-origin` y `Cache-Control: private, no-store`. Las descargas se auditan sin nombre, contenido, ruta ni hash.
+
+Los adjuntos son append-only: la API no ofrece borrado ni reemplazo. Se permiten en incidencias resueltas o cerradas si la autoridad de participante continúa vigente. El límite funcional por incidencia sigue siendo ilimitado, pero existe un techo operativo de 1,5 GiB por empresa para asegurar que la copia integral permanezca dentro del volumen de recuperación soportado de 2 GiB.
+
+Deuda operativa controlada: el semáforo de cuatro lecturas es por proceso y el validador PDF aplica una política léxica fail-closed. Antes de escalar horizontalmente o ampliar compatibilidad PDF se sustituirán por un límite compartido/streaming y un parser o sanitizador aislado.
 
 ## `/api/support/communications`
 

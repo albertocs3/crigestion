@@ -46,6 +46,26 @@ describe("file attachment storage", () => {
     await storage.removeTemporary(second);
   });
 
+  it("supports a tenant-scoped incident PDF up to its 16 MiB policy", async () => {
+    const root = await privateTemporaryDirectory();
+    const storage = new FileAttachmentStorage(root);
+    const bytes = Buffer.alloc(6 * 1024 * 1024, 0x41);
+    const key = `support-incident/${randomUUID()}/${randomUUID()}/${randomUUID()}.pdf`;
+    const temporary = await storage.writeTemporary(bytes, "canonical");
+    await storage.publish(temporary, key);
+    await expect(storage.readVerified(key, bytes.byteLength, createHash("sha256").update(bytes).digest("hex"))).resolves.toHaveLength(bytes.byteLength);
+  });
+
+  it("keeps the company-logo read limit at 5 MiB", async () => {
+    const root = await privateTemporaryDirectory();
+    const storage = new FileAttachmentStorage(root);
+    const bytes = Buffer.alloc(5 * 1024 * 1024 + 1, 0x41);
+    const key = `company-logo/${randomUUID()}/${randomUUID()}.jpg`;
+    const temporary = await storage.writeTemporary(bytes, "canonical");
+    await storage.publish(temporary, key);
+    await expect(storage.readVerified(key, bytes.byteLength, createHash("sha256").update(bytes).digest("hex"))).rejects.toBeInstanceOf(AttachmentIntegrityError);
+  });
+
   it("rejects traversal keys and tampered content", async () => {
     const root = await privateTemporaryDirectory();
     const storage = new FileAttachmentStorage(root);

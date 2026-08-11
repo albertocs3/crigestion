@@ -9,6 +9,7 @@ import {
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
+import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import {
   GET as communicationsGet,
   POST as communicationsPost,
@@ -23,6 +24,7 @@ import { PATCH as contactsPatch } from "@/app/api/customers/[customerId]/contact
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
+import { idempotencyStorageKey } from "@/modules/platform/application/http";
 import {
   hashRequestBody,
   initializePlatform,
@@ -144,6 +146,25 @@ describe("support incidents HTTP contracts", () => {
         where: { eventType: "SUPPORT_INCIDENT_CREATED" },
       }),
     ).toBe(1);
+  });
+
+  it("rate limits even an existing attachment key before reading the multipart body", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    const incidentId = responseId(await created.json());
+    if (!incidentId) throw new Error("INCIDENT_ID_MISSING");
+    const adminUser = await prisma.user.findUniqueOrThrow({ where: { normalizedUserName: "admin" }, select: { id: true } });
+    const clientKey = randomUUID();
+    await prisma.idempotencyRecord.create({ data: { key: idempotencyStorageKey(adminUser.id, "support-incident-attachment", incidentId, clientKey), requestHash: "stored-hash", responseStatus: 201, responseBody: { attachment: {} } } });
+    await prisma.rateLimitBucket.create({ data: { key: `support-attachment:upload:${adminUser.id}`, windowStart: new Date(), count: 10 } });
+    let reads = 0;
+    const request = new Request(`http://localhost:3000/api/support/incidents/${incidentId}/attachments`, { method: "POST", headers: { Origin: "http://localhost:3000", "Content-Type": "multipart/form-data; boundary=secure-boundary", "Idempotency-Key": clientKey, "X-CSRF-Token": csrf } });
+    Object.defineProperty(request, "body", { configurable: true, get() { reads += 1; throw new Error("BODY_MUST_NOT_BE_READ"); } });
+    const response = await attachmentsPost(request, { params: Promise.resolve({ incidentId }) });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("retry-after")).toBe("900");
+    expect(reads).toBe(0);
   });
 
   it("registers and replays an action through the protected route", async () => {

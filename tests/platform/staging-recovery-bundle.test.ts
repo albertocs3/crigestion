@@ -23,7 +23,8 @@ describe("staging recovery bundle deployment", () => {
     expect(script).toContain("RECOVERY_ATTACHMENT_PATH_REJECTED");
     expect(script).toContain("ATTACHMENT_ROOT_DECLARATIONS");
     expect(script).toContain("REFERENCED_UPLOAD_ENTRIES");
-    expect(script).toContain("MAX_ATTACHMENT_BYTES");
+    expect(script).toContain("MAX_LOGO_BYTES");
+    expect(script).toContain("MAX_INCIDENT_ATTACHMENT_BYTES");
     expect(script).toContain("MAX_UPLOAD_BYTES");
     expect(script).toContain("MAX_PAYLOAD_BYTES");
     expect(script).toContain("ulimit -f");

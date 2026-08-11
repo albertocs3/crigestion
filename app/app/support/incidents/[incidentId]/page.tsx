@@ -5,10 +5,12 @@ import { getSupportIncident, listSupportReferences, supportIncidentParamsSchema 
 import { SupportActionCreateForm } from "@/modules/support/presentation/SupportActionCreateForm";
 import { SupportStatusTransitionForm } from "@/modules/support/presentation/SupportStatusTransitionForm";
 import { SupportParticipantChangeForm } from "@/modules/support/presentation/SupportParticipantChangeForm";
+import { isSupportIncidentAttachmentCursor, listSupportIncidentAttachmentPage } from "@/modules/support/application/incidentAttachments";
+import { SupportIncidentAttachments } from "@/modules/support/presentation/SupportIncidentAttachments";
 
 export const dynamic = "force-dynamic";
 
-export default async function SupportIncidentPage({ params }: { params: Promise<{ incidentId: string }> }) {
+export default async function SupportIncidentPage({ params, searchParams }: { params: Promise<{ incidentId: string }>; searchParams: Promise<{ attachmentCursor?: string }> }) {
   const authorization = await authorizePagePermission("Support.View");
   if (!authorization.ok) return <main className="shell"><section className="content"><div className="panel stack"><h1>Incidencia</h1><p className="message error">{authorization.message}</p></div></section></main>;
   const parsed = supportIncidentParamsSchema.safeParse(await params);
@@ -16,14 +18,21 @@ export default async function SupportIncidentPage({ params }: { params: Promise<
   const incident = await getSupportIncident(parsed.data.incidentId, authorization.user);
   if (!incident) notFound();
   const activeCollaborators = incident.collaborators.filter((item) => item.removedAt === null);
+  const isIncidentMember = authorization.user.id === incident.responsible.id || authorization.user.role.code === "Administrador" || activeCollaborators.some((item) => item.user.id === authorization.user.id);
   const canAddAction = authorization.user.permissions.includes("Support.AddActions") && (authorization.user.id === incident.responsible.id || authorization.user.role.code === "Administrador" || activeCollaborators.some((item) => item.user.id === authorization.user.id)) && incident.status !== "RESOLVED" && incident.status !== "CLOSED";
+  const canUploadAttachment = authorization.user.permissions.includes("Support.ManageAttachments") && isIncidentMember;
+  const canDownloadAttachment = authorization.user.permissions.includes("Support.DownloadAttachments");
   const canManage = authorization.user.permissions.includes("Support.ManageAssigned") && (authorization.user.id === incident.responsible.id || authorization.user.role.code === "Administrador");
   const canReopen = authorization.user.permissions.includes("Support.Reopen");
   const canManageParticipants = authorization.user.permissions.includes("Support.ManageParticipants") && (authorization.user.id === incident.responsible.id || authorization.user.role.code === "Administrador");
   const references = canManageParticipants ? await listSupportReferences() : null;
+  const requestedCursor = (await searchParams).attachmentCursor ?? null;
+  const attachmentCursor = requestedCursor && isSupportIncidentAttachmentCursor(requestedCursor) ? requestedCursor : null;
+  const attachmentPage = await listSupportIncidentAttachmentPage(incident.id, authorization.user, attachmentCursor) ?? { attachments: [], nextCursor: null };
   return <main className="shell"><header className="topbar"><div className="brand">CriGestión</div><Link className="button button-secondary" href="/app/support">Volver a incidencias</Link></header><section className="content stack">
     <div className="panel stack"><div><p className="eyebrow">{incident.number}</p><h1>{incident.title}</h1><div className="form-actions"><span className={`badge ${incident.priority === "URGENT" ? "error" : incident.priority === "HIGH" ? "warning" : "neutral"}`}>{priorityLabel(incident.priority)}</span><span className="badge neutral">{statusLabel(incident.status)}</span></div></div><dl className="detail-grid"><div><dt>Cliente</dt><dd>{authorization.user.permissions.includes("Customers.View") ? <Link href={`/app/customers/${incident.customer.id}`}>{incident.customer.code} · {incident.customer.legalName}</Link> : `${incident.customer.code} · ${incident.customer.legalName}`}</dd></div><div><dt>Tienda</dt><dd>{incident.store ? `${incident.store.code} · ${incident.store.name}` : "Sin tienda"}</dd></div><div><dt>Categoría</dt><dd>{incident.category.name}</dd></div><div><dt>Responsable</dt><dd>{incident.responsible.displayName}</dd></div><div><dt>Creada por</dt><dd>{incident.createdBy.displayName}</dd></div><div><dt>Creación</dt><dd><time dateTime={incident.createdAt}>{new Date(incident.createdAt).toLocaleString("es-ES")}</time></dd></div></dl><div><h2>Descripción</h2><p style={{ whiteSpace: "pre-wrap" }}>{incident.description}</p></div>{incident.solution ? <div><h2>Solución vigente</h2><p style={{ whiteSpace: "pre-wrap" }}>{incident.solution}</p></div> : null}{incident.closeReason ? <div><h2>Cierre vigente</h2><p>{closeReasonLabel(incident.closeReason)}{incident.closeReasonDetail ? ` · ${incident.closeReasonDetail}` : ""}</p></div> : null}</div>
     <div className="panel stack"><h2>Actuaciones</h2>{incident.actions.length === 0 ? <p className="muted">Todavía no hay actuaciones registradas.</p> : incident.actions.map((action) => <article className="compact-stack" key={action.id}><div><strong>{action.author.displayName}</strong> · <time dateTime={action.performedAt}>{new Date(action.performedAt).toLocaleString("es-ES")}</time></div><p style={{ whiteSpace: "pre-wrap" }}>{action.text}</p>{action.performedAt !== action.recordedAt ? <span className="cell-detail">Registrada: {new Date(action.recordedAt).toLocaleString("es-ES")}</span> : null}</article>)}</div>
+    <SupportIncidentAttachments incidentId={incident.id} attachments={attachmentPage.attachments} nextCursor={attachmentPage.nextCursor} canUpload={canUploadAttachment} canDownload={canDownloadAttachment}/>
     {canAddAction ? <div className="panel stack"><SupportActionCreateForm incidentId={incident.id} expectedVersion={incident.version} createdAt={incident.createdAt}/></div> : null}
     {(canManage || canReopen) ? <div className="panel stack"><SupportStatusTransitionForm incidentId={incident.id} expectedVersion={incident.version} status={incident.status} canManage={canManage} canReopen={canReopen}/></div> : null}
     <div className="panel stack"><h2>Equipo de la incidencia</h2><p><strong>Responsable:</strong> {incident.responsible.displayName}</p>{activeCollaborators.length ? <ul>{activeCollaborators.map((item) => <li key={item.id}>{item.user.displayName}</li>)}</ul> : <p className="muted">Sin colaboradores activos.</p>}</div>

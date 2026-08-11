@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { Prisma } from "@prisma/client";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { createCustomer } from "@/modules/customers/application/customers";
 import {
@@ -43,6 +44,13 @@ import {
   getSupportCommunication,
   hashSupportCommunicationRequest,
 } from "@/modules/support/application/communications";
+import {
+  acquireSupportAttachmentDownloadSlot,
+  listSupportIncidentAttachments,
+  releaseSupportAttachmentDownloadSlot,
+  supportIncidentAttachmentRequestHash,
+  uploadSupportIncidentAttachment,
+} from "@/modules/support/application/incidentAttachments";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -1140,7 +1148,99 @@ describe("support incidents application", () => {
       error: { code: "SUPPORT_CATEGORY_ALREADY_EXISTS" },
     });
   });
+
+  it("uploads an incident attachment once with opaque audit and replay", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const incidentCommand = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Evidencia adjunta", description: "Incidencia con documento de prueba.", priority: "MEDIUM" as const };
+    const incident = await createSupportIncident(incidentCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(incidentCommand), scope: "incident:create" });
+    if (!incident.ok) throw new Error(incident.error.code);
+    const bytes = Buffer.from("source-pdf");
+    const input = { incidentId: incident.value.id, actionId: null, bytes, fileName: "evidencia.pdf", declaredMimeType: "application/pdf", clientIdempotencyKey: randomUUID(), requestHash: "" };
+    input.requestHash = supportIncidentAttachmentRequestHash(input);
+    const storage = new IncidentAttachmentMemoryStorage();
+    const dependencies = { storage, scanner: { scan: async () => ({ outcome: "clean" as const, engine: "test-scanner", version: "1" }) }, prepare: async () => ({ bytes: Buffer.from("canonical-pdf"), originalFileName: "evidencia.pdf", extension: "pdf" as const, mediaType: "application/pdf" as const }) };
+    const created = await uploadSupportIncidentAttachment(input, actor, { correlationId: "attachment-test-0001" }, dependencies);
+    const replay = await uploadSupportIncidentAttachment(input, actor, { correlationId: "attachment-test-0001" }, dependencies);
+    expect(created).toMatchObject({ ok: true, status: 201, value: { attachment: { originalFileName: "evidencia.pdf", mediaType: "application/pdf" } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { attachment: { id: created.ok ? created.value.attachment.id : "" } } });
+    expect(await prisma.supportIncidentAttachment.count()).toBe(1);
+    expect(await prisma.attachment.count({ where: { purpose: "SUPPORT_INCIDENT", status: "AVAILABLE", scanResult: "CLEAN" } })).toBe(1);
+    expect(await listSupportIncidentAttachments(incident.value.id, actor)).toHaveLength(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_ATTACHMENT_UPLOADED" } });
+    expect(audit.payload).toMatchObject({ actorUserId: actor.id, incidentId: incident.value.id, mediaType: "application/pdf", correlationId: "attachment-test-0001" });
+    expect(JSON.stringify(audit.payload)).not.toContain("evidencia.pdf");
+    expect(storage.published.size).toBe(1);
+  });
+
+  it("serializes the company capacity across concurrent incident uploads", async () => {
+    const actor = await admin(); const customer = await createCustomerRecord(actor); const references = await listSupportReferences();
+    const createIncident = async (title: string) => { const command = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title, description: "Incidencia para probar la capacidad concurrente.", priority: "MEDIUM" as const }; const result = await createSupportIncident(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(command), scope: "incident:create" }); if (!result.ok) throw new Error(result.error.code); return result.value; };
+    const firstIncident = await createIncident("Capacidad concurrente uno"); const secondIncident = await createIncident("Capacidad concurrente dos");
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!;
+    await seedSupportAttachmentCapacity(companyId, firstIncident.id, actor.id);
+    const storage = new IncidentAttachmentMemoryStorage(); const canonicalSize = 16 * 1024 * 1024;
+    const dependencies = { storage, scanner: { scan: async () => ({ outcome: "clean" as const, engine: "test-scanner", version: "1" }) }, prepare: async ({ originalFileName }: { originalFileName: string }) => ({ bytes: Buffer.alloc(canonicalSize, 0x41), originalFileName, extension: "pdf" as const, mediaType: "application/pdf" as const }) };
+    const makeInput = (incidentId: string) => { const value = { incidentId, actionId: null, bytes: Buffer.from("source"), fileName: `${incidentId}.pdf`, declaredMimeType: "application/pdf", clientIdempotencyKey: randomUUID(), requestHash: "" }; value.requestHash = supportIncidentAttachmentRequestHash(value); return value; };
+    const results = await Promise.all([uploadSupportIncidentAttachment(makeInput(firstIncident.id), actor, { correlationId: "capacity-1" }, dependencies), uploadSupportIncidentAttachment(makeInput(secondIncident.id), actor, { correlationId: "capacity-2" }, dependencies)]);
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toMatchObject([{ status: 503, error: { code: "SUPPORT_ATTACHMENT_CAPACITY_UNAVAILABLE" } }]);
+    const total = await prisma.attachment.aggregate({ where: { purpose: "SUPPORT_INCIDENT" }, _sum: { sizeBytes: true } });
+    expect(total._sum?.sizeBytes).toBe(1536n * 1024n * 1024n);
+  });
+
+  it("replays a concurrent upload after the first request fills capacity", async () => {
+    const actor = await admin(); const customer = await createCustomerRecord(actor); const references = await listSupportReferences();
+    const command = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Replay al limite", description: "Prueba de replay concurrente cerca de capacidad.", priority: "MEDIUM" as const };
+    const incident = await createSupportIncident(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(command), scope: "incident:create" }); if (!incident.ok) throw new Error(incident.error.code);
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!; await seedSupportAttachmentCapacity(companyId, incident.value.id, actor.id);
+    const storage = new IncidentAttachmentMemoryStorage(); const clientIdempotencyKey = randomUUID(); const bytes = Buffer.from("same-source");
+    const input = { incidentId: incident.value.id, actionId: null, bytes, fileName: "same.pdf", declaredMimeType: "application/pdf", clientIdempotencyKey, requestHash: "" }; input.requestHash = supportIncidentAttachmentRequestHash(input);
+    const dependencies = { storage, scanner: { scan: async () => ({ outcome: "clean" as const, engine: "test", version: "1" }) }, prepare: async () => ({ bytes: Buffer.alloc(16 * 1024 * 1024, 0x41), originalFileName: "same.pdf", extension: "pdf" as const, mediaType: "application/pdf" as const }) };
+    const results = await Promise.all([uploadSupportIncidentAttachment(input, actor, { correlationId: "same-1" }, dependencies), uploadSupportIncidentAttachment(input, actor, { correlationId: "same-2" }, dependencies)]);
+    expect(results.map((result) => result.status).sort()).toEqual([200, 201]);
+    expect(results.every((result) => result.ok && result.value.attachment.id === (results[0]!.ok ? results[0]!.value.attachment.id : ""))).toBe(true);
+    expect(await prisma.attachment.count({ where: { companyId, purpose: "SUPPORT_INCIDENT" } })).toBe(96);
+  });
+
+  it("removes the published object after serializable retries are exhausted", async () => {
+    const actor = await admin(); const customer = await createCustomerRecord(actor); const references = await listSupportReferences();
+    const command = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Conflicto persistente", description: "Prueba de limpieza tras rollback confirmado.", priority: "MEDIUM" as const };
+    const incident = await createSupportIncident(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(command), scope: "incident:create" }); if (!incident.ok) throw new Error(incident.error.code);
+    const bytes = Buffer.from("source"); const input = { incidentId: incident.value.id, actionId: null, bytes, fileName: "retry.pdf", declaredMimeType: "application/pdf", clientIdempotencyKey: randomUUID(), requestHash: "" }; input.requestHash = supportIncidentAttachmentRequestHash(input);
+    const storage = new IncidentAttachmentMemoryStorage(); const transaction = vi.spyOn(prisma, "$transaction").mockRejectedValue(new Prisma.PrismaClientKnownRequestError("conflict", { code: "P2034", clientVersion: "test" }));
+    try {
+      const result = await uploadSupportIncidentAttachment(input, actor, { correlationId: "retry-exhausted" }, { storage, scanner: { scan: async () => ({ outcome: "clean", engine: "test", version: "1" }) }, prepare: async () => ({ bytes: Buffer.from("canonical"), originalFileName: "retry.pdf", extension: "pdf", mediaType: "application/pdf" }) });
+      expect(result).toMatchObject({ ok: false, status: 503, error: { code: "SUPPORT_ATTACHMENT_DATABASE_BUSY", retryAfterSeconds: 3 } });
+      expect(transaction).toHaveBeenCalledTimes(3); expect(storage.published.size).toBe(0);
+    } finally { transaction.mockRestore(); }
+  });
+
+  it("bounds concurrent attachment downloads", () => {
+    expect([1, 2, 3, 4].map(() => acquireSupportAttachmentDownloadSlot())).toEqual([true, true, true, true]);
+    expect(acquireSupportAttachmentDownloadSlot()).toBe(false);
+    for (let index = 0; index < 4; index += 1) releaseSupportAttachmentDownloadSlot();
+    expect(acquireSupportAttachmentDownloadSlot()).toBe(true);
+    releaseSupportAttachmentDownloadSlot();
+  });
 });
+
+class IncidentAttachmentMemoryStorage {
+  readonly temporary = new Map<string, Buffer>();
+  readonly published = new Map<string, Buffer>();
+  async writeTemporary(bytes: Buffer, kind: "upload" | "canonical") { const key = `${randomUUID()}.${kind}`; this.temporary.set(key, Buffer.from(bytes)); return key; }
+  async publish(temporaryPath: string, storageKey: string) { const bytes = this.temporary.get(temporaryPath); if (!bytes) throw new Error("TEMPORARY_NOT_FOUND"); this.published.set(storageKey, Buffer.from(bytes)); this.temporary.delete(temporaryPath); }
+  async readVerified(storageKey: string) { const bytes = this.published.get(storageKey); if (!bytes) throw new Error("NOT_FOUND"); return Buffer.from(bytes); }
+  async removeTemporary(temporaryPath: string | null) { if (temporaryPath) this.temporary.delete(temporaryPath); }
+  async removePublished(storageKey: string) { this.published.delete(storageKey); }
+}
+
+async function seedSupportAttachmentCapacity(companyId: string, incidentId: string, uploadedById: string) {
+  const rows = Array.from({ length: 95 }, () => ({ id: randomUUID(), companyId, purpose: "SUPPORT_INCIDENT" as const, originalFileName: "historico.pdf", extension: "pdf", declaredMimeType: "application/pdf", detectedMimeType: "application/pdf", sizeBytes: 16n * 1024n * 1024n, sha256: "a".repeat(64), storageKey: "", status: "AVAILABLE" as const, scanResult: "CLEAN" as const, scanEngine: "test", scanCompletedAt: new Date(), availableAt: new Date(), uploadedById }));
+  for (const row of rows) row.storageKey = `support-incident/${companyId}/${incidentId}/${row.id}.pdf`;
+  await prisma.$transaction(async (tx) => { await tx.attachment.createMany({ data: rows }); await tx.supportIncidentAttachment.createMany({ data: rows.map((row) => ({ companyId, incidentId, attachmentId: row.id })) }); });
+}
 
 async function initialize() {
   const body = JSON.stringify(installation);
@@ -1260,12 +1360,17 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
     );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_attachments" DISABLE TRIGGER "support_incident_attachments_append_only"',
+    );
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
+    await tx.supportIncidentAttachment.deleteMany();
+    await tx.attachment.deleteMany();
     await tx.supportIncidentAction.deleteMany();
     await tx.supportIncident.deleteMany();
     await tx.customerContact.deleteMany();
@@ -1292,6 +1397,9 @@ async function reset() {
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_attachments" ENABLE TRIGGER "support_incident_attachments_append_only"',
     );
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
