@@ -27,13 +27,27 @@ export async function GET(request: Request) {
   const authorization = await requirePermission(token, "Subscriptions.RunRenewals", { correlationId });
   if (!authorization.ok) return jsonResponse(request, authorization.error, { status: authorization.status });
   const query = new URL(request.url).searchParams;
+  const allowedQueryKeys = new Set(["processDate", "includePending", "limit", "cursor"]);
+  if ([...query.keys()].some((key) => !allowedQueryKeys.has(key) || query.getAll(key).length !== 1)) {
+    return privateGetResponse(request, validationError({ formErrors: ["Los parametros de consulta no son validos."], fieldErrors: {} }), 422);
+  }
+  const includePending = query.get("includePending");
+  if (includePending !== null && includePending !== "true" && includePending !== "false") {
+    return privateGetResponse(request, validationError({ formErrors: [], fieldErrors: { includePending: ["Debe ser true o false."] } }), 422);
+  }
   const payload = listSubscriptionRenewalPreviewSchema.safeParse({
     processDate: query.get("processDate") ?? await subscriptionRenewalBusinessDate(),
-    includePending: query.get("includePending") === "true"
+    includePending: includePending === "true",
+    limit: query.get("limit") ?? undefined,
+    cursor: query.get("cursor") ?? undefined
   });
-  if (!payload.success) return jsonResponse(request, validationError(payload.error.flatten()), { status: 422 });
+  if (!payload.success) return privateGetResponse(request, validationError(payload.error.flatten()), 422);
   const result = await listSubscriptionRenewalPreview(payload.data, authorization.user, { correlationId });
-  return jsonResponse(request, result.ok ? result.value : result.error, { status: result.status });
+  return privateGetResponse(request, result.ok ? result.value : result.error, result.status);
+}
+
+function privateGetResponse<TBody>(request: Request, body: TBody, status: number) {
+  return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0" } });
 }
 
 export async function POST(request: Request) {

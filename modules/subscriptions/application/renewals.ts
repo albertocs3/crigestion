@@ -1,5 +1,6 @@
 import "server-only";
 
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -15,6 +16,7 @@ import {
 } from "@/modules/billing/application/invoices";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
 import { hashIdempotencyPayload } from "@/modules/platform/application/http";
+import { getSessionSecret } from "@/modules/platform/application/environment";
 import { resolveScheduledCancellationBeforeRenewal } from "@/modules/subscriptions/application/subscriptions";
 import { applyDueSubscriptionChangeBeforeRenewal } from "@/modules/subscriptions/application/subscriptionChanges";
 import {
@@ -113,11 +115,18 @@ const releaseRenewalValueSchema = z.object({
 
 export const listSubscriptionRenewalPreviewSchema = z.object({
   processDate: subscriptionRenewalDateOnlySchema,
-  includePending: z.boolean().default(false)
+  includePending: z.boolean().default(false),
+  limit: z.preprocess(
+    (value) => value === undefined ? 25 : value,
+    z.union([z.number().int().min(1).max(100), z.string().regex(/^(?:[1-9]|[1-9][0-9]|100)$/).transform(Number)])
+  ),
+  cursor: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).max(1_000).optional())
 }).strict();
-export type ListSubscriptionRenewalPreviewCommand = z.infer<typeof listSubscriptionRenewalPreviewSchema>;
+type ParsedListSubscriptionRenewalPreviewCommand = z.infer<typeof listSubscriptionRenewalPreviewSchema>;
+export type ListSubscriptionRenewalPreviewCommand = Omit<ParsedListSubscriptionRenewalPreviewCommand, "limit"> & { limit?: number };
 export type SubscriptionRenewalPreview = {
   processDate: string;
+  nextCursor: string | null;
   groups: Array<{
     key: string;
     customer: { id: string; code: string; legalName: string };
@@ -200,8 +209,16 @@ export async function listSubscriptionRenewalPreview(
   if (!companyId) {
     return { ok: false, status: 409, error: { code: "PLATFORM_NOT_INITIALIZED", message: "La plataforma no esta inicializada." } };
   }
+  const filterHash = hashIdempotencyPayload("subscription-renewal-preview-filters:v1", {
+    companyId, actorId: actor.id, processDate: command.processDate, includePending: command.includePending
+  });
+  const cursor = command.cursor ? decodeRenewalPreviewCursor(command.cursor, filterHash) : null;
+  if (command.cursor && !cursor) {
+    return { ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_PREVIEW_CURSOR_INVALID", message: "El cursor de la vista previa no es valido para estos filtros." } };
+  }
+  const limit = command.limit ?? 25;
   const processDate = parseDateOnly(command.processDate);
-  const candidates = await prisma.$queryRaw<Array<{ id: string; candidateCount: number }>>(Prisma.sql`
+  const candidates = await prisma.$queryRaw<Array<{ id: string; candidateCount: number; hasNext: boolean }>>(Prisma.sql`
     WITH eligible AS (
       SELECT s."id", s."customerId", s."paymentMethod", s."nextRenewalDate"
       FROM "subscriptions" s
@@ -223,20 +240,28 @@ export async function listSubscriptionRenewalPreview(
             AND reservation."periodStart" = s."nextRenewalDate"
             AND reservation."status"::text IN ('RESERVED', 'BILLED')
         )
+        ${cursor ? Prisma.sql`AND (s."customerId"::text, s."paymentMethod"::text, s."nextRenewalDate")
+          > (${cursor.customerId}::text, ${cursor.paymentMethod}::text, ${parseDateOnly(cursor.periodStart)}::date)` : Prisma.empty}
     ), group_keys AS (
       SELECT "customerId", "paymentMethod", "nextRenewalDate"
       FROM eligible
       GROUP BY "customerId", "paymentMethod", "nextRenewalDate"
-      ORDER BY "customerId", "paymentMethod", "nextRenewalDate"
-      LIMIT 25
+      ORDER BY "customerId", "paymentMethod"::text, "nextRenewalDate"
+      LIMIT ${limit + 1}
+    ), selected_group_keys AS (
+      SELECT "customerId", "paymentMethod", "nextRenewalDate"
+      FROM group_keys
+      ORDER BY "customerId", "paymentMethod"::text, "nextRenewalDate"
+      LIMIT ${limit}
     ), bounded AS (
       SELECT eligible."id",
         count(*) OVER (PARTITION BY eligible."customerId", eligible."paymentMethod", eligible."nextRenewalDate")::int AS "candidateCount",
         row_number() OVER (PARTITION BY eligible."customerId", eligible."paymentMethod", eligible."nextRenewalDate" ORDER BY eligible."id") AS position
       FROM eligible
-      JOIN group_keys USING ("customerId", "paymentMethod", "nextRenewalDate")
+      JOIN selected_group_keys USING ("customerId", "paymentMethod", "nextRenewalDate")
     )
-    SELECT "id", "candidateCount" FROM bounded WHERE position <= 100 ORDER BY "id"
+    SELECT "id", "candidateCount", (SELECT count(*) > ${limit} FROM group_keys) AS "hasNext"
+    FROM bounded WHERE position <= 100 ORDER BY "id"
   `);
   const candidateCounts = new Map(candidates.map((candidate) => [candidate.id, candidate.candidateCount]));
   const subscriptions = await prisma.subscription.findMany({
@@ -311,6 +336,7 @@ export async function listSubscriptionRenewalPreview(
   for (const group of grouped.values()) {
     group.selectable = group.subscriptions.every((subscription) => (candidateCounts.get(subscription.id) ?? 0) <= 100);
   }
+  const groups = [...grouped.values()].sort(compareRenewalPreviewGroups);
   const reservedRows = await prisma.invoice.findMany({
     where: { companyId, origin: "SUBSCRIPTION", status: "DRAFT", subscriptionRenewalReservations: { some: { status: "RESERVED" } } },
     orderBy: [{ issueDate: "asc" }, { id: "asc" }],
@@ -323,7 +349,10 @@ export async function listSubscriptionRenewalPreview(
   });
   const value: SubscriptionRenewalPreview = {
     processDate: command.processDate,
-    groups: [...grouped.values()],
+    nextCursor: candidates[0]?.hasNext && groups.length > 0
+      ? encodeRenewalPreviewCursor(groups.at(-1)!, filterHash)
+      : null,
+    groups,
     reservedInvoices: reservedRows.map((invoice) => ({
       invoiceId: invoice.id, issueDate: formatDateOnly(invoice.issueDate),
       customer: { id: invoice.customerId!, code: invoice.customerCodeSnapshot, legalName: invoice.customerLegalNameSnapshot },
@@ -336,7 +365,8 @@ export async function listSubscriptionRenewalPreview(
     eventType: "SUBSCRIPTION_RENEWAL_PREVIEW_VIEWED", actorType: "USER",
     payload: { actorUserId: actor.id, companyId, processDate: command.processDate, includePending: command.includePending,
       groupCount: value.groups.length, candidateCount: value.groups.reduce((count, group) => count + group.subscriptions.length, 0),
-      reservedInvoiceCount: value.reservedInvoices.length, ...(context.correlationId ? { correlationId: context.correlationId } : {}) }
+      reservedInvoiceCount: value.reservedInvoices.length, hasNext: Boolean(value.nextCursor),
+      ...(context.correlationId ? { correlationId: context.correlationId } : {}) }
   } });
   return { ok: true, status: 200, value };
 }
@@ -886,6 +916,53 @@ function parseDateOnly(value: string): Date {
 
 function formatDateOnly(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+function compareRenewalPreviewGroups(
+  left: SubscriptionRenewalPreview["groups"][number],
+  right: SubscriptionRenewalPreview["groups"][number]
+): number {
+  return left.customer.id.localeCompare(right.customer.id)
+    || left.paymentMethod.localeCompare(right.paymentMethod)
+    || left.periodStart.localeCompare(right.periodStart);
+}
+
+const renewalPreviewCursorSchema = z.object({
+  v: z.literal(1),
+  customerId: z.string().uuid(),
+  paymentMethod: z.enum(["BANK_TRANSFER", "CASH", "DIRECT_DEBIT"]),
+  periodStart: subscriptionRenewalDateOnlySchema,
+  filterHash: z.string().length(64)
+}).strict();
+
+function encodeRenewalPreviewCursor(group: SubscriptionRenewalPreview["groups"][number], filterHash: string): string {
+  const payload = Buffer.from(JSON.stringify({
+    v: 1,
+    customerId: group.customer.id,
+    paymentMethod: group.paymentMethod,
+    periodStart: group.periodStart,
+    filterHash
+  }), "utf8").toString("base64url");
+  return `${payload}.${signRenewalPreviewCursor(payload)}`;
+}
+
+function decodeRenewalPreviewCursor(value: string, filterHash: string): z.infer<typeof renewalPreviewCursorSchema> | null {
+  try {
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expectedSignature = signRenewalPreviewCursor(payload);
+    const submittedBytes = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(expectedSignature, "base64url");
+    if (submittedBytes.length !== expectedBytes.length || !timingSafeEqual(submittedBytes, expectedBytes)) return null;
+    const parsed = renewalPreviewCursorSchema.safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    return parsed.success && parsed.data.filterHash === filterHash ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function signRenewalPreviewCursor(payload: string): string {
+  return createHmac("sha256", getSessionSecret()).update(`subscription-renewal-preview-cursor:v1:${payload}`).digest("base64url");
 }
 
 

@@ -710,6 +710,36 @@ describe("subscriptions application service", () => {
     expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false }, actor)).toMatchObject({ ok: true, value: { groups: [{ subscriptions: [{ id: created.value.id }] }], reservedInvoices: [] } });
   });
 
+  it("paginates renewal groups with a signed filter-bound cursor", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id); const renewalDate = todayDate(); const subscriptionIds: string[] = [];
+    const paymentMethods = ["BANK_TRANSFER", "CASH", "DIRECT_DEBIT"] as const;
+    for (let index = 0; index < 3; index += 1) {
+      const command = payload(customerId, itemId, { name: `Grupo paginado ${index}`, startDate: renewalDate });
+      const created = await createSubscription(command, actor, context(`preview-page-create-${index}`, command)); if (!created.ok) throw new Error(created.error.code);
+      await prisma.subscription.update({ where: { id: created.value.id }, data: { paymentMethod: paymentMethods[index] } });
+      const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context(`preview-page-activate-${index}`, { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+      subscriptionIds.push(created.value.id);
+    }
+    const first = await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false, limit: 1 }, actor);
+    expect(first).toMatchObject({ ok: true, value: { groups: [{ subscriptions: [{ id: expect.any(String) }] }], nextCursor: expect.any(String) } });
+    if (!first.ok || !first.value.nextCursor) throw new Error("RENEWAL_PREVIEW_CURSOR_EXPECTED");
+    const second = await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false, limit: 1, cursor: first.value.nextCursor }, actor);
+    expect(second).toMatchObject({ ok: true, value: { groups: [{ subscriptions: [{ id: expect.any(String) }] }], nextCursor: expect.any(String) } });
+    if (!second.ok || !second.value.nextCursor) throw new Error("RENEWAL_PREVIEW_SECOND_CURSOR_EXPECTED");
+    const third = await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false, limit: 1, cursor: second.value.nextCursor }, actor);
+    expect(third).toMatchObject({ ok: true, value: { groups: [{ subscriptions: [{ id: expect.any(String) }] }], nextCursor: null } });
+    if (!third.ok) throw new Error(third.error.code);
+    const pagedIds = [first, second, third].flatMap((page) => page.ok ? page.value.groups.flatMap((group) => group.subscriptions.map((subscription) => subscription.id)) : []);
+    expect(new Set(pagedIds)).toEqual(new Set(subscriptionIds));
+    expect([first, second, third].flatMap((page) => page.ok ? page.value.groups.map((group) => group.paymentMethod) : [])).toEqual(paymentMethods);
+    expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: true, limit: 1, cursor: first.value.nextCursor }, actor)).toMatchObject({
+      ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_PREVIEW_CURSOR_INVALID" }
+    });
+    expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false, limit: 1, cursor: `${first.value.nextCursor}x` }, actor)).toMatchObject({
+      ok: false, status: 422, error: { code: "SUBSCRIPTION_RENEWAL_PREVIEW_CURSOR_INVALID" }
+    });
+  });
+
   it("serializes release against confirmation to one coherent terminal outcome", async () => {
     const actor = await admin(); const customerId = await customer(actor.id); await prisma.customer.update({ where: { id: customerId }, data: { code: "5" } });
     const itemId = await catalogItem(actor.id); const renewalDate = todayDate(); const command = payload(customerId, itemId, { startDate: renewalDate });

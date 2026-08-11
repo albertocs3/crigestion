@@ -335,8 +335,9 @@ Prioridades pendientes despues de este corte:
 6. Ampliar los cambios programados de Suscripciones mas alla de la primera
    rebanada de cantidades `PER_LICENSE`, ya integrada con vista previa,
    reserva y evidencia append-only; completar la edicion controlada de la
-   vista previa, ampliar de forma controlada el catalogo de bloqueos
-   automaticos y paginacion navegable entre cortes de grupos. La reactivacion
+   vista previa y ampliar de forma controlada el catalogo de bloqueos
+   automaticos. La vista previa ya dispone de paginacion navegable mediante
+   cursor firmado ligado a filtros. La reactivacion
    programada ya dispone de aplicacion supervisada y de un worker one-shot
    monitorizado con autoridad diferida, cooldown y ledger append-only de
    intentos. Despues, abordar Atencion al

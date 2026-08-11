@@ -258,6 +258,7 @@ describe("subscription HTTP contracts", () => {
     expect(first.status).toBe(201); const scheduled = await first.json() as { subscriptionVersion: number; schedule: { id: string; status: string; version: number } };
     expect(scheduled).toMatchObject({ subscriptionVersion: 3, schedule: { status: "PENDING", version: 1 } });
     expect(await replay.json()).toEqual(scheduled);
+    const rateAuditCountBefore = await prisma.auditEvent.count({ where: { eventType: "SUBSCRIPTION_CHANGE_SCHEDULE_RATE_LIMITED" } });
     for (let index = 0; index < 9; index += 1) {
       const missingId = randomUUID();
       expect((await subscriptionChangeScheduleCreate(jsonRequest(`/api/subscriptions/${missingId}/change-schedules`, body, { csrf }),
@@ -268,7 +269,7 @@ describe("subscription HTTP contracts", () => {
       { params: Promise.resolve({ subscriptionId: limitedId }) });
     expect(limited.status).toBe(429); expect(limited.headers.get("Retry-After")).toBe("900");
     const rateAudits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_CHANGE_SCHEDULE_RATE_LIMITED" }, select: { payload: true } });
-    expect(rateAudits).toHaveLength(1); expect(JSON.stringify(rateAudits)).not.toContain(limitedId); expect(JSON.stringify(rateAudits)).not.toContain(body.reason);
+    expect(rateAudits).toHaveLength(rateAuditCountBefore + 1); expect(JSON.stringify(rateAudits)).not.toContain(limitedId); expect(JSON.stringify(rateAudits)).not.toContain(body.reason);
     const replayAfterLimit = await subscriptionChangeScheduleCreate(jsonRequest(path, body, { csrf, idempotency: key }), routeContext);
     expect(replayAfterLimit.status).toBe(201); expect(await replayAfterLimit.json()).toEqual(scheduled);
     const detail = await subscriptionGet(apiRequest(`/api/subscriptions/${created.id}`), routeContext);
@@ -333,7 +334,13 @@ describe("subscription HTTP contracts", () => {
     await subscriptionActivate(jsonRequest(`/api/subscriptions/${created.id}/activate`, { version: created.version }, { csrf }), { params: Promise.resolve({ subscriptionId: created.id }) });
     const installation = await prisma.installation.findFirstOrThrow();
     await seedRenewalAccounting(installation.companyId!, references.actorId, "6");
-    expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}`))).status).toBe(200);
+    const preview = await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}`));
+    expect(preview.status).toBe(200); expect(preview.headers.get("Cache-Control")).toContain("private, no-store");
+    expect(await preview.json()).toMatchObject({ groups: [{ subscriptions: [{ id: created.id }] }], nextCursor: null });
+    expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&includePending=yes`))).status).toBe(422);
+    expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&limit=01`))).status).toBe(422);
+    expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&limit=1&limit=2`))).status).toBe(422);
+    expect((await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}&unknown=true`))).status).toBe(422);
     const body = { subscriptions: [{ subscriptionId: created.id, expectedVersion: 2 }], issueDate: todayDate() };
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", body, { csrf, origin: "https://evil.example" }))).status).toBe(403);
     expect((await renewalsPost(jsonRequest("/api/subscriptions/renewals", body))).status).toBe(403);

@@ -441,15 +441,24 @@ cancelada responde `CANCELLED` sin duplicar la transicion ni la auditoria.
 
 Permiso requerido: `Subscriptions.RunRenewals`. Acepta `processDate` en formato
 `AAAA-MM-DD` (por defecto, fecha de negocio de PostgreSQL en `Europe/Madrid`) e
-`includePending=true|false`. No admite una fecha futura.
+`includePending=true|false`, `limit` canónico entre 1 y 100 (25 por defecto) y
+un `cursor` opaco. No admite una fecha futura ni parámetros desconocidos,
+repetidos o booleanos no canónicos.
 
-Devuelve hasta 25 grupos elegibles ordenados por cliente, forma de pago y
-periodo, con versiones optimistas, accion prevista (`INVOICE` o `CANCEL`) y
-total estimado. Una suscripcion `RENEWAL_PENDING` solo aparece al solicitarla
-expresamente. Las reservas activas no vuelven a aparecer como candidatas y se
-devuelven en `reservedInvoices`. La consulta es orientativa y se audita solo
-con conteos e identificadores seguros. Cada grupo hidrata como maximo 100
-miembros; si el total es mayor se muestra como no seleccionable.
+Devuelve los grupos elegibles ordenados por cliente, forma de pago y periodo,
+con versiones optimistas, accion prevista (`INVOICE` o `CANCEL`), total
+estimado y `nextCursor`. El cursor está firmado y ligado a empresa, actor,
+fecha de proceso e `includePending`; manipularlo o reutilizarlo con otros
+filtros devuelve `422 SUBSCRIPTION_RENEWAL_PREVIEW_CURSOR_INVALID`. La cola es
+viva: los cambios entre páginas se revalidan y el operador puede volver a la
+primera página para refrescar el corte.
+
+Una suscripcion `RENEWAL_PENDING` solo aparece al solicitarla expresamente.
+Las reservas activas no vuelven a aparecer como candidatas y se devuelven en
+`reservedInvoices`. La consulta es orientativa, usa `private, no-store` y se
+audita solo con conteos y estado de continuidad, nunca con el cursor. Cada
+grupo hidrata como maximo 100 miembros; si el total es mayor se muestra como no
+seleccionable.
 
 ### `POST /api/subscriptions/renewals`
 
