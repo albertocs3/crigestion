@@ -51,6 +51,7 @@ const platformPermissions = [
   ["Support.AddActions", "Registrar actuaciones en incidencias asignadas"],
   ["Support.ManageAttachments", "Adjuntar archivos a incidencias autorizadas"],
   ["Support.DownloadAttachments", "Descargar adjuntos de incidencias autorizadas"],
+  ["Support.ReceiveUrgentNotifications", "Recibir notificaciones de incidencias urgentes"],
   ["Support.ManageAssigned", "Gestionar el estado de incidencias asignadas"],
   ["Support.Reopen", "Reabrir incidencias finalizadas"],
   ["Support.ManageParticipants", "Gestionar colaboradores y responsable de incidencias"],

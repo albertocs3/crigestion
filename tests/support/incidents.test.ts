@@ -11,6 +11,7 @@ import {
   listCustomerContacts,
 } from "@/modules/customers/application/contacts";
 import { login } from "@/modules/platform/application/auth";
+import { changeNotificationState, hashNotificationStateRequest, listNotifications } from "@/modules/platform/application/notifications";
 import {
   hashRequestBody,
   initializePlatform,
@@ -113,6 +114,27 @@ describe("support incidents application", () => {
     });
     expect(await prisma.supportIncident.count()).toBe(1);
     expect(await prisma.supportIncidentEvent.count()).toBe(1);
+    const inbox = await listNotifications(actor, { state: "UNREAD", limit: 25 });
+    expect(inbox).toMatchObject({ unreadCount: 1, items: [{ kind: "SUPPORT_INCIDENT_URGENT", severity: "URGENT", status: "UNREAD", incident: { id: created.ok ? created.value.id : "" } }] });
+    if (!inbox?.items[0]) throw new Error("NOTIFICATION_MISSING");
+    const stateCommand = { state: "READ" as const, expectedVersion: inbox.items[0].version };
+    const stateContext = { idempotencyKey: randomUUID(), requestHash: hashNotificationStateRequest(inbox.items[0].id, stateCommand), correlationId: "notification-state-0001" };
+    const changed = await changeNotificationState(inbox.items[0].id, stateCommand, actor, stateContext);
+    await prisma.rateLimitBucket.update({ where: { key: `notification-state:${actor.id}` }, data: { count: 120, windowStart: new Date() } });
+    const replayed = await changeNotificationState(inbox.items[0].id, stateCommand, actor, stateContext);
+    const limitedCommand = { state: "UNREAD" as const, expectedVersion: 2 };
+    const limited = await changeNotificationState(inbox.items[0].id, limitedCommand, actor, { idempotencyKey: stateContext.idempotencyKey, requestHash: hashNotificationStateRequest(inbox.items[0].id, limitedCommand) });
+    expect(changed).toMatchObject({ ok: true, status: 200, value: { status: "READ", version: 2 } });
+    expect(replayed).toMatchObject({ ok: true, status: 200, value: { id: inbox.items[0].id } });
+    expect(limited).toMatchObject({ ok: false, status: 429, error: { code: "NOTIFICATION_STATE_RATE_LIMITED", retryAfterSeconds: expect.any(Number) } });
+    expect(await prisma.notificationStateChange.count()).toBe(1);
+    const storedNotification = await prisma.notification.findUniqueOrThrow({ where: { id: inbox.items[0].id } });
+    await expect(prisma.notification.create({ data: { companyId: storedNotification.companyId, recipientUserId: storedNotification.recipientUserId, incidentId: storedNotification.incidentId, sourceIncidentEventId: storedNotification.sourceIncidentEventId, kind: "SUPPORT_INCIDENT_ASSIGNED", messageCode: "support.incident.assigned", incidentNumber: storedNotification.incidentNumber, severity: "INFO", expiresAt: storedNotification.expiresAt } })).rejects.toThrow();
+    const archivedAt = new Date();
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.notification.update({ where: { id: storedNotification.id }, data: { status: "ARCHIVED", version: 3, archivedAt } });
+      await tx.notificationStateChange.create({ data: { companyId: storedNotification.companyId, notificationId: storedNotification.id, actorUserId: actor.id, fromStatus: "READ", toStatus: "ARCHIVED", resultingVersion: 3, occurredAt: new Date(archivedAt.getTime() - 1_000) } });
+    })).rejects.toThrow();
     const audit = await prisma.auditEvent.findFirstOrThrow({
       where: { eventType: "SUPPORT_INCIDENT_CREATED" },
     });
@@ -621,20 +643,24 @@ describe("support incidents application", () => {
       responsibleUserId: user.id,
       reason: "Asume la continuidad y seguimiento del caso.",
     };
-    expect(
-      await changeSupportParticipants(
-        incident.value.id,
-        reassign,
-        actor,
-        participantContext(incident.value.id, reassign),
-      ),
-    ).toMatchObject({
+    const reassigned = await changeSupportParticipants(
+      incident.value.id,
+      reassign,
+      actor,
+      participantContext(incident.value.id, reassign),
+    );
+    expect(reassigned).toMatchObject({
       ok: true,
       value: {
         incident: { version: 5, responsibleUserId: user.id },
         change: { type: "RESPONSIBLE_CHANGED" },
       },
     });
+    const reassignmentNotifications = await prisma.notification.findMany({ where: { incidentId: incident.value.id, kind: "SUPPORT_INCIDENT_REASSIGNED" }, select: { id: true, recipientUserId: true, version: true } });
+    expect(reassignmentNotifications).toEqual([{ id: expect.any(String), recipientUserId: user.id, version: 1 }]);
+    const foreignCommand = { state: "READ" as const, expectedVersion: 1 };
+    expect(await changeNotificationState(reassignmentNotifications[0]!.id, foreignCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashNotificationStateRequest(reassignmentNotifications[0]!.id, foreignCommand), correlationId: "notification-foreign-1" })).toMatchObject({ ok: false, status: 404, error: { code: "NOTIFICATION_NOT_FOUND" } });
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_STATE_DENIED" } })).toBe(1);
     const stored = await getSupportIncident(incident.value.id, actor);
     expect(stored?.collaborators).toHaveLength(1);
     expect(stored?.collaborators[0]?.removedAt).not.toBeNull();
@@ -1363,6 +1389,10 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_attachments" DISABLE TRIGGER "support_incident_attachments_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "notifications" DISABLE TRIGGER "notifications_guard"');
+    await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" DISABLE TRIGGER "notification_state_changes_append_only"');
+    await tx.notificationStateChange.deleteMany();
+    await tx.notification.deleteMany();
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
@@ -1398,6 +1428,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" ENABLE TRIGGER "notification_state_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "notifications" ENABLE TRIGGER "notifications_guard"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_attachments" ENABLE TRIGGER "support_incident_attachments_append_only"',
     );

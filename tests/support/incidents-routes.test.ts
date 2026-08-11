@@ -10,6 +10,8 @@ import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/ac
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
+import { GET as notificationsGet } from "@/app/api/notifications/route";
+import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
 import {
   GET as communicationsGet,
   POST as communicationsPost,
@@ -82,6 +84,9 @@ describe("support incidents HTTP contracts", () => {
       "private, no-store, max-age=0",
     );
     expect(await response.json()).toMatchObject({ code: "UNAUTHENTICATED" });
+    const notifications = await notificationsGet(request("/api/notifications"));
+    expect(notifications.status).toBe(401);
+    expect(notifications.headers.get("cache-control")).toBe("private, no-store, max-age=0");
   });
 
   it("requires CSRF before creating an incident", async () => {
@@ -146,6 +151,31 @@ describe("support incidents HTTP contracts", () => {
         where: { eventType: "SUPPORT_INCIDENT_CREATED" },
       }),
     ).toBe(1);
+  });
+
+  it("lists only the authenticated inbox and changes state without caching", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const body = await payload();
+    body.priority = "URGENT";
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", body, { csrf, key: randomUUID() }));
+    expect(created.status).toBe(201);
+    const listing = await notificationsGet(request("/api/notifications?state=UNREAD"));
+    expect(listing.status).toBe(200);
+    expect(listing.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const inbox = await listing.json() as { unreadCount: number; items: Array<{ id: string; status: string; version: number }> };
+    expect(inbox).toMatchObject({ unreadCount: 1, items: [{ status: "UNREAD", version: 1 }] });
+    const invalidCursor = await notificationsGet(request("/api/notifications?cursor=not-a-cursor"));
+    expect(invalidCursor.status).toBe(422);
+    const notification = inbox.items[0];
+    if (!notification) throw new Error("NOTIFICATION_MISSING");
+    const missingCsrf = await notificationStatePut(jsonRequest(`/api/notifications/${notification.id}/state`, { state: "READ", expectedVersion: notification.version }, { key: randomUUID(), method: "PUT" }), { params: Promise.resolve({ notificationId: notification.id }) });
+    expect(missingCsrf.status).toBe(403);
+    expect(await missingCsrf.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const changed = await notificationStatePut(jsonRequest(`/api/notifications/${notification.id}/state`, { state: "READ", expectedVersion: notification.version }, { csrf, key: randomUUID(), method: "PUT" }), { params: Promise.resolve({ notificationId: notification.id }) });
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(await changed.json()).toMatchObject({ id: notification.id, status: "READ", version: 2 });
   });
 
   it("rate limits even an existing attachment key before reading the multipart body", async () => {
@@ -728,7 +758,7 @@ function request(path: string) {
 function jsonRequest(
   path: string,
   body: unknown,
-  options: { csrf?: string; key?: string; method?: "POST" | "PATCH" } = {},
+  options: { csrf?: string; key?: string; method?: "POST" | "PATCH" | "PUT" } = {},
 ) {
   const headers = new Headers({
     "Content-Type": "application/json",
@@ -773,6 +803,10 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "customer_contacts" DISABLE TRIGGER "customer_contacts_guard"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "notifications" DISABLE TRIGGER "notifications_guard"');
+    await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" DISABLE TRIGGER "notification_state_changes_append_only"');
+    await tx.notificationStateChange.deleteMany();
+    await tx.notification.deleteMany();
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
@@ -806,6 +840,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "customer_contacts" ENABLE TRIGGER "customer_contacts_guard"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" ENABLE TRIGGER "notification_state_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "notifications" ENABLE TRIGGER "notifications_guard"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas y adjuntos seguros. Fusiones y notificaciones quedan fuera del contrato actual.
+La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros y notificaciones internas persistentes. Las fusiones quedan fuera del contrato actual.
 
 ## Permisos
 
@@ -157,3 +157,15 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 - Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
 - Las comunicaciones no se borran y cada actualización exige una corrección exacta append-only con versión consecutiva.
 - No existe borrado físico de incidencias en la API.
+
+## Notificaciones internas
+
+`GET /api/notifications?state=UNREAD|READ|ARCHIVED|ALL&limit&cursor` está disponible para cualquier sesión autenticada y devuelve únicamente la bandeja del usuario activo. Incluye contador de no leídas, cursor opaco y un DTO mínimo sin título, descripción, cliente, contacto ni motivo. El enlace a la incidencia se deriva en servidor y no concede acceso: la página relacionada vuelve a exigir `Support.View`. Todas las respuestas usan `Cache-Control: private, no-store`.
+
+`PUT /api/notifications/{notificationId}/state` recibe JSON estricto `{ state, expectedVersion }`, exige Origin, CSRF, mantenimiento inactivo e `Idempotency-Key`, y limita el cuerpo a 2 KiB. Permite `UNREAD -> READ|ARCHIVED` y `READ -> UNREAD|ARCHIVED`; `ARCHIVED` es terminal. Una versión obsoleta devuelve `409 NOTIFICATION_VERSION_CONFLICT`, una transición inválida `409 NOTIFICATION_STATE_INVALID` y un identificador inexistente, ajeno o de otra empresa `404 NOTIFICATION_NOT_FOUND`. La cuota persistente admite 120 cambios por usuario y 15 minutos; el replay válido no consume cuota y el exceso devuelve `429 NOTIFICATION_STATE_RATE_LIMITED` con `Retry-After`.
+
+El alta de incidencia notifica al responsable. Una incidencia `URGENT` notifica a los usuarios activos con `Support.ReceiveUrgentNotifications`; si el responsable también posee ese permiso recibe una única notificación urgente. Una reasignación notifica solo al nuevo responsable. La creación ocurre en la misma transacción que el evento funcional, con unicidad por destinatario, clase y evento fuente. Los cambios de estado conservan evidencia append-only y control de versión en PostgreSQL.
+
+La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. La transición posterior de prioridad a urgente, incorporación de colaboradores, nuevas actuaciones de colaboradores, reaperturas, fusiones, acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+
+La bandeja y sus rutas son transversales, pero esta primera persistencia solo admite fuentes de Atención al cliente con relación obligatoria a incidencia y evento. Incorporar productores de otros módulos requerirá ampliar el origen tipado y sus invariantes PostgreSQL, sin convertir `href` ni el mensaje en texto arbitrario.

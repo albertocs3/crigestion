@@ -8,6 +8,7 @@ import type {
   RequestContext,
   SessionUser,
 } from "@/modules/platform/application/auth";
+import { createIncidentCreatedNotifications } from "@/modules/platform/application/notifications";
 
 const prioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]);
 const statusSchema = z.enum([
@@ -742,6 +743,17 @@ export async function createSupportIncident(
       },
       select: incidentDetailSelect,
     });
+    const createdEvent = created.events.find((event) => event.eventType === "CREATED");
+    if (!createdEvent) throw new Error("SUPPORT_INCIDENT_CREATED_EVENT_MISSING");
+    await createIncidentCreatedNotifications(tx, {
+      companyId,
+      incidentId: created.id,
+      sourceEventId: createdEvent.id,
+      incidentNumber: number,
+      responsibleUserId: command.responsibleUserId,
+      priority: command.priority,
+      correlationId: context.correlationId,
+    });
     const value = mapIncidentDetail(created);
     await tx.auditEvent.create({
       data: {
@@ -907,6 +919,17 @@ export async function createIncidentFromCommunication(
         },
       },
       select: incidentDetailSelect,
+    });
+    const createdEvent = created.events.find((event) => event.eventType === "CREATED");
+    if (!createdEvent) throw new Error("SUPPORT_INCIDENT_CREATED_EVENT_MISSING");
+    await createIncidentCreatedNotifications(tx, {
+      companyId,
+      incidentId: created.id,
+      sourceEventId: createdEvent.id,
+      incidentNumber: created.number,
+      responsibleUserId: command.responsibleUserId,
+      priority: command.priority,
+      correlationId: context.correlationId,
     });
     const resultingVersion = communication.version + 1;
     await tx.supportCommunicationCorrection.create({

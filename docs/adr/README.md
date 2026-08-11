@@ -30,7 +30,7 @@ Este directorio contiene las decisiones arquitectonicas relevantes de CriGestió
 | [ADR-0013](ADR-0013-auditoria-append-only.md) | Aceptada | Mantener auditoria append-only |
 | [ADR-0014](ADR-0014-worker-service.md) | Reemplazada | Sustituida por ADR-0022 |
 | [ADR-0015](ADR-0015-db-migrator.md) | Reemplazada | Migraciones gestionadas con Prisma Migrate |
-| [ADR-0016](ADR-0016-signalr-notificaciones.md) | Pendiente de revision | Adaptar a WebSocket/SSE o polling web |
+| [ADR-0016](ADR-0016-signalr-notificaciones.md) | Aceptada | PostgreSQL transaccional y refresco al navegar; tiempo real diferido |
 | [ADR-0017](ADR-0017-copias-restauracion.md) | Aceptada | Gestionar copias completas y restauracion en modo controlado |
 | [ADR-0018](ADR-0018-verifactu-adaptador.md) | Aceptada | Aislar VeriFactu detras de un adaptador versionado |
 | [ADR-0019](ADR-0019-nextjs-typescript.md) | Aceptada | Usar Next.js y TypeScript como plataforma |

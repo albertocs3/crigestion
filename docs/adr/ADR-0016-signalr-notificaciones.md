@@ -2,18 +2,24 @@
 
 ## Estado
 
-Pendiente de revision.
+Aceptada.
 
 ## Contexto
 
 La aplicacion debe mostrar notificaciones internas, algunas criticas, y mantener registro persistido. La arquitectura vigente es web con Next.js.
 
-## Decision provisional
+El nombre del archivo se conserva por trazabilidad histórica; la decisión aceptada no adopta SignalR.
 
-Las notificaciones se persistiran en PostgreSQL. La entrega inmediata se revisara entre WebSocket, Server-Sent Events, servicio gestionado o consulta periodica.
+## Decision
+
+PostgreSQL es la fuente de verdad y la notificacion se crea en la misma transaccion que el hecho funcional. La primera entrega se actualiza al navegar o recargar y no introduce WebSocket, Server-Sent Events ni polling automatico.
+
+Las incidencias de prioridad `URGENT` generan avisos de gravedad `URGENT`, no `CRITICAL`. Por tanto no activan ventana emergente. Las notificaciones `CRITICAL`, su presentacion obligatoria y la entrega casi inmediata quedan reservadas para una ampliacion con outbox transaccional y un canal web evaluado de forma independiente.
 
 ## Consecuencias
 
 - La notificacion persistida es la fuente de verdad.
-- La entrega en tiempo real mejora experiencia, pero no define el estado funcional.
-- Se requiere ADR final antes de implementar notificaciones criticas.
+- El estado se refresca al navegar o recargar; la UI no promete tiempo real.
+- Abrir el elemento relacionado no marca automaticamente la notificacion.
+- Una futura entrega inmediata solo transportara una señal; nunca sustituira la lectura autorizada desde PostgreSQL.
+- Las notificaciones criticas no se implementan en esta primera entrega.

@@ -5,6 +5,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
+import { createIncidentReassignedNotification } from "@/modules/platform/application/notifications";
 
 const version = z.number().int().positive();
 const reason = z.string().trim().min(3).max(500);
@@ -49,7 +50,8 @@ export async function changeSupportParticipants(incidentId: string, command: Sup
         }
         const change = await tx.supportIncidentParticipantChange.create({ data: { companyId, incidentId, actorUserId: actor.id, changeType: type, collaboratorId, fromResponsibleId: command.action === "reassign" ? incident.responsibleUserId : null, toResponsibleId: command.action === "reassign" ? command.responsibleUserId : null, reason: command.action === "add-collaborator" ? null : command.reason, resultingVersion, occurredAt: now }, select: { id: true, occurredAt: true } });
         await tx.supportIncident.update({ where: { id: incident.id }, data: { responsibleUserId: nextResponsible, version: resultingVersion } });
-        await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, participantChangeId: change.id, eventType: type, fromStatus: incident.status, toStatus: incident.status, resultingVersion } });
+        const event = await tx.supportIncidentEvent.create({ data: { companyId, incidentId, actorUserId: actor.id, participantChangeId: change.id, eventType: type, fromStatus: incident.status, toStatus: incident.status, resultingVersion }, select: { id: true } });
+        if (type === "RESPONSIBLE_CHANGED") await createIncidentReassignedNotification(tx, { companyId, incidentId, sourceEventId: event.id, incidentNumber: incident.number, responsibleUserId: nextResponsible, correlationId: context.correlationId });
         const value: Dto = { incident: { id: incident.id, version: resultingVersion, responsibleUserId: nextResponsible }, change: { id: change.id, type, collaboratorId, occurredAt: change.occurredAt.toISOString() } };
         await tx.auditEvent.create({ data: { eventType: `SUPPORT_INCIDENT_${type}`, actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId, incidentNumber: incident.number, collaboratorId, previousResponsibleUserId: command.action === "reassign" ? incident.responsibleUserId : null, responsibleUserId: nextResponsible, previousVersion: incident.version, version: resultingVersion, hasReason: command.action !== "add-collaborator", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
         await tx.idempotencyRecord.create({ data: { key, requestHash: context.requestHash, responseStatus: 201, responseBody: value as unknown as Prisma.InputJsonValue } }); return { ok: true, status: 201, value };

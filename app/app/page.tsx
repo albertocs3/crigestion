@@ -3,6 +3,7 @@ import { requireAuthenticatedPage } from "@/modules/platform/presentation/pageAc
 import { ChangePasswordForm } from "@/modules/platform/presentation/ChangePasswordForm";
 import { resolveTreasuryHomeHref } from "@/modules/platform/presentation/homeNavigation";
 import { LogoutButton } from "@/modules/platform/presentation/LogoutButton";
+import { getUnreadNotificationCount } from "@/modules/platform/application/notifications";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,7 @@ export default async function AppHomePage() {
   const session = await requireAuthenticatedPage();
   const permissions = session.user.permissions;
   const treasuryHref = resolveTreasuryHomeHref(permissions);
+  const unreadNotifications = await getUnreadNotificationCount(session.user);
   const utilities = [
     permissions.includes("Platform.ManageUsers")
       ? { href: "/app/users", label: "Gestionar usuarios" }
@@ -98,6 +100,7 @@ export default async function AppHomePage() {
                 </strong>
               </p>
             </div>
+            <Link className="button button-secondary" href="/app/notifications">Notificaciones · {unreadNotifications} sin leer</Link>
             <nav className="home-module-grid" aria-label="Modulos principales">
               {modules.map((module) => (
                 <Link

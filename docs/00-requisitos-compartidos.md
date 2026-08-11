@@ -110,6 +110,8 @@ No se enviarán notificaciones externas salvo que un módulo lo especifique expr
 - Archivar.
 - Consultar el elemento relacionado.
 
+La primera rebanada web implementa las operaciones individuales. El marcado múltiple atómico permanece pendiente. El título y mensaje se derivan de un código controlado y parámetros mínimos de la entidad; no se persiste HTML ni texto funcional libre en la notificación.
+
 ### Reglas
 
 - Los usuarios no podrán desactivar tipos de notificación.
@@ -438,6 +440,6 @@ Las pantallas de comunicaciones, incidencias, actuaciones y observaciones mostra
 - Procedimiento técnico de bloqueo y anonimización.
 - Algoritmo decimal exacto por tipo de documento.
 - Gestión de ajustes de céntimos en documentos fiscales.
-- Sistema de entrega de notificaciones web; ADR-0016 permanece pendiente de revision.
+- Canal de entrega casi inmediata para futuras notificaciones `CRITICAL`; ADR-0016 adopta refresco al navegar para la primera entrega.
 - Política técnica de copias de seguridad.
 - Base jurídica y análisis de impacto de protección de datos.

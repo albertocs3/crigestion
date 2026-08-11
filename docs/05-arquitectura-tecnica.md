@@ -254,6 +254,10 @@ Si CriGestión actuase como tercero que remite registros en nombre del obligado 
 
 Solo tendria sentido usar el certificado en el equipo del cliente en una variante local pura, instalada y operada por el propio obligado tributario. Esa no es la arquitectura vigente.
 
+## 14.1 Notificaciones internas
+
+PostgreSQL es la fuente de verdad de las notificaciones. Los productores insertan el aviso dentro de la misma transacción serializable que crea el evento funcional; no existe un endpoint público de producción. La bandeja se consulta por destinatario y empresa, con cursor estable y sin caché compartida. Los cambios `UNREAD`, `READ` y `ARCHIVED` requieren versión esperada y evidencia append-only. La primera entrega se actualiza al navegar o recargar; una futura señal WebSocket/SSE necesitaría outbox transaccional y no sustituiría la persistencia.
+
 ## 15. Despliegue
 
 Entornos:
