@@ -6,7 +6,11 @@ import { GET as incidentsGet, POST as incidentsPost } from "@/app/api/support/in
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
-import { POST as communicationsPost } from "@/app/api/support/communications/route";
+import {
+  GET as communicationsGet,
+  POST as communicationsPost,
+} from "@/app/api/support/communications/route";
+import { GET as communicationGet } from "@/app/api/support/communications/[communicationId]/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -221,9 +225,148 @@ describe("support incidents HTTP contracts", () => {
   });
 
   it("creates and replays a protected communication", async () => {
-    await loginAs("admin", password); const csrf = await csrfToken(); const incidentPayload = await payload(); const body = { customerId: incidentPayload.customerId, channel: "WHATSAPP", direction: "OUTBOUND", occurredAt: new Date().toISOString(), contactNumber: "+34910000003", durationSeconds: null, summary: "Se facilita al cliente la información solicitada.", result: "INFORMATION_PROVIDED", incidentId: null }; const key = randomUUID();
-    const first = await communicationsPost(jsonRequest("/api/support/communications", body, { csrf, key })); const replay = await communicationsPost(jsonRequest("/api/support/communications", body, { csrf, key }));
-    expect(first.status).toBe(201); expect(replay.status).toBe(200); expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0"); const firstBody = await first.json() as { id: string }; const replayBody = await replay.json() as { id: string }; expect(replayBody.id).toBe(firstBody.id); expect(await prisma.supportCommunication.count()).toBe(1);
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const incidentPayload = await payload();
+    const body = {
+      customerId: incidentPayload.customerId,
+      channel: "WHATSAPP",
+      direction: "OUTBOUND",
+      occurredAt: new Date().toISOString(),
+      contactNumber: "+34910000003",
+      durationSeconds: null,
+      summary: "Se facilita al cliente la información solicitada.",
+      result: "INFORMATION_PROVIDED",
+      incidentId: null,
+    };
+    const key = randomUUID();
+    const first = await communicationsPost(
+      jsonRequest("/api/support/communications", body, { csrf, key }),
+    );
+    const replay = await communicationsPost(
+      jsonRequest("/api/support/communications", body, { csrf, key }),
+    );
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    const firstBody = (await first.json()) as { id: string };
+    const replayBody = (await replay.json()) as { id: string };
+    expect(replayBody.id).toBe(firstBody.id);
+    expect(await prisma.supportCommunication.count()).toBe(1);
+
+    const installation = await prisma.installation.findFirstOrThrow();
+    const actor = await prisma.user.findUniqueOrThrow({
+      where: { userName: "admin" },
+    });
+    const bucketKey = `support-communication-create:${installation.companyId}:${actor.id}`;
+    expect(
+      await prisma.rateLimitBucket.findUnique({ where: { key: bucketKey } }),
+    ).toMatchObject({ count: 1 });
+    await prisma.rateLimitBucket.update({
+      where: { key: bucketKey },
+      data: { count: 20 },
+    });
+    const limited = await communicationsPost(
+      jsonRequest(
+        "/api/support/communications",
+        { ...body, summary: "Nueva comunicación que supera la cuota." },
+        { csrf, key: randomUUID() },
+      ),
+    );
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBe("900");
+    expect(await limited.json()).toMatchObject({
+      code: "SUPPORT_COMMUNICATION_RATE_LIMITED",
+    });
+    const replayAfterLimit = await communicationsPost(
+      jsonRequest("/api/support/communications", body, { csrf, key }),
+    );
+    expect(replayAfterLimit.status).toBe(200);
+    expect(
+      await prisma.auditEvent.count({
+        where: { eventType: "SUPPORT_COMMUNICATION_RATE_LIMITED" },
+      }),
+    ).toBe(1);
+
+    const list = await communicationsGet(request("/api/support/communications"));
+    const detail = await communicationGet(
+      request(`/api/support/communications/${firstBody.id}`),
+      { params: Promise.resolve({ communicationId: firstBody.id }) },
+    );
+    expect(list.status).toBe(200);
+    expect(detail.status).toBe(200);
+    const readAudits = await prisma.auditEvent.findMany({
+      where: {
+        eventType: {
+          in: [
+            "SUPPORT_COMMUNICATIONS_VIEWED",
+            "SUPPORT_COMMUNICATION_VIEWED",
+          ],
+        },
+      },
+      select: { payload: true },
+    });
+    expect(readAudits).toHaveLength(2);
+    expect(JSON.stringify(readAudits)).not.toContain(body.summary);
+    expect(JSON.stringify(readAudits)).not.toContain(body.contactNumber);
+  });
+
+  it("protects communication reads and requires view alongside manage", async () => {
+    const anonymous = await communicationsGet(
+      request("/api/support/communications"),
+    );
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+
+    const role = await prisma.role.create({
+      data: {
+        code: "CommunicationManagerOnly",
+        name: "Gestor de comunicaciones sin lectura",
+        permissions: {
+          create: {
+            permission: {
+              connect: { code: "Support.ManageCommunications" },
+            },
+          },
+        },
+      },
+    });
+    await prisma.user.create({
+      data: {
+        displayName: "Gestor sin lectura",
+        userName: "communication-manager",
+        normalizedUserName: "communication-manager",
+        passwordHash: hashPassword("Cambiar-communications-2026"),
+        roleId: role.id,
+      },
+    });
+    await loginAs("communication-manager", "Cambiar-communications-2026");
+    const csrf = await csrfToken();
+    const customer = await payload();
+    const response = await communicationsPost(
+      jsonRequest(
+        "/api/support/communications",
+        {
+          customerId: customer.customerId,
+          channel: "WHATSAPP",
+          direction: "INBOUND",
+          occurredAt: new Date().toISOString(),
+          contactNumber: "+34910000004",
+          durationSeconds: null,
+          summary: "Consulta que no debe autorizarse sin lectura.",
+          result: "INFORMATION_PROVIDED",
+          incidentId: null,
+        },
+        { csrf, key: randomUUID() },
+      ),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: "FORBIDDEN" });
+    expect(await prisma.supportCommunication.count()).toBe(0);
   });
 });
 
@@ -328,6 +471,7 @@ async function reset() {
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();
   await prisma.idempotencyRecord.deleteMany();
+  await prisma.rateLimitBucket.deleteMany();
   await prisma.auditEvent.deleteMany();
   await prisma.installation.deleteMany();
   await prisma.session.deleteMany();

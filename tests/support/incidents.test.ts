@@ -432,11 +432,15 @@ describe("support incidents application", () => {
     const context = { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(command), scope: "communication:create", correlationId: "communication-create-1" };
     const created = await createSupportCommunication(command, actor, context); const replay = await createSupportCommunication(command, actor, context);
     expect(created).toMatchObject({ ok: true, status: 201, value: { version: 1, summary: command.summary } }); expect(replay).toMatchObject({ ok: true, status: 200 }); if (!created.ok) throw new Error("not created");
+    const storedReplay = await prisma.idempotencyRecord.findFirstOrThrow({ where: { requestHash: context.requestHash } });
+    await prisma.idempotencyRecord.update({ where: { id: storedReplay.id }, data: { responseBody: { id: created.value.id, version: 1 } } });
+    expect(await createSupportCommunication(command, actor, context)).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID" } });
     const correction = { expectedVersion: 1, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt, contactNumber: "+34910000002", durationSeconds: 240, summary: "El cliente recibe la información completa y confirma recepción.", result: "RESOLVED_NO_FOLLOW_UP" as const, incidentId: null, reason: "Se corrigen número, duración y resultado tras revisar la nota." };
     const corrected = await correctSupportCommunication(created.value.id, correction, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: created.value.id, ...correction }), scope: `communication:${created.value.id}:correct`, correlationId: "communication-correct-1" });
     expect(corrected).toMatchObject({ ok: true, value: { version: 2, contactNumber: correction.contactNumber, corrections: [{ previous: { summary: command.summary }, corrected: { summary: correction.summary } }] } });
-    const detail = await getSupportCommunication(created.value.id); expect(detail?.corrections).toHaveLength(1);
+    const detail = await getSupportCommunication(created.value.id, actor); expect(detail?.corrections).toHaveLength(1);
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_COMMUNICATION_CORRECTED" } }); expect(JSON.stringify(audit.payload)).not.toContain(correction.reason); expect(JSON.stringify(audit.payload)).not.toContain(correction.summary);
+    const readAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_COMMUNICATION_VIEWED" } }); expect(JSON.stringify(readAudit.payload)).not.toContain(command.summary); expect(JSON.stringify(readAudit.payload)).not.toContain(command.contactNumber);
     expect(createSupportCommunicationSchema.safeParse({ ...command, result: "REQUIRES_FOLLOW_UP" }).success).toBe(false);
     await expect(prisma.supportCommunication.delete({ where: { id: created.value.id } })).rejects.toThrow();
     await expect(prisma.supportCommunication.update({ where: { id: created.value.id }, data: { summary: "Cambio sin evidencia", version: 3 } })).rejects.toThrow();
@@ -649,6 +653,7 @@ async function reset() {
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();
   await prisma.idempotencyRecord.deleteMany();
+  await prisma.rateLimitBucket.deleteMany();
   await prisma.auditEvent.deleteMany();
   await prisma.installation.deleteMany();
   await prisma.session.deleteMany();

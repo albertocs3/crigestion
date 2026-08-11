@@ -91,7 +91,7 @@ export type SupportCommunicationDto = Content & {
 };
 type Failure = {
   ok: false;
-  status: 404 | 409 | 422;
+  status: 404 | 409 | 422 | 429 | 503;
   error: {
     code:
       | "PLATFORM_NOT_INITIALIZED"
@@ -100,6 +100,8 @@ type Failure = {
       | "SUPPORT_COMMUNICATION_INCIDENT_INVALID"
       | "SUPPORT_COMMUNICATION_DATE_INVALID"
       | "SUPPORT_COMMUNICATION_VERSION_CONFLICT"
+      | "SUPPORT_COMMUNICATION_RATE_LIMITED"
+      | "SUPPORT_COMMUNICATION_BUSY"
       | "IDEMPOTENCY_KEY_REUSED"
       | "IDEMPOTENCY_REPLAY_INVALID";
     message: string;
@@ -152,16 +154,59 @@ const detailSelect = {
 type RecordDto = Prisma.SupportCommunicationGetPayload<{
   select: typeof detailSelect;
 }>;
-const replaySchema = z.custom<SupportCommunicationDto>(
-  (value) =>
-    typeof value === "object" &&
-    value !== null &&
-    "id" in value &&
-    "version" in value,
-);
+const replayContentSchema = z
+  .object({
+    channel: channelSchema,
+    direction: directionSchema,
+    occurredAt: z.string().datetime({ offset: true }),
+    contactNumber: z.string(),
+    durationSeconds: z.number().int().nullable(),
+    summary: z.string(),
+    result: resultSchema,
+    incidentId: z.string().uuid().nullable(),
+  })
+  .strict();
+const replaySchema: z.ZodType<SupportCommunicationDto> = z
+  .object({
+    id: z.string().uuid(),
+    customer: z
+      .object({
+        id: z.string().uuid(),
+        code: z.string(),
+        legalName: z.string(),
+      })
+      .strict(),
+    incident: z
+      .object({ id: z.string().uuid(), number: z.string(), title: z.string() })
+      .strict()
+      .nullable(),
+    registeredBy: z
+      .object({ id: z.string().uuid(), displayName: z.string() })
+      .strict(),
+    version: z.number().int().positive(),
+    recordedAt: z.string().datetime({ offset: true }),
+    corrections: z.array(
+      z
+        .object({
+          id: z.string().uuid(),
+          reason: z.string(),
+          previous: replayContentSchema,
+          corrected: replayContentSchema,
+          correctedBy: z
+            .object({ id: z.string().uuid(), displayName: z.string() })
+            .strict(),
+          correctedAt: z.string().datetime({ offset: true }),
+        })
+        .strict(),
+    ),
+    ...contentShape,
+  })
+  .strict();
 
 export async function listSupportCommunications(
   command: z.infer<typeof listSupportCommunicationsSchema>,
+  actor: SessionUser,
+  context: RequestContext = {},
 ) {
   const companyId = await currentCompanyId(prisma);
   if (!companyId)
@@ -190,6 +235,23 @@ export async function listSupportCommunications(
     select: detailSelect,
   });
   const page = rows.slice(0, command.limit);
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "SUPPORT_COMMUNICATIONS_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        companyId,
+        filteredByCustomer: Boolean(command.customerId),
+        filteredByIncident: Boolean(command.incidentId),
+        channel: command.channel ?? null,
+        resultCount: page.length,
+        ...(context.correlationId
+          ? { correlationId: context.correlationId }
+          : {}),
+      },
+    },
+  });
   return {
     communications: page.map(mapDetail),
     nextCursor:
@@ -198,7 +260,11 @@ export async function listSupportCommunications(
         : null,
   };
 }
-export async function getSupportCommunication(id: string) {
+export async function getSupportCommunication(
+  id: string,
+  actor: SessionUser,
+  context: RequestContext = {},
+) {
   const companyId = await currentCompanyId(prisma);
   const row = companyId
     ? await prisma.supportCommunication.findFirst({
@@ -206,7 +272,23 @@ export async function getSupportCommunication(id: string) {
         select: detailSelect,
       })
     : null;
-  return row ? mapDetail(row) : null;
+  if (!row) return null;
+  await prisma.auditEvent.create({
+    data: {
+      eventType: "SUPPORT_COMMUNICATION_VIEWED",
+      actorType: "USER",
+      payload: {
+        actorUserId: actor.id,
+        companyId,
+        communicationId: row.id,
+        customerId: row.customer.id,
+        ...(context.correlationId
+          ? { correlationId: context.correlationId }
+          : {}),
+      },
+    },
+  });
+  return mapDetail(row);
 }
 export async function listCommunicationReferences() {
   const companyId = await currentCompanyId(prisma);
@@ -442,39 +524,124 @@ async function mutate(
     { ok: true; status: 201; value: SupportCommunicationDto } | Failure
   >,
 ): Promise<Result> {
-  return prisma.$transaction(
-    async (tx) => {
-      const key = `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`;
-      const replay = await tx.idempotencyRecord.findUnique({ where: { key } });
-      if (replay) {
-        if (replay.requestHash !== context.requestHash)
-          return fail(
-            409,
-            "IDEMPOTENCY_KEY_REUSED",
-            "La clave de idempotencia ya se usó con otra petición.",
-          );
-        const parsed = replaySchema.safeParse(replay.responseBody);
-        return parsed.success
-          ? { ok: true, status: 200, value: parsed.data }
-          : fail(
-              409,
-              "IDEMPOTENCY_REPLAY_INVALID",
-              "La respuesta idempotente almacenada no es válida.",
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
+          const key = `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`;
+          const replay = await tx.idempotencyRecord.findUnique({
+            where: { key },
+          });
+          if (replay) {
+            if (replay.requestHash !== context.requestHash)
+              return fail(
+                409,
+                "IDEMPOTENCY_KEY_REUSED",
+                "La clave de idempotencia ya se usó con otra petición.",
+              );
+            const parsed = replaySchema.safeParse(replay.responseBody);
+            return parsed.success
+              ? { ok: true, status: 200, value: parsed.data }
+              : fail(
+                  409,
+                  "IDEMPOTENCY_REPLAY_INVALID",
+                  "La respuesta idempotente almacenada no es válida.",
+                );
+          }
+          const companyId = await currentCompanyId(tx);
+          if (companyId) {
+            const action =
+              context.scope === "communication:create" ? "create" : "correct";
+            const limited = await consumeRateLimit(
+              tx,
+              actor,
+              companyId,
+              action,
+              context.correlationId,
             );
+            if (limited)
+              return fail(
+                429,
+                "SUPPORT_COMMUNICATION_RATE_LIMITED",
+                "Demasiadas mutaciones de comunicaciones. Espere quince minutos.",
+              );
+          }
+          const result = await work(tx);
+          if (result.ok)
+            await tx.idempotencyRecord.create({
+              data: {
+                key,
+                requestHash: context.requestHash,
+                responseStatus: 201,
+                responseBody: result.value as unknown as Prisma.InputJsonValue,
+              },
+            });
+          return result;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (isRetryableTransactionError(error)) {
+        if (attempt < 2) continue;
+        return fail(
+          503,
+          "SUPPORT_COMMUNICATION_BUSY",
+          "Las comunicaciones están ocupadas. Vuelva a intentarlo.",
+        );
       }
-      const result = await work(tx);
-      if (result.ok)
-        await tx.idempotencyRecord.create({
-          data: {
-            key,
-            requestHash: context.requestHash,
-            responseStatus: 201,
-            responseBody: result.value as unknown as Prisma.InputJsonValue,
-          },
-        });
-      return result;
-    },
-    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      throw error;
+    }
+  }
+  return fail(
+    503,
+    "SUPPORT_COMMUNICATION_BUSY",
+    "Las comunicaciones están ocupadas. Vuelva a intentarlo.",
+  );
+}
+async function consumeRateLimit(
+  tx: Prisma.TransactionClient,
+  actor: SessionUser,
+  companyId: string,
+  action: "create" | "correct",
+  correlationId?: string,
+): Promise<boolean> {
+  const key = `support-communication-${action}:${companyId}:${actor.id}`;
+  const rows = await tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN 1
+        ELSE "rate_limit_buckets"."count" + 1
+      END,
+      "windowStart" = CASE
+        WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN clock_timestamp()
+        ELSE "rate_limit_buckets"."windowStart"
+      END,
+      "updatedAt" = clock_timestamp()
+    RETURNING "count"
+  `);
+  const count = rows[0]?.count ?? 0;
+  if (count === 21)
+    await tx.auditEvent.create({
+      data: {
+        eventType: "SUPPORT_COMMUNICATION_RATE_LIMITED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          companyId,
+          action,
+          ...(correlationId ? { correlationId } : {}),
+        },
+      },
+    });
+  return count > 20;
+}
+function isRetryableTransactionError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2034" ||
+      (error.code === "P2010" && error.meta?.code === "40001"))
   );
 }
 async function validateIncident(

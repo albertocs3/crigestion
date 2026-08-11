@@ -114,6 +114,8 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 
 `GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. El vínculo a un contacto se pospone hasta disponer de un maestro de contactos independiente.
 
+Las lecturas de listado y detalle generan auditoría opaca sin resumen, número de contacto ni textos de corrección. Altas y correcciones comparten límites persistentes separados de 20 intentos por actor y empresa en 15 minutos. El replay válido se resuelve antes de consumir cuota. Al superar el límite se devuelve `429 SUPPORT_COMMUNICATION_RATE_LIMITED` con `Retry-After: 900`; tras tres conflictos serializables se devuelve `503 SUPPORT_COMMUNICATION_BUSY` con `Retry-After: 3`.
+
 ## Integridad y conservación
 
 - PostgreSQL garantiza unicidad del número y de la secuencia por empresa y año.
