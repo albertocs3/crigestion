@@ -24,8 +24,11 @@ describe("subscription reactivation automation deployment", () => {
     expect(health).toContain("crigestion-staging-subscription-reactivation-worker.timer");
     expect(health).toContain("crigestion-staging-subscription-reactivation-worker.service");
     expect(health).toContain("ExecMainExitTimestampMonotonic");
+    expect(health).toContain('REACTIVATION_ACTIVE_STATE');
+    expect(health).toContain("= 'activating'");
     expect(health).toContain("CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_NEVER_RAN");
     expect(health).toContain("CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_STALE");
+    expect(service).toContain("TimeoutStartSec=120s");
     expect(script).toContain("SUBSCRIPTION_REACTIVATION_AUTOMATION_OK");
     expect(script).not.toContain("reason");
   });

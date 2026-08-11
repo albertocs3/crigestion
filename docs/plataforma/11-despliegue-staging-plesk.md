@@ -285,6 +285,10 @@ systemctl enable --now crigestion-staging-subscription-reactivation-worker.timer
 El health check exige ademas que la ultima ejecucion del worker haya terminado
 correctamente en los ultimos 15 minutos. Tras instalar o reiniciar el timer se
 debe arrancar una vez el servicio manualmente antes de validar el health.
+Si el oneshot esta ejecutandose cuando comienza el health, la comprobacion de
+frescura espera su resultado mediante el orden de systemd y acepta
+temporalmente `ActiveState=activating`; `TimeoutStartSec` sigue cerrando un
+worker bloqueado.
 
 Exigir `Result=success`, `ExecMainStatus=0` y un journal terminado en
 `SUBSCRIPTION_REACTIVATION_AUTOMATION_OK`. El log solo contiene contadores. El

@@ -31,10 +31,15 @@ test "$(systemctl show "$REACTIVATION_SERVICE" -p Result --value)" = 'success'
 REACTIVATION_LAST_RUN_USEC="$(
   systemctl show "$REACTIVATION_SERVICE" -p ExecMainExitTimestampMonotonic --value
 )"
+REACTIVATION_ACTIVE_STATE="$(
+  systemctl show "$REACTIVATION_SERVICE" -p ActiveState --value
+)"
 SYSTEM_UPTIME_USEC="$(awk '{ printf "%.0f", $1 * 1000000 }' /proc/uptime)"
 [[ "$REACTIVATION_LAST_RUN_USEC" =~ ^[0-9]+$ ]]
 if (( REACTIVATION_LAST_RUN_USEC == 0 )); then
-  if (( SYSTEM_UPTIME_USEC > REACTIVATION_MAX_AGE_USEC )); then
+  if [ "$REACTIVATION_ACTIVE_STATE" = 'activating' ]; then
+    : # The oneshot is running; systemd enforces TimeoutStartSec.
+  elif (( SYSTEM_UPTIME_USEC > REACTIVATION_MAX_AGE_USEC )); then
     echo 'CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_NEVER_RAN' >&2
     exit 1
   fi

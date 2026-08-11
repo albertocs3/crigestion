@@ -1,7 +1,7 @@
 [Unit]
 Description=Check CriGestion staging health
 Wants=network-online.target
-After=network-online.target crigestion-staging-app.service crigestion-staging-verifactu-worker.service crigestion-staging-subscription-reactivation-worker.timer
+After=network-online.target crigestion-staging-app.service crigestion-staging-verifactu-worker.service crigestion-staging-subscription-reactivation-worker.timer crigestion-staging-subscription-reactivation-worker.service
 OnFailure=crigestion-staging-health-alert.service
 
 [Service]
