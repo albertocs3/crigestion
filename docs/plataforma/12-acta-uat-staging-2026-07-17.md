@@ -877,3 +877,42 @@ El rollback exclusivamente de aplicacion a rc1 deja de considerarse seguro
 despues de crear una orden programada. A partir de esta UAT, cualquier
 incidencia requiere forward-fix, retirada mediante rc2 o restauracion del
 backup aprobado; no basta con cambiar el symlink al binario anterior.
+
+## 24. Reactivacion programada automatica en staging
+
+El 2026-08-11 se promovio la release inmutable
+`staging-2026.08.11-rc2`, commit
+`c3f89c512406212f95e88dfe3fd4ebfe998e76d7`. El corte incorpora el worker
+one-shot de reactivaciones, su timer de cinco minutos y la migracion
+`20260811113000_add_subscription_reactivation_automation`. El catalogo quedo
+con 136 migraciones finalizadas. Aplicacion, worker VeriFactu, timer de
+reactivaciones y timers de backup, health y recovery quedaron activos. Los
+health local y publico devolvieron estado `ok`; una ejecucion manual del worker
+termino con `SUBSCRIPTION_REACTIVATION_AUTOMATION_OK applied=0 blocked=0
+skipped=0`. Tambien se completo el simulacro de recovery bundle y restore.
+
+La UAT funcional se divide en dos dias para no falsear el reloj de negocio ni
+deshabilitar triggers en staging. El dia 1 uso exclusivamente la suscripcion
+sintetica `SUS-2026-00001`, UUID
+`f8c0cd7a-e70d-4006-9d4e-03e7506c76e2`, y completo desde la interfaz:
+
+1. comprobacion del estado inicial `ACTIVE` y de los historiales anteriores;
+2. baja inmediata con motivo UAT identificado, quedando `CANCELLED` con fecha
+   efectiva 2026-08-11;
+3. programacion de una reactivacion para el 2026-08-12, con proxima renovacion
+   tambien el 2026-08-12;
+4. comprobacion de una unica orden `Pendiente de aplicacion` y de que la UI
+   oculta tanto una segunda programacion como la reactivacion inmediata.
+
+El fixture queda intencionadamente `CANCELLED` y la orden `PENDING` al cerrar
+el dia 1. El dia 2 debe confirmar, despues de una ejecucion ordinaria del
+timer, que la suscripcion pasa a `ACTIVE`, la orden pasa a `APPLIED`, se crea
+una unica evidencia de reactivacion y las ejecuciones posteriores no duplican
+historial, auditoria ni version. Hasta completar esas comprobaciones, esta UAT
+permanece abierta y no acredita todavia la aplicacion automatica end-to-end.
+
+Como refuerzo de regresion se anadio una prueba aislada del clasificador de
+conflictos del worker. Cubre `P2010` con SQLSTATE `40001`, agotamiento tras tres
+`P2034` y ausencia de reintento para errores ajenos. TypeScript, ESLint dirigido,
+la prueba de despliegue del worker y las tres pruebas de reintento finalizaron
+correctamente.
