@@ -61,6 +61,13 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
   description: string;
   store: { id: string; code: string; name: string; status: "ACTIVE" | "INACTIVE" } | null;
   createdBy: { id: string; displayName: string };
+  actions: Array<{
+    id: string;
+    text: string;
+    performedAt: string;
+    recordedAt: string;
+    author: { id: string; displayName: string };
+  }>;
   events: Array<{
     id: string;
     type: string;
@@ -118,6 +125,10 @@ const incidentDetailSelect = {
   description: true,
   store: { select: { id: true, code: true, name: true, status: true } },
   createdBy: { select: { id: true, displayName: true } },
+  actions: {
+    orderBy: [{ performedAt: "asc" as const }, { id: "asc" as const }],
+    select: { id: true, text: true, performedAt: true, recordedAt: true, authorUser: { select: { id: true, displayName: true } } }
+  },
   events: {
     orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }],
     select: {
@@ -142,6 +153,7 @@ const incidentReplaySchema: z.ZodType<SupportIncidentDetail> = z.object({
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(), description: z.string(),
   store: z.object({ id: z.string().uuid(), code: z.string(), name: z.string(), status: z.enum(["ACTIVE", "INACTIVE"]) }).strict().nullable(),
   createdBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+  actions: z.array(z.object({ id: z.string().uuid(), text: z.string(), performedAt: z.string().datetime(), recordedAt: z.string().datetime(), author: z.object({ id: z.string().uuid(), displayName: z.string() }).strict() }).strict()),
   events: z.array(z.object({ id: z.string().uuid(), type: z.string(), fromStatus: statusSchema.nullable(), toStatus: statusSchema.nullable(), actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(), createdAt: z.string().datetime() }).strict())
 }).strict();
 
@@ -184,7 +196,7 @@ export async function listSupportReferences(): Promise<SupportIncidentReferences
   const [customers, categories, responsibleUsers] = await Promise.all([
     prisma.customer.findMany({ orderBy: [{ legalName: "asc" }, { id: "asc" }], take: 500, select: { id: true, code: true, legalName: true, status: true, stores: { orderBy: [{ name: "asc" }, { id: "asc" }], select: { id: true, code: true, name: true, status: true } } } }),
     prisma.supportIncidentCategory.findMany({ where: { companyId, isActive: true }, orderBy: [{ name: "asc" }, { id: "asc" }], select: { id: true, name: true, description: true, color: true, isActive: true } }),
-    prisma.user.findMany({ where: { status: "ACTIVE", role: { permissions: { some: { permission: { code: "Support.View" } } } } }, orderBy: [{ displayName: "asc" }, { id: "asc" }], select: { id: true, displayName: true } })
+    prisma.user.findMany({ where: { status: "ACTIVE", AND: [{ role: { permissions: { some: { permission: { code: "Support.View" } } } } }, { role: { permissions: { some: { permission: { code: "Support.AddActions" } } } } }] }, orderBy: [{ displayName: "asc" }, { id: "asc" }], select: { id: true, displayName: true } })
   ]);
   return { customers, categories, responsibleUsers };
 }
@@ -202,7 +214,7 @@ export async function createSupportIncident(command: CreateSupportIncidentComman
     const [customer, category, responsible, store] = await Promise.all([
       tx.customer.findUnique({ where: { id: command.customerId }, select: { id: true } }),
       tx.supportIncidentCategory.findFirst({ where: { id: command.categoryId, companyId, isActive: true }, select: { id: true } }),
-      tx.user.findFirst({ where: { id: command.responsibleUserId, status: "ACTIVE", role: { permissions: { some: { permission: { code: "Support.View" } } } } }, select: { id: true } }),
+      tx.user.findFirst({ where: { id: command.responsibleUserId, status: "ACTIVE", AND: [{ role: { permissions: { some: { permission: { code: "Support.View" } } } } }, { role: { permissions: { some: { permission: { code: "Support.AddActions" } } } } }] }, select: { id: true } }),
       command.storeId ? tx.customerStore.findFirst({ where: { id: command.storeId, customerId: command.customerId }, select: { id: true } }) : Promise.resolve({ id: null })
     ]);
     if (!customer) return failure(404, "SUPPORT_CUSTOMER_NOT_FOUND", "El cliente no existe.");
@@ -272,7 +284,7 @@ async function executeMutation<T>(actor: SessionUser, context: SupportMutationCo
 }
 
 function mapIncidentListItem(row: IncidentListRecord): SupportIncidentListItem { return { id: row.id, number: row.number, title: row.title, priority: row.priority, status: row.status, version: row.version, customer: row.customer, category: row.category, responsible: row.responsibleUser, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }; }
-function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail { return { ...mapIncidentListItem(row), description: row.description, store: row.store, createdBy: row.createdBy, events: row.events.map((event) => ({ id: event.id, type: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus, actor: event.actorUser, createdAt: event.createdAt.toISOString() })) }; }
+function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail { return { ...mapIncidentListItem(row), description: row.description, store: row.store, createdBy: row.createdBy, actions: row.actions.map((action) => ({ id: action.id, text: action.text, performedAt: action.performedAt.toISOString(), recordedAt: action.recordedAt.toISOString(), author: action.authorUser })), events: row.events.map((event) => ({ id: event.id, type: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus, actor: event.actorUser, createdAt: event.createdAt.toISOString() })) }; }
 function scopedKey(actor: SessionUser, context: SupportMutationContext): string { return `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
 async function currentCompanyId(client: Pick<Prisma.TransactionClient, "installation">): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }
 function normalizeName(value: string): string { return value.trim().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es-ES"); }

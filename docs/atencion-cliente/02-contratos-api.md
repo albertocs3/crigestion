@@ -8,6 +8,7 @@ La primera rebanada permite consultar y crear incidencias y consultar o crear ca
 
 - `Support.View`: listado y detalle de incidencias y categorías.
 - `Support.Create` + `Support.View`: creación de incidencias.
+- `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
 - `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
@@ -34,7 +35,7 @@ Mutación autenticada con `Support.Create` y `Support.View`, protección Origin/
 }
 ```
 
-La incidencia se crea con estado `NEW`, versión `1`, responsable obligatorio y número anual `INC-AAAA-00001`. La tienda, si se indica, debe pertenecer al cliente. El responsable debe estar activo y conservar `Support.View`.
+La incidencia se crea con estado `NEW`, versión `1`, responsable obligatorio y número anual `INC-AAAA-00001`. La tienda, si se indica, debe pertenecer al cliente. El responsable debe estar activo y conservar `Support.View` y `Support.AddActions`.
 
 Respuesta `201`; un replay idéntico devuelve `200` sin repetir numeración, evento ni auditoría.
 
@@ -43,6 +44,22 @@ Errores funcionales: `PLATFORM_NOT_INITIALIZED`, `SUPPORT_CUSTOMER_NOT_FOUND`, `
 ## `GET /api/support/incidents/{incidentId}`
 
 Requiere `Support.View`. Devuelve el detalle y sus eventos o `404 SUPPORT_INCIDENT_NOT_FOUND`. UUID inválido devuelve `422 VALIDATION_ERROR` después de autorizar.
+
+## `POST /api/support/incidents/{incidentId}/actions`
+
+Requiere `Support.AddActions` y `Support.View`, además de ser el responsable vigente o Administrador. Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 8 KiB e idempotencia.
+
+```json
+{
+  "expectedVersion": 1,
+  "text": "Se revisa la configuración y se restablece el acceso.",
+  "performedAt": "2026-08-11T17:00:00.000Z"
+}
+```
+
+La fecha real no puede preceder a la incidencia ni superar en más de cinco minutos el reloj del servidor. La primera actuación cambia automáticamente `NEW` a `IN_PROGRESS`, fija `firstActionAt` e incrementa la versión. Una incidencia `RESOLVED` o `CLOSED` debe reabrirse antes de admitir actuaciones.
+
+Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_ACTION_FORBIDDEN`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_FINALIZED`, `SUPPORT_ACTION_DATE_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
 
 ## `/api/support/categories`
 
@@ -66,4 +83,5 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 - Una clave foránea compuesta impide asociar una tienda de otro cliente.
 - Una clave foránea compuesta impide usar categorías de otra empresa.
 - Los eventos son append-only; `UPDATE` y `DELETE` se rechazan en PostgreSQL.
+- Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
 - No existe borrado físico de incidencias en la API.

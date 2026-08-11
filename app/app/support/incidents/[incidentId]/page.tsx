@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
 import { getSupportIncident, supportIncidentParamsSchema } from "@/modules/support/application/incidents";
+import { SupportActionCreateForm } from "@/modules/support/presentation/SupportActionCreateForm";
 
 export const dynamic = "force-dynamic";
 
@@ -12,9 +13,12 @@ export default async function SupportIncidentPage({ params }: { params: Promise<
   if (!parsed.success) notFound();
   const incident = await getSupportIncident(parsed.data.incidentId, authorization.user);
   if (!incident) notFound();
+  const canAddAction = authorization.user.permissions.includes("Support.AddActions") && (authorization.user.id === incident.responsible.id || authorization.user.role.code === "Administrador") && incident.status !== "RESOLVED" && incident.status !== "CLOSED";
   return <main className="shell"><header className="topbar"><div className="brand">CriGestión</div><Link className="button button-secondary" href="/app/support">Volver a incidencias</Link></header><section className="content stack">
     <div className="panel stack"><div><p className="eyebrow">{incident.number}</p><h1>{incident.title}</h1><div className="form-actions"><span className={`badge ${incident.priority === "URGENT" ? "error" : incident.priority === "HIGH" ? "warning" : "neutral"}`}>{priorityLabel(incident.priority)}</span><span className="badge neutral">{statusLabel(incident.status)}</span></div></div><dl className="detail-grid"><div><dt>Cliente</dt><dd>{authorization.user.permissions.includes("Customers.View") ? <Link href={`/app/customers/${incident.customer.id}`}>{incident.customer.code} · {incident.customer.legalName}</Link> : `${incident.customer.code} · ${incident.customer.legalName}`}</dd></div><div><dt>Tienda</dt><dd>{incident.store ? `${incident.store.code} · ${incident.store.name}` : "Sin tienda"}</dd></div><div><dt>Categoría</dt><dd>{incident.category.name}</dd></div><div><dt>Responsable</dt><dd>{incident.responsible.displayName}</dd></div><div><dt>Creada por</dt><dd>{incident.createdBy.displayName}</dd></div><div><dt>Creación</dt><dd><time dateTime={incident.createdAt}>{new Date(incident.createdAt).toLocaleString("es-ES")}</time></dd></div></dl><div><h2>Descripción</h2><p style={{ whiteSpace: "pre-wrap" }}>{incident.description}</p></div></div>
-    <div className="panel stack"><h2>Historial</h2><div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>{incident.events.map((event) => <tr key={event.id}><td><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString("es-ES")}</time></td><td>{event.type === "CREATED" ? "Incidencia creada" : event.type}</td><td>{event.actor.displayName}</td><td>{event.toStatus ? statusLabel(event.toStatus) : "—"}</td></tr>)}</tbody></table></div></div>
+    <div className="panel stack"><h2>Actuaciones</h2>{incident.actions.length === 0 ? <p className="muted">Todavía no hay actuaciones registradas.</p> : incident.actions.map((action) => <article className="compact-stack" key={action.id}><div><strong>{action.author.displayName}</strong> · <time dateTime={action.performedAt}>{new Date(action.performedAt).toLocaleString("es-ES")}</time></div><p style={{ whiteSpace: "pre-wrap" }}>{action.text}</p>{action.performedAt !== action.recordedAt ? <span className="cell-detail">Registrada: {new Date(action.recordedAt).toLocaleString("es-ES")}</span> : null}</article>)}</div>
+    {canAddAction ? <div className="panel stack"><SupportActionCreateForm incidentId={incident.id} expectedVersion={incident.version} createdAt={incident.createdAt}/></div> : null}
+    <div className="panel stack"><h2>Historial</h2><div className="table-wrap"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Usuario</th><th>Estado</th></tr></thead><tbody>{incident.events.map((event) => <tr key={event.id}><td><time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString("es-ES")}</time></td><td>{event.type === "CREATED" ? "Incidencia creada" : event.type === "ACTION_ADDED" ? "Actuación registrada" : event.type}</td><td>{event.actor.displayName}</td><td>{event.toStatus ? statusLabel(event.toStatus) : "—"}</td></tr>)}</tbody></table></div></div>
   </section></main>;
 }
 

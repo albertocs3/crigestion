@@ -712,6 +712,7 @@ model Company {
   supportIncidentSequences                   SupportIncidentNumberSequence[]
   supportIncidents                           SupportIncident[]
   supportIncidentEvents                      SupportIncidentEvent[]
+  supportIncidentActions                     SupportIncidentAction[]
   logoAttachment                             Attachment?                                  @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
@@ -1290,6 +1291,7 @@ model SupportIncident {
   responsibleUser User                    @relation("SupportIncidentsResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
   createdBy       User                    @relation("SupportIncidentsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   events          SupportIncidentEvent[]
+  actions         SupportIncidentAction[]
 
   @@unique([companyId, number])
   @@unique([companyId, year, sequenceNumber])
@@ -1307,18 +1309,41 @@ model SupportIncidentEvent {
   companyId   String                 @db.Uuid
   incidentId  String                 @db.Uuid
   actorUserId String                 @db.Uuid
+  actionId    String?                @db.Uuid
   eventType   String                 @db.VarChar(80)
   fromStatus  SupportIncidentStatus?
   toStatus    SupportIncidentStatus?
   createdAt   DateTime               @default(now()) @db.Timestamptz(3)
 
-  company   Company         @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  incident  SupportIncident @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
-  actorUser User            @relation("SupportIncidentEventsActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  company   Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident  SupportIncident        @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  actorUser User                   @relation("SupportIncidentEventsActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  action    SupportIncidentAction? @relation(fields: [actionId, companyId], references: [id, companyId], onDelete: Restrict)
 
+  @@unique([actionId, companyId])
   @@index([incidentId, createdAt, id])
   @@index([companyId, eventType, createdAt, id])
   @@map("support_incident_events")
+}
+
+model SupportIncidentAction {
+  id           String   @id @default(uuid()) @db.Uuid
+  companyId    String   @db.Uuid
+  incidentId   String   @db.Uuid
+  authorUserId String   @db.Uuid
+  text         String   @db.VarChar(4000)
+  performedAt  DateTime @db.Timestamptz(3)
+  recordedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  company    Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident   SupportIncident       @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  authorUser User                  @relation("SupportIncidentActionsAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  event      SupportIncidentEvent?
+
+  @@unique([id, companyId])
+  @@index([incidentId, performedAt, id])
+  @@index([companyId, authorUserId, recordedAt, id])
+  @@map("support_incident_actions")
 }
 
 model User {
@@ -1401,6 +1426,7 @@ model User {
   responsibleSupportIncidents             SupportIncident[]                            @relation("SupportIncidentsResponsible")
   createdSupportIncidents                 SupportIncident[]                            @relation("SupportIncidentsCreatedBy")
   supportIncidentEvents                   SupportIncidentEvent[]                       @relation("SupportIncidentEventsActor")
+  supportIncidentActions                  SupportIncidentAction[]                      @relation("SupportIncidentActionsAuthor")
   verifactuCredentialTests                VerifactuMtlsCredentialTestAttempt[]
   createdSubscriptions                    Subscription[]                               @relation("SubscriptionsCreatedBy")
   updatedSubscriptions                    Subscription[]                               @relation("SubscriptionsUpdatedBy")

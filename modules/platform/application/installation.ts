@@ -48,6 +48,7 @@ const platformPermissions = [
   ["Customers.Manage", "Gestionar clientes"],
   ["Support.View", "Consultar incidencias de atencion al cliente"],
   ["Support.Create", "Crear incidencias de atencion al cliente"],
+  ["Support.AddActions", "Registrar actuaciones en incidencias asignadas"],
   ["Support.ManageCategories", "Gestionar categorias de incidencias"],
   ["Suppliers.View", "Consultar proveedores"],
   ["Suppliers.Manage", "Gestionar proveedores"],
