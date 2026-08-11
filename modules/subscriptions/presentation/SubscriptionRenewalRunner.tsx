@@ -105,7 +105,8 @@ export function SubscriptionRenewalRunner({ preview, canConfirm, canExclude }: {
         const confirmAction = `confirm:${invoice.invoiceId}`; const releaseAction = `release:${invoice.invoiceId}`;
         const releaseReason = releaseReasons[invoice.invoiceId] ?? "";
         return <tr key={invoice.invoiceId}><td><strong>{invoice.customer.legalName}</strong><span className="cell-detail">{invoice.customer.code}</span></td><td>{invoice.issueDate}</td><td>{invoice.subscriptionCount}</td><td>{invoice.total} EUR</td><td><div className="stack">
-          {canConfirm ? <button className="button" type="button" disabled={busy !== null} onClick={() => void mutate(`/api/subscriptions/renewals/${invoice.invoiceId}/confirm`, {}, confirmAction)}>{busy === confirmAction ? "Confirmando..." : "Confirmar y emitir"}</button> : <span className="muted">Sin permiso de emisión</span>}
+          {invoice.confirmationBlockers.length > 0 ? <p className="message warning">No se puede emitir: {invoice.confirmationBlockers.map(confirmationBlockerLabel).join("; ")}.</p> : null}
+          {canConfirm ? <button className="button" type="button" disabled={busy !== null || invoice.confirmationBlockers.length > 0} onClick={() => void mutate(`/api/subscriptions/renewals/${invoice.invoiceId}/confirm`, {}, confirmAction)}>{busy === confirmAction ? "Confirmando..." : "Confirmar y emitir"}</button> : <span className="muted">Sin permiso de emisión</span>}
           <label>Motivo para liberar<span className="cell-detail">Obligatorio, entre 3 y 500 caracteres</span><input type="text" value={releaseReason} maxLength={500} disabled={busy !== null} onChange={(event) => setReleaseReasons((current) => ({ ...current, [invoice.invoiceId]: event.target.value }))} /></label>
           <button className="button button-secondary" type="button" disabled={busy !== null || releaseReason.trim().length < 3} onClick={() => void mutate(`/api/subscriptions/renewals/${invoice.invoiceId}/release`, { reason: releaseReason.trim() }, releaseAction)}>{busy === releaseAction ? "Liberando..." : "Liberar reserva"}</button>
         </div></td></tr>;
@@ -115,5 +116,6 @@ export function SubscriptionRenewalRunner({ preview, canConfirm, canExclude }: {
 }
 
 function paymentLabel(value: string) { return ({ BANK_TRANSFER: "Transferencia", CASH: "Efectivo", DIRECT_DEBIT: "Domiciliación" } as Record<string, string>)[value] ?? value; }
+function confirmationBlockerLabel(value: string) { return ({ INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN: "el ejercicio contable no está abierto", INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE: "faltan cuentas contables activas e imputables" } as Record<string, string>)[value] ?? value; }
 function operationalDate(value: string) { return new Intl.DateTimeFormat("es-ES", { dateStyle: "short", timeStyle: "short", timeZone: "Europe/Madrid" }).format(new Date(value)); }
 function pendingReasonLabel(value?: string) { return value === "PREPARATION_FAILED" ? "Bloqueo automático de preparación" : value === "LEGACY_PENDING" ? "Pendiente migrada" : "Sin detalle"; }

@@ -610,6 +610,7 @@ describe("subscriptions application service", () => {
 
   it("creates a complete reserved renewal draft with invoice-only descriptions without advancing the period", async () => {
     const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id); const renewalDate = todayDate();
+    await prisma.customer.update({ where: { id: customerId }, data: { code: "5" } });
     const command = payload(customerId, itemId, { startDate: renewalDate });
     const created = await createSubscription(command, actor, context("renewal-create", command)); if (!created.ok) throw new Error(created.error.code);
     const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("renewal-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
@@ -645,6 +646,22 @@ describe("subscriptions application service", () => {
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_RENEWAL_DRAFT_RESERVED", payload: { path: ["invoiceId"], equals: invoice.id } } });
     expect(audit.payload).toMatchObject({ descriptionOverrideCount: 1 });
     expect(JSON.stringify(audit.payload)).not.toContain(customDescription); expect(JSON.stringify(audit.payload)).not.toContain("49.90"); expect(JSON.stringify(audit.payload)).not.toContain(invoice.customerTaxIdSnapshot);
+    expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false }, actor)).toMatchObject({
+      ok: true, value: { reservedInvoices: [{ invoiceId: invoice.id, confirmationBlockers: ["INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE"] }] }
+    });
+    await seedInvoiceAccounts(actor.id, "5");
+    expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false }, actor)).toMatchObject({
+      ok: true, value: { reservedInvoices: [{ invoiceId: invoice.id, confirmationBlockers: [] }] }
+    });
+    await prisma.accountingAccount.deleteMany();
+    await prisma.accountingFiscalYear.deleteMany({ where: { companyId } });
+    expect(await listSubscriptionRenewalPreview({ processDate: renewalDate, includePending: false }, actor)).toMatchObject({
+      ok: true, value: { reservedInvoices: [{ invoiceId: invoice.id, confirmationBlockers: ["INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"] }] }
+    });
+    const previewAudits = await prisma.auditEvent.findMany({ where: { eventType: "SUBSCRIPTION_RENEWAL_PREVIEW_VIEWED" }, select: { payload: true } });
+    expect(JSON.stringify(previewAudits)).not.toContain("430000005");
+    expect(JSON.stringify(previewAudits)).not.toContain("705000000");
+    expect(JSON.stringify(previewAudits)).not.toContain("INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE");
     const changedDescription = { ...renewal, lineDescriptionOverrides: [{ ...renewal.lineDescriptionOverrides[0]!, description: "Otro texto para la misma clave" }] };
     expect(await createSubscriptionRenewalDraft(changedDescription, actor, renewalContext("renewal-draft", changedDescription))).toMatchObject({
       ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" }

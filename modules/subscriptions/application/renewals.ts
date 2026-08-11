@@ -136,6 +136,7 @@ export const listSubscriptionRenewalPreviewSchema = z.object({
 }).strict();
 type ParsedListSubscriptionRenewalPreviewCommand = z.infer<typeof listSubscriptionRenewalPreviewSchema>;
 export type ListSubscriptionRenewalPreviewCommand = Omit<ParsedListSubscriptionRenewalPreviewCommand, "limit"> & { limit?: number };
+type RenewalConfirmationBlocker = "INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN" | "INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE";
 export type SubscriptionRenewalPreview = {
   processDate: string;
   nextCursor: string | null;
@@ -162,7 +163,7 @@ export type SubscriptionRenewalPreview = {
   reservedInvoices: Array<{
     invoiceId: string; issueDate: string; customer: { id: string; code: string; legalName: string };
     paymentMethod: "BANK_TRANSFER" | "CASH" | "DIRECT_DEBIT";
-    subscriptionCount: number; total: string; reservedAt: string;
+    subscriptionCount: number; total: string; reservedAt: string; confirmationBlockers: RenewalConfirmationBlocker[];
   }>;
 };
 export type ListSubscriptionRenewalPreviewResult =
@@ -360,11 +361,27 @@ export async function listSubscriptionRenewalPreview(
     orderBy: [{ issueDate: "asc" }, { id: "asc" }],
     take: 100,
     select: {
-      id: true, issueDate: true, total: true, customerId: true, customerCodeSnapshot: true,
+      id: true, issueDate: true, total: true, taxAmount: true, customerId: true, customerCodeSnapshot: true,
       customerLegalNameSnapshot: true, dueDates: { take: 1, select: { paymentMethod: true } },
+      lines: { select: { catalogItemKindSnapshot: true, lineTaxableBase: true } },
       subscriptionRenewalReservations: { where: { status: "RESERVED" }, orderBy: { reservedAt: "asc" }, select: { reservedAt: true } }
     }
   });
+  const openFiscalYears = reservedRows.length === 0 ? [] : await prisma.accountingFiscalYear.findMany({
+    where: { companyId, status: "OPEN" }, select: { id: true, startDate: true, endDate: true }
+  });
+  const accountingRequirements = reservedRows.map((invoice) => {
+    const fiscalYear = openFiscalYears.find((candidate) => candidate.startDate <= invoice.issueDate && candidate.endDate >= invoice.issueDate) ?? null;
+    return { invoiceId: invoice.id, fiscalYear, codes: renewalAccountingCodes(invoice) };
+  });
+  const requiredFiscalYearIds = [...new Set(accountingRequirements.flatMap((requirement) => requirement.fiscalYear ? [requirement.fiscalYear.id] : []))];
+  const requiredAccountCodes = [...new Set(accountingRequirements.flatMap((requirement) => requirement.codes ?? []))];
+  const availableAccounts = requiredFiscalYearIds.length === 0 || requiredAccountCodes.length === 0 ? [] : await prisma.accountingAccount.findMany({
+    where: { fiscalYearId: { in: requiredFiscalYearIds }, code: { in: requiredAccountCodes }, status: "ACTIVE", isPostable: true },
+    select: { fiscalYearId: true, code: true }
+  });
+  const availableAccountKeys = new Set(availableAccounts.map((account) => `${account.fiscalYearId}:${account.code}`));
+  const accountingRequirementByInvoice = new Map(accountingRequirements.map((requirement) => [requirement.invoiceId, requirement]));
   const value: SubscriptionRenewalPreview = {
     processDate: command.processDate,
     nextCursor: candidates[0]?.hasNext && groups.length > 0
@@ -376,14 +393,17 @@ export async function listSubscriptionRenewalPreview(
       customer: { id: invoice.customerId!, code: invoice.customerCodeSnapshot, legalName: invoice.customerLegalNameSnapshot },
       paymentMethod: invoice.dueDates[0]?.paymentMethod ?? "BANK_TRANSFER",
       subscriptionCount: invoice.subscriptionRenewalReservations.length, total: invoice.total.toFixed(2),
-      reservedAt: invoice.subscriptionRenewalReservations[0]!.reservedAt.toISOString()
+      reservedAt: invoice.subscriptionRenewalReservations[0]!.reservedAt.toISOString(),
+      confirmationBlockers: renewalConfirmationBlockers(accountingRequirementByInvoice.get(invoice.id), availableAccountKeys)
     }))
   };
   await prisma.auditEvent.create({ data: {
     eventType: "SUBSCRIPTION_RENEWAL_PREVIEW_VIEWED", actorType: "USER",
     payload: { actorUserId: actor.id, companyId, processDate: command.processDate, includePending: command.includePending,
       groupCount: value.groups.length, candidateCount: value.groups.reduce((count, group) => count + group.subscriptions.length, 0),
-      reservedInvoiceCount: value.reservedInvoices.length, hasNext: Boolean(value.nextCursor),
+      reservedInvoiceCount: value.reservedInvoices.length,
+      blockedReservedInvoiceCount: value.reservedInvoices.filter((invoice) => invoice.confirmationBlockers.length > 0).length,
+      hasNext: Boolean(value.nextCursor),
       ...(context.correlationId ? { correlationId: context.correlationId } : {}) }
   } });
   return { ok: true, status: 200, value };
@@ -959,6 +979,34 @@ function compareRenewalPreviewGroups(
   return left.customer.id.localeCompare(right.customer.id)
     || left.paymentMethod.localeCompare(right.paymentMethod)
     || left.periodStart.localeCompare(right.periodStart);
+}
+
+function renewalAccountingCodes(invoice: {
+  customerCodeSnapshot: string;
+  taxAmount: Prisma.Decimal;
+  lines: Array<{ catalogItemKindSnapshot: string | null; lineTaxableBase: Prisma.Decimal }>;
+}): string[] | null {
+  if (!/^\d{1,6}$/.test(invoice.customerCodeSnapshot)) return null;
+  const productBase = invoice.lines.reduce((total, line) => line.catalogItemKindSnapshot === "PRODUCT" ? total.plus(line.lineTaxableBase) : total, new Prisma.Decimal(0));
+  const serviceBase = invoice.lines.reduce((total, line) => line.catalogItemKindSnapshot !== "PRODUCT" ? total.plus(line.lineTaxableBase) : total, new Prisma.Decimal(0));
+  return [
+    `430${invoice.customerCodeSnapshot.padStart(6, "0")}`,
+    ...(productBase.isZero() ? [] : ["700000000"]),
+    ...(serviceBase.isZero() ? [] : ["705000000"]),
+    ...(invoice.taxAmount.isZero() ? [] : ["477000000"])
+  ];
+}
+
+function renewalConfirmationBlockers(
+  requirement: { fiscalYear: { id: string } | null; codes: string[] | null } | undefined,
+  availableAccountKeys: Set<string>
+): RenewalConfirmationBlocker[] {
+  const fiscalYear = requirement?.fiscalYear;
+  if (!fiscalYear) return ["INVOICE_ACCOUNTING_FISCAL_YEAR_NOT_OPEN"];
+  if (!requirement.codes || requirement.codes.some((code) => !availableAccountKeys.has(`${fiscalYear.id}:${code}`))) {
+    return ["INVOICE_ACCOUNTING_ACCOUNT_NOT_AVAILABLE"];
+  }
+  return [];
 }
 
 const renewalPreviewCursorSchema = z.object({

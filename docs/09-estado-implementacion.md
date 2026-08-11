@@ -336,9 +336,9 @@ Prioridades pendientes despues de este corte:
    rebanada de cantidades `PER_LICENSE`, ya integrada con vista previa,
    reserva y evidencia append-only. La vista previa ya permite personalizar
    descripciones solo para el borrador; queda definir e implementar la edicion
-   economica de cantidades, precios, descuentos o recargos y ampliar de forma
-   controlada el catalogo de bloqueos automaticos. La vista previa ya dispone
-   de paginacion navegable mediante
+   economica de cantidades, precios, descuentos o recargos. La vista previa ya
+   muestra en lote la falta de ejercicio o cuentas contables de las reservas y
+   dispone de paginacion navegable mediante
    cursor firmado ligado a filtros. La reactivacion
    programada ya dispone de aplicacion supervisada y de un worker one-shot
    monitorizado con autoridad diferida, cooldown y ledger append-only de

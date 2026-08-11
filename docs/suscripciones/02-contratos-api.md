@@ -455,10 +455,17 @@ primera página para refrescar el corte.
 
 Una suscripcion `RENEWAL_PENDING` solo aparece al solicitarla expresamente.
 Las reservas activas no vuelven a aparecer como candidatas y se devuelven en
-`reservedInvoices`. La consulta es orientativa, usa `private, no-store` y se
-audita solo con conteos y estado de continuidad, nunca con el cursor. Cada
-grupo hidrata como maximo 100 miembros; si el total es mayor se muestra como no
-seleccionable.
+`reservedInvoices`. Cada reserva incluye `confirmationBlockers`: actualmente
+advierte si el ejercicio de la fecha de emision no esta abierto o si falta
+alguna cuenta contable activa e imputable necesaria. La UI deshabilita la
+emision mientras existan bloqueos, pero la confirmacion vuelve a comprobarlos
+en servidor para evitar carreras. La comprobacion se resuelve en lote para
+todas las reservas visibles, sin consultas por factura.
+
+La consulta es orientativa, usa `private, no-store` y se audita solo con
+conteos y estado de continuidad, nunca con el cursor ni con datos economicos.
+Cada grupo hidrata como maximo 100 miembros; si el total es mayor se muestra
+como no seleccionable.
 
 ### `POST /api/subscriptions/renewals`
 

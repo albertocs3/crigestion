@@ -358,6 +358,9 @@ describe("subscription HTTP contracts", () => {
     const invoiceId = ((await prepared.json()) as { invoiceId: string }).invoiceId;
     expect((await prisma.invoiceLine.findFirstOrThrow({ where: { invoiceId }, select: { description: true } })).description).toBe(customDescription);
     expect(JSON.stringify(await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_RENEWAL_DRAFT_RESERVED", payload: { path: ["invoiceId"], equals: invoiceId } }, select: { payload: true } }))).not.toContain(customDescription);
+    expect(await (await renewalsGet(apiRequest(`/api/subscriptions/renewals?processDate=${todayDate()}`))).json()).toMatchObject({
+      reservedInvoices: [{ invoiceId, confirmationBlockers: [] }]
+    });
     const released = await renewalRelease(jsonRequest(`/api/subscriptions/renewals/${invoiceId}/release`, { reason: "Correccion de la seleccion" }, { csrf }), { params: Promise.resolve({ invoiceId }) });
     expect(released.status).toBe(200); expect(await released.json()).toMatchObject({ invoiceId, subscriptionIds: [created.id] });
   });
