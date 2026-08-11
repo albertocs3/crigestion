@@ -6,6 +6,7 @@ import { GET as incidentsGet, POST as incidentsPost } from "@/app/api/support/in
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
+import { POST as communicationsPost } from "@/app/api/support/communications/route";
 import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
@@ -218,6 +219,12 @@ describe("support incidents HTTP contracts", () => {
     expect(replayBody.change.id).toBe(firstBody.change.id);
     expect(await prisma.supportIncidentCollaborator.count()).toBe(1);
   });
+
+  it("creates and replays a protected communication", async () => {
+    await loginAs("admin", password); const csrf = await csrfToken(); const incidentPayload = await payload(); const body = { customerId: incidentPayload.customerId, channel: "WHATSAPP", direction: "OUTBOUND", occurredAt: new Date().toISOString(), contactNumber: "+34910000003", durationSeconds: null, summary: "Se facilita al cliente la información solicitada.", result: "INFORMATION_PROVIDED", incidentId: null }; const key = randomUUID();
+    const first = await communicationsPost(jsonRequest("/api/support/communications", body, { csrf, key })); const replay = await communicationsPost(jsonRequest("/api/support/communications", body, { csrf, key }));
+    expect(first.status).toBe(201); expect(replay.status).toBe(200); expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0"); const firstBody = await first.json() as { id: string }; const replayBody = await replay.json() as { id: string }; expect(replayBody.id).toBe(firstBody.id); expect(await prisma.supportCommunication.count()).toBe(1);
+  });
 });
 
 async function initialize() {
@@ -295,11 +302,15 @@ function responseId(value: unknown): string | undefined {
 }
 async function reset() {
   await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"');
+    await tx.supportCommunicationCorrection.deleteMany();
+    await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
@@ -311,6 +322,8 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

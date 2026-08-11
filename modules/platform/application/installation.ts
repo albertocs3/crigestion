@@ -52,6 +52,8 @@ const platformPermissions = [
   ["Support.ManageAssigned", "Gestionar el estado de incidencias asignadas"],
   ["Support.Reopen", "Reabrir incidencias finalizadas"],
   ["Support.ManageParticipants", "Gestionar colaboradores y responsable de incidencias"],
+  ["Support.ViewCommunications", "Consultar comunicaciones de clientes"],
+  ["Support.ManageCommunications", "Registrar y corregir comunicaciones de clientes"],
   ["Support.ManageCategories", "Gestionar categorias de incidencias"],
   ["Suppliers.View", "Consultar proveedores"],
   ["Suppliers.Manage", "Gestionar proveedores"],

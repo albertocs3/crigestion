@@ -8,6 +8,7 @@ import { createSupportAction, hashSupportActionRequest } from "@/modules/support
 import { createSupportCategory, createSupportIncident, getSupportIncident, hashSupportRequest, listSupportIncidents, listSupportReferences } from "@/modules/support/application/incidents";
 import { hashSupportStatusTransitionRequest, transitionSupportIncident } from "@/modules/support/application/statusTransitions";
 import { changeSupportParticipants, hashSupportParticipantRequest } from "@/modules/support/application/participants";
+import { correctSupportCommunication, createSupportCommunication, createSupportCommunicationSchema, getSupportCommunication, hashSupportCommunicationRequest } from "@/modules/support/application/communications";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -425,6 +426,22 @@ describe("support incidents application", () => {
     await expect(prisma.supportIncidentParticipantChange.update({ where: { id: stored!.participantChanges[0]!.id }, data: { reason: "Alterado" } })).rejects.toThrow();
   });
 
+  it("records and corrects communications while preserving the original values", async () => {
+    const actor = await admin(); const customer = await createCustomerRecord(actor); const occurredAt = new Date().toISOString();
+    const command = { customerId: customer.id, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt, contactNumber: "+34910000001", durationSeconds: 180, summary: "El cliente solicita información sobre el servicio.", result: "INFORMATION_PROVIDED" as const, incidentId: null };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(command), scope: "communication:create", correlationId: "communication-create-1" };
+    const created = await createSupportCommunication(command, actor, context); const replay = await createSupportCommunication(command, actor, context);
+    expect(created).toMatchObject({ ok: true, status: 201, value: { version: 1, summary: command.summary } }); expect(replay).toMatchObject({ ok: true, status: 200 }); if (!created.ok) throw new Error("not created");
+    const correction = { expectedVersion: 1, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt, contactNumber: "+34910000002", durationSeconds: 240, summary: "El cliente recibe la información completa y confirma recepción.", result: "RESOLVED_NO_FOLLOW_UP" as const, incidentId: null, reason: "Se corrigen número, duración y resultado tras revisar la nota." };
+    const corrected = await correctSupportCommunication(created.value.id, correction, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: created.value.id, ...correction }), scope: `communication:${created.value.id}:correct`, correlationId: "communication-correct-1" });
+    expect(corrected).toMatchObject({ ok: true, value: { version: 2, contactNumber: correction.contactNumber, corrections: [{ previous: { summary: command.summary }, corrected: { summary: correction.summary } }] } });
+    const detail = await getSupportCommunication(created.value.id); expect(detail?.corrections).toHaveLength(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_COMMUNICATION_CORRECTED" } }); expect(JSON.stringify(audit.payload)).not.toContain(correction.reason); expect(JSON.stringify(audit.payload)).not.toContain(correction.summary);
+    expect(createSupportCommunicationSchema.safeParse({ ...command, result: "REQUIRES_FOLLOW_UP" }).success).toBe(false);
+    await expect(prisma.supportCommunication.delete({ where: { id: created.value.id } })).rejects.toThrow();
+    await expect(prisma.supportCommunication.update({ where: { id: created.value.id }, data: { summary: "Cambio sin evidencia", version: 3 } })).rejects.toThrow();
+  });
+
   it("rejects a store belonging to another customer", async () => {
     const actor = await admin();
     const customer = await createCustomerRecord(actor);
@@ -606,11 +623,15 @@ function participantContext(incidentId: string, command: unknown) {
 }
 async function reset() {
   await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" DISABLE TRIGGER "support_communications_no_delete"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" DISABLE TRIGGER "support_communication_corrections_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_collaborators" DISABLE TRIGGER "support_incident_collaborators_guard"');
+    await tx.supportCommunicationCorrection.deleteMany();
+    await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
@@ -622,6 +643,8 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_communications" ENABLE TRIGGER "support_communications_no_delete"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

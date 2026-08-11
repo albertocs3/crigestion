@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite consultar y crear incidencias y categorías, registrar actuaciones, recorrer el ciclo de estados y gestionar responsable y colaboradores con evidencia histórica. Comunicaciones, adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
+La rebanada actual permite gestionar incidencias, participantes y comunicaciones telefónicas/WhatsApp con correcciones históricas. Adjuntos, fusiones y notificaciones quedan fuera del contrato actual.
 
 ## Permisos
 
@@ -12,6 +12,8 @@ La rebanada actual permite consultar y crear incidencias y categorías, registra
 - `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución y cierre por el responsable o un administrador.
 - `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
 - `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
+- `Support.ViewCommunications`: listado y detalle de comunicaciones.
+- `Support.ManageCommunications` + `Support.ViewCommunications`: alta y corrección de comunicaciones.
 - `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
@@ -106,6 +108,12 @@ El nombre es único por empresa tras normalizar mayúsculas y acentos. No se reg
 
 La migración crea la categoría `General` para empresas ya existentes. En una instalación nueva, el administrador crea al menos una categoría antes de registrar la primera incidencia.
 
+## `/api/support/communications`
+
+`GET` requiere `Support.ViewCommunications` y admite cursor, cliente, incidencia y canal. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia.
+
+`GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. El vínculo a un contacto se pospone hasta disponer de un maestro de contactos independiente.
+
 ## Integridad y conservación
 
 - PostgreSQL garantiza unicidad del número y de la secuencia por empresa y año.
@@ -115,4 +123,5 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 - Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
 - Las transiciones son append-only. PostgreSQL exige un único evento por versión resultante y mantiene coherentes estado, solución, motivo de cierre y marcas temporales.
 - Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
+- Las comunicaciones no se borran y cada actualización exige una corrección exacta append-only con versión consecutiva.
 - No existe borrado físico de incidencias en la API.

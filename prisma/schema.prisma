@@ -257,6 +257,24 @@ enum SupportIncidentParticipantChangeType {
   RESPONSIBLE_CHANGED
 }
 
+enum SupportCommunicationChannel {
+  PHONE
+  WHATSAPP
+}
+
+enum SupportCommunicationDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SupportCommunicationResult {
+  RESOLVED_NO_FOLLOW_UP
+  REQUIRES_FOLLOW_UP
+  NO_ANSWER
+  INFORMATION_PROVIDED
+  REFERRED_TO_INCIDENT
+}
+
 enum SubscriptionStatus {
   DRAFT
   ACTIVE
@@ -731,6 +749,8 @@ model Company {
   supportIncidentStatusTransitions           SupportIncidentStatusTransition[]
   supportIncidentCollaborators               SupportIncidentCollaborator[]
   supportIncidentParticipantChanges          SupportIncidentParticipantChange[]
+  supportCommunications                      SupportCommunication[]
+  supportCommunicationCorrections            SupportCommunicationCorrection[]
   logoAttachment                             Attachment?                                  @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
@@ -818,6 +838,7 @@ model Customer {
   subscriptionRenewalReservations    SubscriptionRenewalReservation[]
   subscriptionRenewalWaiverSnapshots SubscriptionRenewalWaiverSnapshot[]
   supportIncidents                   SupportIncident[]
+  supportCommunications              SupportCommunication[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -1316,10 +1337,12 @@ model SupportIncident {
   transitions        SupportIncidentStatusTransition[]
   collaborators      SupportIncidentCollaborator[]
   participantChanges SupportIncidentParticipantChange[]
+  communications     SupportCommunication[]
 
   @@unique([companyId, number])
   @@unique([companyId, year, sequenceNumber])
   @@unique([id, companyId])
+  @@unique([id, companyId, customerId])
   @@index([companyId, status, updatedAt, id])
   @@index([companyId, priority, status, updatedAt, id])
   @@index([companyId, responsibleUserId, status, updatedAt, id])
@@ -1436,6 +1459,70 @@ model SupportIncidentParticipantChange {
   @@map("support_incident_participant_changes")
 }
 
+model SupportCommunication {
+  id                 String                        @id @default(uuid()) @db.Uuid
+  companyId          String                        @db.Uuid
+  customerId         String                        @db.Uuid
+  incidentId         String?                       @db.Uuid
+  registeredByUserId String                        @db.Uuid
+  channel            SupportCommunicationChannel
+  direction          SupportCommunicationDirection
+  occurredAt         DateTime                      @db.Timestamptz(3)
+  contactNumber      String                        @db.VarChar(40)
+  durationSeconds    Int?
+  summary            String                        @db.VarChar(2000)
+  result             SupportCommunicationResult
+  version            Int                           @default(1)
+  recordedAt         DateTime                      @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime                      @updatedAt @db.Timestamptz(3)
+
+  company      Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer     Customer                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  incident     SupportIncident?                 @relation(fields: [incidentId, companyId, customerId], references: [id, companyId, customerId], onDelete: Restrict)
+  registeredBy User                             @relation("SupportCommunicationsRegisteredBy", fields: [registeredByUserId], references: [id], onDelete: Restrict)
+  corrections  SupportCommunicationCorrection[]
+
+  @@unique([id, companyId])
+  @@index([companyId, occurredAt, id])
+  @@index([companyId, customerId, occurredAt, id])
+  @@index([incidentId, occurredAt, id])
+  @@map("support_communications")
+}
+
+model SupportCommunicationCorrection {
+  id                       String                        @id @default(uuid()) @db.Uuid
+  companyId                String                        @db.Uuid
+  communicationId          String                        @db.Uuid
+  correctedByUserId        String                        @db.Uuid
+  resultingVersion         Int
+  previousChannel          SupportCommunicationChannel
+  correctedChannel         SupportCommunicationChannel
+  previousDirection        SupportCommunicationDirection
+  correctedDirection       SupportCommunicationDirection
+  previousOccurredAt       DateTime                      @db.Timestamptz(3)
+  correctedOccurredAt      DateTime                      @db.Timestamptz(3)
+  previousContactNumber    String                        @db.VarChar(40)
+  correctedContactNumber   String                        @db.VarChar(40)
+  previousDurationSeconds  Int?
+  correctedDurationSeconds Int?
+  previousSummary          String                        @db.VarChar(2000)
+  correctedSummary         String                        @db.VarChar(2000)
+  previousResult           SupportCommunicationResult
+  correctedResult          SupportCommunicationResult
+  previousIncidentId       String?                       @db.Uuid
+  correctedIncidentId      String?                       @db.Uuid
+  reason                   String                        @db.VarChar(500)
+  correctedAt              DateTime                      @default(now()) @db.Timestamptz(3)
+
+  company         Company              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  communication   SupportCommunication @relation(fields: [communicationId, companyId], references: [id, companyId], onDelete: Restrict)
+  correctedByUser User                 @relation("SupportCommunicationCorrectionsBy", fields: [correctedByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([communicationId, resultingVersion])
+  @@index([communicationId, correctedAt, id])
+  @@map("support_communication_corrections")
+}
+
 model SupportIncidentAction {
   id           String   @id @default(uuid()) @db.Uuid
   companyId    String   @db.Uuid
@@ -1544,6 +1631,8 @@ model User {
   supportIncidentParticipantChanges       SupportIncidentParticipantChange[]           @relation("SupportIncidentParticipantChangeActor")
   supportIncidentResponsibleChangesFrom   SupportIncidentParticipantChange[]           @relation("SupportIncidentParticipantChangeFrom")
   supportIncidentResponsibleChangesTo     SupportIncidentParticipantChange[]           @relation("SupportIncidentParticipantChangeTo")
+  registeredSupportCommunications         SupportCommunication[]                       @relation("SupportCommunicationsRegisteredBy")
+  correctedSupportCommunications          SupportCommunicationCorrection[]             @relation("SupportCommunicationCorrectionsBy")
   verifactuCredentialTests                VerifactuMtlsCredentialTestAttempt[]
   createdSubscriptions                    Subscription[]                               @relation("SubscriptionsCreatedBy")
   updatedSubscriptions                    Subscription[]                               @relation("SubscriptionsUpdatedBy")
