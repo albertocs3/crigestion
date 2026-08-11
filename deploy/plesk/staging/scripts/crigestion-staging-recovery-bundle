@@ -448,6 +448,8 @@ for source_file in \
   /etc/systemd/system/crigestion-staging-recovery-bundle-alert.service \
   /etc/systemd/system/crigestion-staging-recovery-bundle.timer \
   /etc/systemd/system/crigestion-staging-recovery-drill.service \
+  /etc/systemd/system/crigestion-staging-subscription-reactivation-worker.service \
+  /etc/systemd/system/crigestion-staging-subscription-reactivation-worker.timer \
   /etc/systemd/system/crigestion-staging-verifactu-worker.service \
   /etc/systemd/system/crigestion-staging-migrate@.service; do
   test -f "$source_file"

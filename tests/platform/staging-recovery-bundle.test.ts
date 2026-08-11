@@ -46,6 +46,8 @@ describe("staging recovery bundle deployment", () => {
     expect(script).toContain("CONFIG_HASH_AFTER");
     expect(script).toContain("RECOVERY_BUNDLE_OK");
     expect(script).toContain("crigestion-staging-recovery-drill");
+    expect(script).toContain("crigestion-staging-subscription-reactivation-worker.service");
+    expect(script).toContain("crigestion-staging-subscription-reactivation-worker.timer");
     expect(script).toContain('[ "$PUBLISHED" -eq 1 ]');
     expect(packageManifest.dependencies.dotenv).toBeDefined();
 

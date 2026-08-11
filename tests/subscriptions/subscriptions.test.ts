@@ -9,7 +9,7 @@ import { confirmSubscriptionRenewal, createSubscriptionRenewalDraft, hashSubscri
 import { excludeSubscriptionRenewal, hashSubscriptionRenewalExclusionRequest, hashSubscriptionRenewalWaiverRequest, listSubscriptionRenewalExclusions, listSubscriptionRenewalExclusionsSchema, waiveSubscriptionRenewal } from "@/modules/subscriptions/application/renewalExclusions";
 import { listSubscriptionRenewalWaivers } from "@/modules/subscriptions/application/renewalWaiverReports";
 import { completeRenewalWaiverFiscalReview, decideRenewalWaiverFiscalReview, hashCompleteRenewalWaiverFiscalReview, hashDecideRenewalWaiverFiscalReview, hashStartRenewalWaiverFiscalReview, startRenewalWaiverFiscalReview } from "@/modules/subscriptions/application/renewalWaiverFiscalReviews";
-import { applySubscriptionReactivationSchedule, createSubscriptionReactivationSchedule, hashSubscriptionReactivationScheduleRequest, revokeSubscriptionReactivationSchedule } from "@/modules/subscriptions/application/reactivationSchedules";
+import { applySubscriptionReactivationSchedule, createSubscriptionReactivationSchedule, hashSubscriptionReactivationScheduleRequest, processNextDueSubscriptionReactivationSchedule, revokeSubscriptionReactivationSchedule } from "@/modules/subscriptions/application/reactivationSchedules";
 import { issueInvoice } from "@/modules/billing/application/invoices";
 import { createManualJournalEntry } from "@/modules/accounting/application/journal";
 import { approveWaiverEvidenceReversal, hashWaiverEvidenceReversalApproval, hashWaiverEvidenceReversalRequest, requestWaiverEvidenceReversal } from "@/modules/accounting/application/waiverEvidenceReversals";
@@ -276,6 +276,80 @@ describe("subscriptions application service", () => {
     expect(replay).toEqual(applied);
     const stored = await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, include: { reactivations: true, reactivationSchedules: true } });
     expect(stored).toMatchObject({ status: "ACTIVE", version: 5, cancellationReason: null, reactivations: [{ reason: scheduleCommand.reason }], reactivationSchedules: [{ status: "APPLIED", reactivationId: applied.ok ? applied.value.reactivationId : null }] });
+  });
+
+  it("automatically applies a due reactivation once and records append-only monitoring", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id);
+    const creation = payload(customerId, itemId, { startDate: "2026-01-01" });
+    const created = await createSubscription(creation, actor, context("automation-create", creation)); if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("automation-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+    const cancellation = { expectedVersion: 2, reason: "Baja previa a automatizacion" };
+    const cancelled = await cancelSubscription(created.value.id, cancellation, actor, context("automation-cancel", cancellation)); if (!cancelled.ok) throw new Error(cancelled.error.code);
+    const scheduleCommand = { expectedVersion: 3, effectiveDate: futureDate(), nextRenewalDate: futureDate(), reason: "Reanudacion automatica monitorizada" };
+    const scheduled = await createSubscriptionReactivationSchedule(created.value.id, scheduleCommand, actor,
+      reactivationScheduleContext("create", "automation-schedule", created.value.id, null, scheduleCommand));
+    if (!scheduled.ok) throw new Error(scheduled.error.code);
+    await makeReactivationScheduleDue(created.value.id, scheduled.value.schedule.id);
+
+    const [first, concurrent] = await Promise.all([
+      processNextDueSubscriptionReactivationSchedule("automation-worker-a"),
+      processNextDueSubscriptionReactivationSchedule("automation-worker-b")
+    ]);
+    expect([first.outcome, concurrent.outcome].filter((outcome) => outcome === "APPLIED")).toHaveLength(1);
+    expect(await processNextDueSubscriptionReactivationSchedule("automation-worker-c")).toEqual({ outcome: "IDLE" });
+    const stored = await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, select: { status: true, version: true } });
+    expect(stored).toEqual({ status: "ACTIVE", version: 5 });
+    const attempts = await prisma.subscriptionReactivationAutomationAttempt.findMany({ where: { scheduleId: scheduled.value.schedule.id } });
+    expect(attempts).toMatchObject([{ attemptNumber: 1, outcome: "APPLIED", stableCode: null }]);
+    await expect(prisma.subscriptionReactivationAutomationAttempt.create({
+      data: {
+        companyId: attempts[0]!.companyId,
+        subscriptionId: attempts[0]!.subscriptionId,
+        scheduleId: attempts[0]!.scheduleId,
+        attemptNumber: 2,
+        workerId: "automation-worker-outside-transition",
+        startedAt: new Date(),
+        completedAt: new Date(),
+        outcome: "APPLIED"
+      }
+    })).rejects.toThrow("Invalid subscription reactivation automation attempt.");
+    await expect(prisma.subscriptionReactivationAutomationAttempt.update({ where: { id: attempts[0]!.id }, data: { workerId: "altered" } })).rejects.toThrow();
+    await expect(prisma.subscriptionReactivationAutomationAttempt.delete({ where: { id: attempts[0]!.id } })).rejects.toThrow();
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED", actorType: "SYSTEM" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(scheduleCommand.reason);
+  });
+
+  it("blocks automatic application when the requester loses authority without retrying immediately", async () => {
+    const actor = await admin(); const customerId = await customer(actor.id); const itemId = await catalogItem(actor.id);
+    const creation = payload(customerId, itemId, { startDate: "2026-01-01" });
+    const created = await createSubscription(creation, actor, context("automation-auth-create", creation)); if (!created.ok) throw new Error(created.error.code);
+    const activated = await activateSubscription(created.value.id, { version: 1 }, actor, context("automation-auth-activate", { version: 1 })); if (!activated.ok) throw new Error(activated.error.code);
+    const cancellation = { expectedVersion: 2, reason: "Baja con autoridad diferida" };
+    const cancelled = await cancelSubscription(created.value.id, cancellation, actor, context("automation-auth-cancel", cancellation)); if (!cancelled.ok) throw new Error(cancelled.error.code);
+    const scheduleCommand = { expectedVersion: 3, effectiveDate: futureDate(), nextRenewalDate: futureDate(), reason: "Orden cuyo permiso sera retirado" };
+    const scheduled = await createSubscriptionReactivationSchedule(created.value.id, scheduleCommand, actor,
+      reactivationScheduleContext("create", "automation-auth-schedule", created.value.id, null, scheduleCommand));
+    if (!scheduled.ok) throw new Error(scheduled.error.code);
+    await makeReactivationScheduleDue(created.value.id, scheduled.value.schedule.id);
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: actor.id }, select: { roleId: true } });
+    const permission = await prisma.permission.findUniqueOrThrow({ where: { code: "Subscriptions.ScheduleReactivations" }, select: { id: true } });
+    await prisma.rolePermission.delete({ where: { roleId_permissionId: { roleId: user.roleId, permissionId: permission.id } } });
+
+    expect(await processNextDueSubscriptionReactivationSchedule("automation-worker-auth")).toMatchObject({
+      outcome: "BLOCKED", stableCode: "SUBSCRIPTION_REACTIVATION_SCHEDULE_REQUESTER_NOT_AUTHORIZED"
+    });
+    expect(await processNextDueSubscriptionReactivationSchedule("automation-worker-auth-retry")).toEqual({ outcome: "IDLE" });
+    expect(await prisma.subscription.findUniqueOrThrow({ where: { id: created.value.id }, select: { status: true, version: true } })).toEqual({ status: "CANCELLED", version: 4 });
+    const detail = await getSubscription(created.value.id, actor);
+    expect(detail?.reactivationSchedules[0]?.lastAutomationAttempt).toMatchObject({
+      attemptNumber: 1, outcome: "BLOCKED", stableCode: "SUBSCRIPTION_REACTIVATION_SCHEDULE_REQUESTER_NOT_AUTHORIZED"
+    });
+    const audits = await prisma.auditEvent.findMany({ where: {
+      eventType: "SUBSCRIPTION_REACTIVATION_AUTOMATION_BLOCKED",
+      payload: { path: ["subscriptionId"], equals: created.value.id }
+    } });
+    expect(audits).toHaveLength(1);
+    expect(JSON.stringify(audits[0]?.payload)).not.toContain(scheduleCommand.reason);
   });
 
   it("records and revokes a future cancellation without deleting its history", async () => {
@@ -1400,6 +1474,27 @@ async function resolveCancellationWithRetry(companyId: string, subscriptionId: s
     }
   }
   throw lastError;
+}
+async function makeReactivationScheduleDue(subscriptionId: string, scheduleId: string) {
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const yesterdayDate = new Date(`${yesterday.toISOString().slice(0, 10)}T00:00:00.000Z`);
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe('ALTER TABLE "subscriptions" DISABLE TRIGGER "subscription_header_lifecycle_trigger"');
+    await tx.$executeRawUnsafe('ALTER TABLE "subscription_reactivation_schedules" DISABLE TRIGGER "subscription_reactivation_schedule_history_trigger"');
+    await tx.subscription.update({ where: { id: subscriptionId }, data: { cancelledAt: yesterday, cancellationEffectiveDate: yesterdayDate } });
+    await tx.subscriptionReactivationSchedule.update({
+      where: { id: scheduleId },
+      data: {
+        requestedAt: yesterday,
+        effectiveDate: new Date(`${todayDate()}T00:00:00.000Z`),
+        cancelledAtSnapshot: yesterday,
+        cancellationEffectiveDateSnapshot: yesterdayDate
+      }
+    });
+    await tx.$executeRawUnsafe("SET CONSTRAINTS ALL IMMEDIATE");
+    await tx.$executeRawUnsafe('ALTER TABLE "subscription_reactivation_schedules" ENABLE TRIGGER "subscription_reactivation_schedule_history_trigger"');
+    await tx.$executeRawUnsafe('ALTER TABLE "subscriptions" ENABLE TRIGGER "subscription_header_lifecycle_trigger"');
+  });
 }
 async function reset() { await prisma.$executeRawUnsafe('TRUNCATE TABLE "companies", "roles", "permissions", "reserved_user_names", "idempotency_records" RESTART IDENTITY CASCADE'); }
 function todayDate() { const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date()); const value = Object.fromEntries(parts.map((part) => [part.type, part.value])); return `${value.year}-${value.month}-${value.day}`; }

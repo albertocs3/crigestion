@@ -30,10 +30,11 @@ autoritativo esta en [Contratos HTTP](02-contratos-api.md).
 
 Planes, cambios contractuales programados, edicion economica de la vista previa
 y gestion avanzada de exclusiones siguen pendientes. La reactivacion inmediata
-y la programada supervisada conservan cada ciclo de baja en historial append-only,
-usan una nueva fecha de proxima renovacion y no recuperan periodos omitidos. La
-programacion no constituye automatizacion: mantiene la suscripcion cancelada
-hasta que un operador aplica expresamente la orden vencida. El runner manual ya
+y la programada conservan cada ciclo de baja en historial append-only, usan una
+nueva fecha de proxima renovacion y no recuperan periodos omitidos. Un worker
+monitorizado aplica las ordenes vencidas en lotes acotados, revalida la autoridad
+vigente del solicitante y conserva cada intento o bloqueo en un ledger
+append-only. La aplicacion manual supervisada permanece disponible. El runner manual ya
 aplica
 la baja vencida antes de reservar y delega en Facturacion la creacion de factura,
 lineas, impuestos y vencimiento usando snapshots contractuales. El ledger
@@ -375,9 +376,15 @@ Si la cancelación ocurre dentro de un periodo que ya se va a cobrar o ya está 
 - Se puede indicar una nueva fecha de próxima renovación.
 - La fecha de próxima renovación no puede ser anterior a la fecha efectiva.
 - La reactivación y cada transición de la programación deben quedar auditadas.
-- No se promete aplicación automática desatendida; una orden vencida permanece
-  visible como pendiente hasta que se aplica o retira. Si su renovación también
-  venció, la interfaz solo permite retirarla y reprogramarla.
+- La aplicación automática se ejecuta cada cinco minutos en lotes acotados. Si
+  falla una regla estable, la orden permanece pendiente, muestra el último
+  código y no vuelve a intentarse durante una hora.
+- La autoridad del solicitante se revalida al aplicar. Si su usuario deja de
+  estar activo o pierde `Subscriptions.ScheduleReactivations` o
+  `Subscriptions.View`, la orden queda pendiente y bloqueada hasta corregir la
+  causa o retirarla.
+- Si la fecha de renovación queda atrás, la interfaz solo permite retirar y
+  reprogramar la orden.
 
 ## 11. Preparación de la facturación
 

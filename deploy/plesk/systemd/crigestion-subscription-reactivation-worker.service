@@ -1,0 +1,32 @@
+[Unit]
+Description=Apply due CriGestion subscription reactivations
+After=network-online.target crigestion-app.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=crigestion
+Group=crigestion
+WorkingDirectory=/opt/crigestion/current
+EnvironmentFile=/etc/crigestion/app.env
+Environment=NODE_ENV=production
+ExecStartPre=/usr/bin/test -f /opt/crigestion/current/.next/BUILD_ID
+ExecStart=/usr/bin/node --conditions=react-server --import tsx scripts/run-subscription-reactivation-worker.ts
+TimeoutStartSec=120s
+UMask=0027
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

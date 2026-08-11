@@ -257,6 +257,11 @@ enum SubscriptionReactivationScheduleStatus {
   REVOKED
 }
 
+enum SubscriptionReactivationAutomationOutcome {
+  APPLIED
+  BLOCKED
+}
+
 enum SubscriptionCancellationMode {
   IMMEDIATE
   SCHEDULED
@@ -641,45 +646,46 @@ model Company {
   createdAt              DateTime @default(now()) @db.Timestamptz(3)
   updatedAt              DateTime @updatedAt @db.Timestamptz(3)
 
-  installation                            Installation?
-  accountingFiscalYears                   AccountingFiscalYear[]
-  fiscalYearCloseRequests                 AccountingFiscalYearCloseRequest[]
-  fiscalYearReopenRequests                AccountingFiscalYearReopenRequest[]
-  bankAccounts                            BankAccount[]
-  bankStatements                          BankStatement[]
-  invoices                                Invoice[]
-  purchaseInvoices                        PurchaseInvoice[]
-  purchaseSupplierDocumentIdentities      PurchaseSupplierDocumentIdentity[]
-  purchaseCorrectionOperations            PurchaseCorrectionOperation[]
-  purchaseVatRecords                      PurchaseVatRecord[]
-  supplierPayments                        SupplierPayment[]
-  supplierCredits                         SupplierCredit[]
-  supplierCreditRefunds                   SupplierCreditRefund[]
-  customerCredits                         CustomerCredit[]
-  customerCreditRefunds                   CustomerCreditRefund[]
-  verifactuInstallations                  VerifactuSifInstallation[]
-  verifactuFiscalRecords                  VerifactuFiscalRecord[]
-  verifactuMtlsCredentials                VerifactuMtlsCredential[]
-  verifactuWorkerRuns                     VerifactuWorkerRun[]
-  attachments                             Attachment[]                                 @relation("CompanyAttachments")
-  suppliers                               Supplier[]
-  subscriptionSequences                   SubscriptionNumberSequence[]
-  subscriptions                           Subscription[]
-  subscriptionCancellationSchedules       SubscriptionCancellationSchedule[]
-  subscriptionReactivations               SubscriptionReactivation[]
-  subscriptionReactivationSchedules       SubscriptionReactivationSchedule[]
-  subscriptionRenewalReservations         SubscriptionRenewalReservation[]
-  subscriptionRenewalExclusions           SubscriptionRenewalExclusion[]
-  subscriptionRenewalWaiverSnapshots      SubscriptionRenewalWaiverSnapshot[]
-  subscriptionRenewalWaiverReviews        SubscriptionRenewalWaiverReview[]
-  subscriptionRenewalWaiverReviewEvents   SubscriptionRenewalWaiverReviewEvent[]
-  subscriptionRenewalWaiverReviewEvidence SubscriptionRenewalWaiverReviewEvidence[]
-  accountingWaiverReversalRequests        AccountingWaiverReversalRequest[]
-  accountingWaiverReversalEvents          AccountingWaiverReversalEvent[]
-  accountingWaiverReplacementRequests     AccountingWaiverEvidenceReplacementRequest[]
-  accountingWaiverReplacementEvents       AccountingWaiverEvidenceReplacementEvent[]
-  subscriptionRenewalAttempts             SubscriptionRenewalAttempt[]
-  logoAttachment                          Attachment?                                  @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
+  installation                               Installation?
+  accountingFiscalYears                      AccountingFiscalYear[]
+  fiscalYearCloseRequests                    AccountingFiscalYearCloseRequest[]
+  fiscalYearReopenRequests                   AccountingFiscalYearReopenRequest[]
+  bankAccounts                               BankAccount[]
+  bankStatements                             BankStatement[]
+  invoices                                   Invoice[]
+  purchaseInvoices                           PurchaseInvoice[]
+  purchaseSupplierDocumentIdentities         PurchaseSupplierDocumentIdentity[]
+  purchaseCorrectionOperations               PurchaseCorrectionOperation[]
+  purchaseVatRecords                         PurchaseVatRecord[]
+  supplierPayments                           SupplierPayment[]
+  supplierCredits                            SupplierCredit[]
+  supplierCreditRefunds                      SupplierCreditRefund[]
+  customerCredits                            CustomerCredit[]
+  customerCreditRefunds                      CustomerCreditRefund[]
+  verifactuInstallations                     VerifactuSifInstallation[]
+  verifactuFiscalRecords                     VerifactuFiscalRecord[]
+  verifactuMtlsCredentials                   VerifactuMtlsCredential[]
+  verifactuWorkerRuns                        VerifactuWorkerRun[]
+  attachments                                Attachment[]                                 @relation("CompanyAttachments")
+  suppliers                                  Supplier[]
+  subscriptionSequences                      SubscriptionNumberSequence[]
+  subscriptions                              Subscription[]
+  subscriptionCancellationSchedules          SubscriptionCancellationSchedule[]
+  subscriptionReactivations                  SubscriptionReactivation[]
+  subscriptionReactivationSchedules          SubscriptionReactivationSchedule[]
+  subscriptionReactivationAutomationAttempts SubscriptionReactivationAutomationAttempt[]
+  subscriptionRenewalReservations            SubscriptionRenewalReservation[]
+  subscriptionRenewalExclusions              SubscriptionRenewalExclusion[]
+  subscriptionRenewalWaiverSnapshots         SubscriptionRenewalWaiverSnapshot[]
+  subscriptionRenewalWaiverReviews           SubscriptionRenewalWaiverReview[]
+  subscriptionRenewalWaiverReviewEvents      SubscriptionRenewalWaiverReviewEvent[]
+  subscriptionRenewalWaiverReviewEvidence    SubscriptionRenewalWaiverReviewEvidence[]
+  accountingWaiverReversalRequests           AccountingWaiverReversalRequest[]
+  accountingWaiverReversalEvents             AccountingWaiverReversalEvent[]
+  accountingWaiverReplacementRequests        AccountingWaiverEvidenceReplacementRequest[]
+  accountingWaiverReplacementEvents          AccountingWaiverEvidenceReplacementEvent[]
+  subscriptionRenewalAttempts                SubscriptionRenewalAttempt[]
+  logoAttachment                             Attachment?                                  @relation("CompanyLogo", fields: [logoAttachmentId], references: [id], onDelete: Restrict)
 
   @@map("companies")
 }
@@ -1468,19 +1474,20 @@ model Subscription {
   createdAt                 DateTime                      @default(now()) @db.Timestamptz(3)
   updatedAt                 DateTime                      @updatedAt @db.Timestamptz(3)
 
-  company               Company                            @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  customer              Customer                           @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy             User                               @relation("SubscriptionsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy             User?                              @relation("SubscriptionsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  activatedBy           User?                              @relation("SubscriptionsActivatedBy", fields: [activatedById], references: [id], onDelete: Restrict)
-  cancelledBy           User?                              @relation("SubscriptionsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
-  lines                 SubscriptionLine[]
-  cancellationSchedules SubscriptionCancellationSchedule[]
-  reactivations         SubscriptionReactivation[]
-  reactivationSchedules SubscriptionReactivationSchedule[]
-  renewalReservations   SubscriptionRenewalReservation[]
-  renewalExclusions     SubscriptionRenewalExclusion[]
-  renewalAttemptMembers SubscriptionRenewalAttemptMember[]
+  company                        Company                                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  customer                       Customer                                    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy                      User                                        @relation("SubscriptionsCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                      User?                                       @relation("SubscriptionsUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  activatedBy                    User?                                       @relation("SubscriptionsActivatedBy", fields: [activatedById], references: [id], onDelete: Restrict)
+  cancelledBy                    User?                                       @relation("SubscriptionsCancelledBy", fields: [cancelledById], references: [id], onDelete: Restrict)
+  lines                          SubscriptionLine[]
+  cancellationSchedules          SubscriptionCancellationSchedule[]
+  reactivations                  SubscriptionReactivation[]
+  reactivationSchedules          SubscriptionReactivationSchedule[]
+  reactivationAutomationAttempts SubscriptionReactivationAutomationAttempt[]
+  renewalReservations            SubscriptionRenewalReservation[]
+  renewalExclusions              SubscriptionRenewalExclusion[]
+  renewalAttemptMembers          SubscriptionRenewalAttemptMember[]
 
   @@unique([companyId, number])
   @@unique([id, companyId])
@@ -1586,13 +1593,14 @@ model SubscriptionReactivationSchedule {
   reactivationId                    String?                                @unique @db.Uuid
   updatedAt                         DateTime                               @updatedAt @db.Timestamptz(3)
 
-  company             Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  subscription        Subscription              @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
-  requestedBy         User                      @relation("SubscriptionReactivationSchedulesRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
-  cancelledBySnapshot User                      @relation("SubscriptionReactivationSchedulesCancelledBySnapshot", fields: [cancelledByIdSnapshot], references: [id], onDelete: Restrict)
-  revokedBy           User?                     @relation("SubscriptionReactivationSchedulesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
-  appliedBy           User?                     @relation("SubscriptionReactivationSchedulesAppliedBy", fields: [appliedById], references: [id], onDelete: Restrict)
-  reactivation        SubscriptionReactivation? @relation(fields: [reactivationId], references: [id], onDelete: Restrict)
+  company             Company                                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  subscription        Subscription                                @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
+  requestedBy         User                                        @relation("SubscriptionReactivationSchedulesRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  cancelledBySnapshot User                                        @relation("SubscriptionReactivationSchedulesCancelledBySnapshot", fields: [cancelledByIdSnapshot], references: [id], onDelete: Restrict)
+  revokedBy           User?                                       @relation("SubscriptionReactivationSchedulesRevokedBy", fields: [revokedById], references: [id], onDelete: Restrict)
+  appliedBy           User?                                       @relation("SubscriptionReactivationSchedulesAppliedBy", fields: [appliedById], references: [id], onDelete: Restrict)
+  reactivation        SubscriptionReactivation?                   @relation(fields: [reactivationId], references: [id], onDelete: Restrict)
+  automationAttempts  SubscriptionReactivationAutomationAttempt[]
 
   @@index([companyId, status, effectiveDate, id])
   @@index([subscriptionId, requestedAt, id])
@@ -1601,6 +1609,30 @@ model SubscriptionReactivationSchedule {
   @@index([revokedById, revokedAt, id])
   @@index([appliedById, appliedAt, id])
   @@map("subscription_reactivation_schedules")
+}
+
+model SubscriptionReactivationAutomationAttempt {
+  id             String                                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String                                    @db.Uuid
+  subscriptionId String                                    @db.Uuid
+  scheduleId     String                                    @db.Uuid
+  attemptNumber  Int
+  workerId       String                                    @db.VarChar(160)
+  startedAt      DateTime                                  @db.Timestamptz(3)
+  completedAt    DateTime                                  @db.Timestamptz(3)
+  outcome        SubscriptionReactivationAutomationOutcome
+  stableCode     String?                                   @db.VarChar(120)
+  createdAt      DateTime                                  @default(now()) @db.Timestamptz(3)
+
+  company      Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  subscription Subscription                     @relation(fields: [subscriptionId, companyId], references: [id, companyId], onDelete: Restrict)
+  schedule     SubscriptionReactivationSchedule @relation(fields: [scheduleId], references: [id], onDelete: Restrict)
+
+  @@unique([scheduleId, attemptNumber])
+  @@index([companyId, startedAt, id])
+  @@index([subscriptionId, startedAt, id])
+  @@index([scheduleId, startedAt, id])
+  @@map("subscription_reactivation_automation_attempts")
 }
 
 model SubscriptionLine {

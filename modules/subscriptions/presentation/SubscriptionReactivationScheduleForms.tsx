@@ -267,13 +267,16 @@ function PendingSchedule({ subscriptionId, subscriptionVersion, businessDate, sc
       <p className={due ? "message warning" : "message"}>
         {renewalDatePassed
           ? "La fecha de renovacion ha quedado atras. Retire esta programacion y cree otra con una fecha valida."
-          : due ? "Pendiente de aplicacion; la fecha prevista ya ha llegado." : "Pendiente de aplicacion."}
+          : schedule.lastAutomationAttempt?.outcome === "BLOCKED"
+            ? `La aplicacion automatica esta bloqueada (${schedule.lastAutomationAttempt.stableCode ?? "BLOQUEO_DESCONOCIDO"}). Corrija la causa o retire la programacion.`
+            : due ? "Pendiente de aplicacion automatica; la fecha prevista ya ha llegado." : "Pendiente de aplicacion automatica."}
       </p>
       <dl className="detail-grid">
         <div><dt>Fecha efectiva</dt><dd>{schedule.effectiveDate}</dd></div>
         <div><dt>Proxima renovacion</dt><dd>{schedule.nextRenewalDate}</dd></div>
         <div><dt>Motivo</dt><dd>{schedule.reason}</dd></div>
         <div><dt>Registrada</dt><dd>{new Date(schedule.requestedAt).toLocaleString("es-ES")}</dd></div>
+        {schedule.lastAutomationAttempt ? <div><dt>Ultimo intento automatico</dt><dd>{new Date(schedule.lastAutomationAttempt.completedAt).toLocaleString("es-ES")}</dd></div> : null}
       </dl>
     </div>
     {applicable ? <div className="form-actions"><button ref={applyButtonRef} className="button" type="button" onClick={() => { setAction("apply"); setMessage(null); }}>Aplicar reactivacion</button></div> : null}

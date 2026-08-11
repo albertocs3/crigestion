@@ -52,6 +52,13 @@ export type SubscriptionReactivationScheduleDto = {
   appliedAt: string | null;
   appliedBusinessDate: string | null;
   reactivationId: string | null;
+  lastAutomationAttempt?: {
+    attemptNumber: number;
+    outcome: "APPLIED" | "BLOCKED";
+    stableCode: string | null;
+    startedAt: string;
+    completedAt: string;
+  } | null;
 };
 
 export type SubscriptionReactivationScheduleMutationDto = {
@@ -79,6 +86,12 @@ export type SubscriptionReactivationScheduleApplyResult =
   | { ok: true; status: 200; value: SubscriptionReactivationScheduleApplyDto }
   | ScheduleFailure;
 
+export type SubscriptionReactivationAutomationResult =
+  | { outcome: "IDLE" }
+  | { outcome: "SKIPPED"; scheduleId: string }
+  | { outcome: "APPLIED"; scheduleId: string; subscriptionId: string; reactivationId: string }
+  | { outcome: "BLOCKED"; scheduleId: string; subscriptionId: string; stableCode: string };
+
 type MutationContext = Pick<RequestContext, "correlationId"> & {
   idempotencyKey: string;
   requestHash: string;
@@ -90,7 +103,11 @@ const scheduleDtoSchema: z.ZodType<SubscriptionReactivationScheduleDto> = z.obje
   previousNextRenewalDate: reactivationDateOnlySchema, reason: z.string(), version: z.number().int().positive(),
   requestedAt: z.string().datetime(), revokedAt: z.string().datetime().nullable(), revocationReason: z.string().nullable(),
   appliedAt: z.string().datetime().nullable(), appliedBusinessDate: reactivationDateOnlySchema.nullable(),
-  reactivationId: z.string().uuid().nullable()
+  reactivationId: z.string().uuid().nullable(),
+  lastAutomationAttempt: z.object({
+    attemptNumber: z.number().int().positive(), outcome: z.enum(["APPLIED", "BLOCKED"]),
+    stableCode: z.string().nullable(), startedAt: z.string().datetime(), completedAt: z.string().datetime()
+  }).strict().nullable().default(null)
 }).strict();
 
 const mutationDtoSchemaBase = z.object({
@@ -105,7 +122,11 @@ const applyDtoSchema: z.ZodType<SubscriptionReactivationScheduleApplyDto> = muta
 export const subscriptionReactivationScheduleSelect = {
   id: true, status: true, effectiveDate: true, nextRenewalDate: true, previousNextRenewalDate: true,
   reason: true, version: true, requestedAt: true, revokedAt: true, revocationReason: true,
-  appliedAt: true, appliedBusinessDate: true, reactivationId: true
+  appliedAt: true, appliedBusinessDate: true, reactivationId: true,
+  automationAttempts: {
+    orderBy: [{ attemptNumber: "desc" as const }], take: 1,
+    select: { attemptNumber: true, outcome: true, stableCode: true, startedAt: true, completedAt: true }
+  }
 } satisfies Prisma.SubscriptionReactivationScheduleSelect;
 
 export function hashSubscriptionReactivationScheduleRequest(action: "create" | "revoke" | "apply", payload: unknown): string {
@@ -322,6 +343,181 @@ export async function applySubscriptionReactivationSchedule(
   });
 }
 
+export async function processNextDueSubscriptionReactivationSchedule(
+  workerId: string,
+  retryCount = 0
+): Promise<SubscriptionReactivationAutomationResult> {
+  const normalizedWorkerId = workerId.trim();
+  if (!normalizedWorkerId || normalizedWorkerId.length > 160) {
+    throw new Error("SUBSCRIPTION_REACTIVATION_AUTOMATION_WORKER_ID_INVALID");
+  }
+  const companyId = await currentCompanyId();
+  if (!companyId) return { outcome: "IDLE" };
+
+  const candidates = await prisma.$queryRaw<Array<{ id: string; subscriptionId: string }>>(Prisma.sql`
+    SELECT schedule."id", schedule."subscriptionId"
+    FROM "subscription_reactivation_schedules" schedule
+    LEFT JOIN LATERAL (
+      SELECT attempt."startedAt"
+      FROM "subscription_reactivation_automation_attempts" attempt
+      WHERE attempt."scheduleId" = schedule."id"
+      ORDER BY attempt."startedAt" DESC, attempt."id" DESC
+      LIMIT 1
+    ) latest_attempt ON TRUE
+    WHERE schedule."companyId" = ${companyId}::uuid
+      AND schedule."status" = 'PENDING'
+      AND schedule."effectiveDate" <= (clock_timestamp() AT TIME ZONE 'Europe/Madrid')::date
+      AND (
+        latest_attempt."startedAt" IS NULL
+        OR latest_attempt."startedAt" <= clock_timestamp() - INTERVAL '1 hour'
+      )
+    ORDER BY latest_attempt."startedAt" ASC NULLS FIRST, schedule."effectiveDate", schedule."id"
+    LIMIT 1
+  `);
+  const candidate = candidates[0];
+  if (!candidate) return { outcome: "IDLE" };
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+    const subscription = await lockSubscription(tx, companyId, candidate.subscriptionId);
+    if (!subscription) return { outcome: "SKIPPED", scheduleId: candidate.id };
+    await lockSchedule(tx, companyId, candidate.subscriptionId, candidate.id);
+    const schedule = await tx.subscriptionReactivationSchedule.findFirst({
+      where: { id: candidate.id, companyId, subscriptionId: candidate.subscriptionId },
+      select: {
+        ...subscriptionReactivationScheduleSelect, createdAgainstVersion: true, scheduledSubscriptionVersion: true,
+        requestedById: true, cancelledByIdSnapshot: true, cancelledAtSnapshot: true,
+        cancellationEffectiveDateSnapshot: true, cancellationReasonSnapshot: true, cancellationModeSnapshot: true
+      }
+    });
+    if (!schedule || schedule.status !== "PENDING") {
+      return { outcome: "SKIPPED", scheduleId: candidate.id };
+    }
+
+    const startedAt = await databaseClock(tx);
+    const latestAttempt = await tx.subscriptionReactivationAutomationAttempt.findFirst({
+      where: { scheduleId: schedule.id },
+      orderBy: [{ attemptNumber: "desc" }],
+      select: { attemptNumber: true, stableCode: true }
+    });
+    const attemptNumber = (latestAttempt?.attemptNumber ?? 0) + 1;
+    const requesterHasSchedulingPermission = await tx.user.count({
+      where: {
+        id: schedule.requestedById,
+        status: "ACTIVE",
+        role: {
+          permissions: {
+            some: { permission: { code: "Subscriptions.ScheduleReactivations" } }
+          }
+        }
+      }
+    }) > 0;
+    const requesterHasViewPermission = await tx.rolePermission.count({
+      where: {
+        role: { users: { some: { id: schedule.requestedById, status: "ACTIVE" } } },
+        permission: { code: "Subscriptions.View" }
+      }
+    }) > 0;
+    const requesterAuthorized = requesterHasSchedulingPermission && requesterHasViewPermission;
+
+    const block = async (stableCode: string): Promise<SubscriptionReactivationAutomationResult> => {
+      const completedAt = await databaseClock(tx);
+      await tx.subscriptionReactivationAutomationAttempt.create({
+        data: {
+          companyId, subscriptionId: subscription.id, scheduleId: schedule.id, attemptNumber,
+          workerId: normalizedWorkerId, startedAt, completedAt, outcome: "BLOCKED", stableCode
+        }
+      });
+      if (latestAttempt?.stableCode !== stableCode) {
+        await tx.auditEvent.create({ data: {
+          eventType: "SUBSCRIPTION_REACTIVATION_AUTOMATION_BLOCKED", actorType: "SYSTEM",
+          payload: {
+            companyId, subscriptionId: subscription.id, number: subscription.number, scheduleId: schedule.id,
+            requestedByUserId: schedule.requestedById, stableCode, attemptNumber, workerId: normalizedWorkerId
+          }
+        } });
+      }
+      return { outcome: "BLOCKED", scheduleId: schedule.id, subscriptionId: subscription.id, stableCode };
+    };
+
+    if (!requesterAuthorized) return block("SUBSCRIPTION_REACTIVATION_SCHEDULE_REQUESTER_NOT_AUTHORIZED");
+    if (schedule.scheduledSubscriptionVersion !== subscription.version
+      || subscription.status !== "CANCELLED"
+      || !hasCancellationEvidence(subscription)
+      || !matchesCancellationSnapshot(subscription, schedule)) {
+      return block("SUBSCRIPTION_REACTIVATION_SCHEDULE_STALE");
+    }
+
+    const businessDate = madridDateOnly(startedAt);
+    if (formatDateOnly(schedule.effectiveDate) > businessDate) {
+      return { outcome: "SKIPPED", scheduleId: schedule.id };
+    }
+    await lockEligibilityRows(tx, companyId, subscription);
+    const eligibility = await validateEligibility(
+      tx,
+      companyId,
+      subscription,
+      businessDate,
+      formatDateOnly(schedule.nextRenewalDate),
+      false
+    );
+    if (eligibility) return block(eligibility.error.code);
+
+    const resultingVersion = subscription.version + 1;
+    const reactivation = await tx.subscriptionReactivation.create({
+      data: {
+        companyId, subscriptionId: subscription.id, reactivatedById: schedule.requestedById, reactivatedAt: startedAt,
+        reason: schedule.reason, effectiveDate: parseDateOnly(businessDate), nextRenewalDate: schedule.nextRenewalDate,
+        previousNextRenewalDate: subscription.nextRenewalDate, createdAgainstVersion: subscription.version,
+        reactivatedSubscriptionVersion: resultingVersion, cancelledByIdSnapshot: subscription.cancelledById!,
+        cancelledAtSnapshot: subscription.cancelledAt!, cancellationEffectiveDateSnapshot: subscription.cancellationEffectiveDate!,
+        cancellationReasonSnapshot: subscription.cancellationReason!, cancellationModeSnapshot: subscription.cancellationMode!
+      }
+    });
+    const applied = await tx.subscriptionReactivationSchedule.update({
+      where: { id: schedule.id },
+      data: {
+        status: "APPLIED", version: { increment: 1 }, appliedById: schedule.requestedById, appliedAt: startedAt,
+        appliedBusinessDate: parseDateOnly(businessDate), appliedAgainstVersion: subscription.version,
+        appliedSubscriptionVersion: resultingVersion, reactivationId: reactivation.id
+      },
+      select: { version: true }
+    });
+    await tx.subscription.update({
+      where: { id: subscription.id },
+      data: {
+        status: "ACTIVE", nextRenewalDate: schedule.nextRenewalDate, version: { increment: 1 }, updatedById: schedule.requestedById,
+        cancelledById: null, cancelledAt: null, cancellationEffectiveDate: null, cancellationReason: null, cancellationMode: null
+      }
+    });
+    const completedAt = await databaseClock(tx);
+    await tx.subscriptionReactivationAutomationAttempt.create({
+      data: {
+        companyId, subscriptionId: subscription.id, scheduleId: schedule.id, attemptNumber,
+        workerId: normalizedWorkerId, startedAt, completedAt, outcome: "APPLIED", stableCode: null
+      }
+    });
+    await tx.auditEvent.create({ data: {
+      eventType: "SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED", actorType: "SYSTEM",
+      payload: {
+        companyId, subscriptionId: subscription.id, number: subscription.number, scheduleId: schedule.id,
+        reactivationId: reactivation.id, requestedByUserId: schedule.requestedById,
+        scheduledEffectiveDate: formatDateOnly(schedule.effectiveDate), appliedBusinessDate: businessDate,
+        nextRenewalDate: formatDateOnly(schedule.nextRenewalDate), previousVersion: subscription.version,
+        subscriptionVersion: resultingVersion, scheduleVersion: applied.version,
+        attemptNumber, workerId: normalizedWorkerId
+      }
+    } });
+    return { outcome: "APPLIED", scheduleId: schedule.id, subscriptionId: subscription.id, reactivationId: reactivation.id };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  } catch (error) {
+    if (isRetryableTransactionError(error) && retryCount < 2) {
+      return processNextDueSubscriptionReactivationSchedule(normalizedWorkerId, retryCount + 1);
+    }
+    throw error;
+  }
+}
+
 type LockedSubscription = NonNullable<Awaited<ReturnType<typeof lockSubscription>>>;
 
 async function lockSubscription(tx: Prisma.TransactionClient, companyId: string, subscriptionId: string) {
@@ -434,7 +630,14 @@ export function mapSubscriptionReactivationSchedule(
     revokedAt: row.revokedAt?.toISOString() ?? null, revocationReason: row.revocationReason,
     appliedAt: row.appliedAt?.toISOString() ?? null,
     appliedBusinessDate: row.appliedBusinessDate ? formatDateOnly(row.appliedBusinessDate) : null,
-    reactivationId: row.reactivationId
+    reactivationId: row.reactivationId,
+    lastAutomationAttempt: row.automationAttempts[0] ? {
+      attemptNumber: row.automationAttempts[0].attemptNumber,
+      outcome: row.automationAttempts[0].outcome,
+      stableCode: row.automationAttempts[0].stableCode,
+      startedAt: row.automationAttempts[0].startedAt.toISOString(),
+      completedAt: row.automationAttempts[0].completedAt.toISOString()
+    } : null
   };
 }
 

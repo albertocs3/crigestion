@@ -3,6 +3,8 @@ set -euo pipefail
 
 APP_SERVICE='crigestion-staging-app.service'
 WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
+REACTIVATION_SERVICE='crigestion-staging-subscription-reactivation-worker.service'
+REACTIVATION_TIMER='crigestion-staging-subscription-reactivation-worker.timer'
 BACKUP_TIMER='crigestion-staging-backup.timer'
 RECOVERY_TIMER='crigestion-staging-recovery-bundle.timer'
 CLAMAV_SERVICE='clamav-daemon.service'
@@ -15,6 +17,7 @@ LOCAL_HEALTH='http://127.0.0.1:3101/api/health'
 NODE='/opt/plesk/node/22/bin/node'
 RESTORE_SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
 PG_BIN_DIR='/usr/lib/postgresql/14/bin'
+REACTIVATION_MAX_AGE_USEC=900000000
 
 if [ -e "$RESTORE_SENTINEL" ]; then
   echo 'HEALTH_BLOCKED_BY_RESTORE' >&2
@@ -23,6 +26,25 @@ fi
 
 systemctl is-active --quiet "$APP_SERVICE"
 systemctl is-active --quiet "$WORKER_SERVICE"
+systemctl is-active --quiet "$REACTIVATION_TIMER"
+test "$(systemctl show "$REACTIVATION_SERVICE" -p Result --value)" = 'success'
+REACTIVATION_LAST_RUN_USEC="$(
+  systemctl show "$REACTIVATION_SERVICE" -p ExecMainExitTimestampMonotonic --value
+)"
+SYSTEM_UPTIME_USEC="$(awk '{ printf "%.0f", $1 * 1000000 }' /proc/uptime)"
+[[ "$REACTIVATION_LAST_RUN_USEC" =~ ^[0-9]+$ ]]
+if (( REACTIVATION_LAST_RUN_USEC == 0 )); then
+  if (( SYSTEM_UPTIME_USEC > REACTIVATION_MAX_AGE_USEC )); then
+    echo 'CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_NEVER_RAN' >&2
+    exit 1
+  fi
+elif ((
+  SYSTEM_UPTIME_USEC < REACTIVATION_LAST_RUN_USEC
+  || SYSTEM_UPTIME_USEC - REACTIVATION_LAST_RUN_USEC > REACTIVATION_MAX_AGE_USEC
+)); then
+  echo 'CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_STALE' >&2
+  exit 1
+fi
 systemctl is-active --quiet "$BACKUP_TIMER"
 systemctl is-active --quiet "$RECOVERY_TIMER"
 systemctl is-active --quiet "$CLAMAV_SERVICE"

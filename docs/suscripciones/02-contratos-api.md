@@ -282,12 +282,31 @@ reactivacion programada, cambia la suscripcion a `ACTIVE`, limpia la
 cancelacion vigente y establece la nueva `nextRenewalDate`.
 
 Responde `200` con `subscriptionVersion`, `status: "ACTIVE"`,
-`nextRenewalDate`, `reactivationId` y `schedule`. La aplicacion es supervisada:
-no se ejecuta desde un `GET`, al cargar una pantalla ni mediante un proceso
-desatendido. Una orden vencida permanece pendiente y visible hasta que un
-operador la aplica o retira; si la renovacion quedo atras, la UI solo ofrece
-retirarla y reprogramarla. La automatizacion futura requerira un ejecutor
-monitorizado y no forma parte de este contrato.
+`nextRenewalDate`, `reactivationId` y `schedule`. La aplicacion puede ser
+supervisada mediante este endpoint o automatica mediante el worker interno.
+Nunca se ejecuta desde un `GET` ni al cargar una pantalla. Una orden bloqueada
+permanece pendiente y visible hasta que se corrige la causa o un operador la
+retira; si la renovacion quedo atras, la UI solo ofrece retirarla y
+reprogramarla.
+
+### 8.1 Ejecutor interno de reactivaciones
+
+`scripts/run-subscription-reactivation-worker.ts` es un proceso one-shot sin
+contrato HTTP. Cada ejecucion procesa hasta 25 ordenes `PENDING` vencidas,
+ordenadas por fecha e identificador. Dos ejecutores concurrentes convergen a un
+solo efecto mediante bloqueos padre-orden, transaccion `Serializable`, reintento
+acotado de `P2034` y las invariantes PostgreSQL existentes.
+
+Antes de aplicar se exige que el solicitante siga `ACTIVE` y conserve
+`Subscriptions.ScheduleReactivations` y `Subscriptions.View`. Tambien se
+revalidan version, baja vigente, cliente, configuracion, reservas, exclusiones,
+periodos usados y fechas. Los bloqueos se guardan en
+`subscription_reactivation_automation_attempts`; el ledger es append-only y
+solo permite una numeracion consecutiva por orden. No se reintenta la misma
+orden durante una hora. La auditoria `SYSTEM` registra
+`SUBSCRIPTION_REACTIVATION_AUTOMATION_BLOCKED` solo cuando cambia el codigo
+estable y nunca incluye motivos libres. Una aplicacion correcta conserva el
+evento `SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED` con actor `SYSTEM`.
 
 Las tres mutaciones exigen Origin, CSRF, JSON estricto, mantenimiento inactivo,
 `Idempotency-Key`, cuerpo acotado, rate limit persistente y auditoria sin

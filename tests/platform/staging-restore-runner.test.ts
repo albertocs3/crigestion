@@ -38,20 +38,25 @@ describe("staging isolated restore runner", () => {
   });
 
   it("blocks app, worker, backups and health checks while recovery is required", async () => {
-    const [appUnit, workerUnit, backupScript, healthScript] = await Promise.all([
+    const [appUnit, workerUnit, reactivationUnit, backupScript, healthScript, restoreScript] = await Promise.all([
       read("deploy/plesk/staging/systemd/crigestion-staging-app.service"),
       read("deploy/plesk/staging/systemd/crigestion-staging-verifactu-worker.service"),
+      read("deploy/plesk/staging/systemd/crigestion-staging-subscription-reactivation-worker.service"),
       read("deploy/plesk/staging/scripts/crigestion-staging-backup"),
-      read("deploy/plesk/staging/scripts/crigestion-staging-health-check")
+      read("deploy/plesk/staging/scripts/crigestion-staging-health-check"),
+      read("deploy/plesk/staging/scripts/crigestion-staging-restore")
     ]);
     const sentinel = "/var/lib/crigestion-staging-restore/restore-required";
 
     expect(appUnit).toContain(`ExecStartPre=/usr/bin/test ! -e ${sentinel}`);
     expect(workerUnit).toContain(`ExecStartPre=/usr/bin/test ! -e ${sentinel}`);
+    expect(reactivationUnit).toContain(`ExecStartPre=/usr/bin/test ! -e ${sentinel}`);
     expect(backupScript).toContain(sentinel);
     expect(backupScript).toContain("BACKUP_BLOCKED_BY_RESTORE");
     expect(healthScript).toContain(sentinel);
     expect(healthScript).toContain("HEALTH_BLOCKED_BY_RESTORE");
+    expect(restoreScript).toContain("crigestion-staging-subscription-reactivation-worker.timer");
+    expect(restoreScript).toContain("crigestion-staging-subscription-reactivation-worker.service");
   });
 
   it("tests restore ownership as the staging migrator before touching the active database", async () => {

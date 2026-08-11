@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll due CriGestion staging subscription reactivations
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=crigestion-staging-subscription-reactivation-worker.service
+
+[Install]
+WantedBy=timers.target

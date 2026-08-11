@@ -1,0 +1,35 @@
+[Unit]
+Description=Apply due CriGestion staging subscription reactivations
+After=network-online.target crigestion-staging-app.service
+Wants=network-online.target
+OnFailure=crigestion-staging-health-alert.service
+
+[Service]
+Type=oneshot
+User=crigestion-staging
+Group=crigestion-staging
+WorkingDirectory=/opt/crigestion-staging/current
+EnvironmentFile=/etc/crigestion-staging/app.env
+Environment=NODE_ENV=production
+ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/current/.next/BUILD_ID
+ExecStartPre=/usr/bin/test ! -e /var/lib/crigestion-staging-restore/restore-required
+ExecStart=/opt/plesk/node/22/bin/node --conditions=react-server --import tsx scripts/run-subscription-reactivation-worker.ts
+TimeoutStartSec=120s
+UMask=0027
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

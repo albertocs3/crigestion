@@ -23,7 +23,7 @@ Fecha de corte: 2026-08-08.
 | Tesoreria y SEPA | Operativa inicial | Vencimientos, previsiones de cobro, remesas, SEPA, respuestas bancarias controladas, devoluciones, saldos a favor, compensaciones y reembolsos segregados. |
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
-| Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata y programada supervisada, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. La programacion no dispone de aplicacion automatica desatendida. |
+| Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata, programada supervisada y automatizada con worker monitorizado, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
 | Atencion al cliente | No implementada | Existe especificacion funcional, pero no hay modulo de incidencias, actuaciones ni adjuntos asociados. |
 | Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
@@ -334,10 +334,10 @@ Prioridades pendientes despues de este corte:
    multicuenta, moneda distinta de EUR u otros perfiles Norma 43.
 6. Completar Suscripciones con cambios programados, edicion controlada de la
    vista previa, ampliar de forma controlada el catalogo de bloqueos
-   automaticos, automatizacion monitorizada de reactivaciones programadas y
-   paginacion navegable entre cortes de grupos. La reactivacion programada
-   supervisada ya conserva y aplica ordenes mediante confirmacion explicita,
-   pero no promete ejecucion desatendida. Despues, abordar Atencion al
+   automaticos y paginacion navegable entre cortes de grupos. La reactivacion
+   programada ya dispone de aplicacion supervisada y de un worker one-shot
+   monitorizado con autoridad diferida, cooldown y ledger append-only de
+   intentos. Despues, abordar Atencion al
    cliente y Presupuestos.
 7. Revisar ADR-0016 y sustituir los restos documentales de escritorio por una
    decision web explicita antes de implementar notificaciones.

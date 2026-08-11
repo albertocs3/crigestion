@@ -22,6 +22,7 @@
     "backup:run": "tsx scripts/run-backup-worker.ts",
     "restore:validate": "tsx scripts/run-restore-worker.ts",
     "restore:apply": "tsx scripts/run-restore-apply-worker.ts",
+    "subscriptions:reactivations:run": "node --env-file-if-exists=.env.local --conditions=react-server --import tsx scripts/run-subscription-reactivation-worker.ts",
     "verifactu:verify-manifest": "tsx scripts/verify-verifactu-manifest.ts",
     "verifactu:materialize-xsd": "tsx scripts/verify-verifactu-manifest.ts --materialize-xsd=tmp/verifactu-xsd",
     "verifactu:validate-xsd": "npm run verifactu:materialize-xsd && python scripts/validate-verifactu-xsd.py --schema-dir tmp/verifactu-xsd --xml tests/fixtures/verifactu/f1-alta-first.xml && python scripts/validate-verifactu-xsd.py --schema-dir tmp/verifactu-xsd --xml tests/fixtures/verifactu/anulacion-chained.xml && python scripts/validate-verifactu-xsd.py --schema-dir tmp/verifactu-xsd --xml tests/fixtures/verifactu/f1-alta-first.xml --swap-totals --expect-invalid && python scripts/validate-verifactu-xsd.py --schema-dir tmp/verifactu-xsd --root-schema ConsultaLR.xsd --xml tests/fixtures/verifactu/query-f1.xml && python scripts/validate-verifactu-xsd.py --schema-dir tmp/verifactu-xsd --root-schema RespuestaSuministro.xsd --xml tests/fixtures/verifactu/submit-response-ok.xml",

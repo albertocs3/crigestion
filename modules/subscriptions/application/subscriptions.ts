@@ -228,7 +228,11 @@ const subscriptionReactivationScheduleReplaySchema = z.object({
   reason: z.string(), version: z.number().int().positive(), requestedAt: z.string().datetime(),
   revokedAt: z.string().datetime().nullable(), revocationReason: z.string().nullable(),
   appliedAt: z.string().datetime().nullable(), appliedBusinessDate: dateOnlySchema.nullable(),
-  reactivationId: z.string().uuid().nullable()
+  reactivationId: z.string().uuid().nullable(),
+  lastAutomationAttempt: z.object({
+    attemptNumber: z.number().int().positive(), outcome: z.enum(["APPLIED", "BLOCKED"]),
+    stableCode: z.string().nullable(), startedAt: z.string().datetime(), completedAt: z.string().datetime()
+  }).strict().nullable().default(null)
 }).strict();
 const subscriptionDtoReplaySchema = z.object({
   id: z.string().uuid(), number: z.string(), name: z.string(),

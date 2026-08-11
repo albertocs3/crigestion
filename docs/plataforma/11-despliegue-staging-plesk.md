@@ -139,6 +139,8 @@ Validar todas las unidades en Ubuntu 22.04:
 systemd-analyze verify \
   deploy/plesk/staging/systemd/crigestion-staging-app.service \
   deploy/plesk/staging/systemd/crigestion-staging-verifactu-worker.service \
+  deploy/plesk/staging/systemd/crigestion-staging-subscription-reactivation-worker.service \
+  deploy/plesk/staging/systemd/crigestion-staging-subscription-reactivation-worker.timer \
   'deploy/plesk/staging/systemd/crigestion-staging-migrate@.service' \
   deploy/plesk/staging/systemd/crigestion-staging-backup.service \
   deploy/plesk/staging/systemd/crigestion-staging-backup.timer \
@@ -234,6 +236,7 @@ worker, timer de backup y health local/publico. La version canonica del
 repositorio, pendiente de sincronizar como conjunto, amplia la comprobacion a:
 
 - aplicacion y worker activos;
+- timer de reactivaciones programadas activo y ultimo oneshot correcto;
 - timer de backup activo;
 - copia automatica con antiguedad maxima de 36 horas;
 - checksum y catalogo `pg_restore --list` de la ultima copia;
@@ -255,6 +258,7 @@ systemctl show crigestion-staging-health-check.service \
   -p Result -p ExecMainStatus -p OnFailure
 journalctl -u crigestion-staging-health-check.service --since today --no-pager
 journalctl -u crigestion-staging-health-alert.service --since today --no-pager
+journalctl -u crigestion-staging-subscription-reactivation-worker.service --since today --no-pager
 curl --fail --silent http://127.0.0.1:3101/api/health
 curl --fail --silent https://gestion-test.crisoft.es/api/health
 ```
@@ -263,6 +267,29 @@ Este monitor se ejecuta dentro del mismo VPS. No detecta una caida completa del
 servidor, del proveedor o del propio timer; eso requiere monitorizacion externa.
 El checksum y `pg_restore --list` cada cinco minutos son baratos con el tamano
 actual; revisar su frecuencia cuando la base crezca.
+
+### 6.1 Worker de reactivaciones programadas
+
+La unidad `crigestion-staging-subscription-reactivation-worker.service` usa el
+rol runtime y `app.env`, no credenciales migradoras. Es one-shot y su timer la
+invoca cada cinco minutos. Antes de habilitar el timer tras una release:
+
+```bash
+systemctl daemon-reload
+systemctl start crigestion-staging-subscription-reactivation-worker.service
+systemctl show crigestion-staging-subscription-reactivation-worker.service \
+  -p Result -p ExecMainStatus
+systemctl enable --now crigestion-staging-subscription-reactivation-worker.timer
+```
+
+El health check exige ademas que la ultima ejecucion del worker haya terminado
+correctamente en los ultimos 15 minutos. Tras instalar o reiniciar el timer se
+debe arrancar una vez el servicio manualmente antes de validar el health.
+
+Exigir `Result=success`, `ExecMainStatus=0` y un journal terminado en
+`SUBSCRIPTION_REACTIVATION_AUTOMATION_OK`. El log solo contiene contadores. El
+restore controlado detiene este timer y su oneshot antes de modificar la base y
+los reinicia unicamente tras retirar el sentinel de recuperacion.
 
 ## 7. Backups y restore drill
 
