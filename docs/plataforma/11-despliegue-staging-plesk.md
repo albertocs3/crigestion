@@ -5,7 +5,7 @@
 Este runbook cubre exclusivamente `https://gestion-test.crisoft.es` en el VPS
 Ubuntu 22.04 administrado con Plesk.
 
-Estado verificado el 2026-08-08:
+Estado verificado el 2026-08-12:
 
 - VPS `93.93.116.238`.
 - Node.js `22.23.1` en `/opt/plesk/node/22/bin/node`.
@@ -14,11 +14,11 @@ Estado verificado el 2026-08-08:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extension `btree_gist` instalada.
-- Release activa `staging-2026.08.12-rc1`.
-- Commit `7d87c3f875898b398e8546d8094d854dcdf32b56`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.08.12-rc1` y
+- Release activa `staging-2026.08.12-rc2`.
+- Commit `c3dd44e3effdef9e3fa4fba14e9b0d7c3420b883`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.12-rc2` y
   enlace `/opt/crigestion-staging/current`.
-- 133 migraciones aplicadas y 0 incompletas.
+- 151 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
 - Health local y publico en estado `ok` con HTTP 200.
 - Backup PostgreSQL diario y health cada cinco minutos activos mediante timers.

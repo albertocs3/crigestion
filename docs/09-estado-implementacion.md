@@ -345,15 +345,20 @@ comunicacion. El health y las unidades de staging permanecieron correctos;
 VeriFactu continuo en `TEST`, no se toco produccion y el acceso SSH temporal se
 mantuvo activo.
 
-El siguiente corte local incorpora indicadores de Atención al cliente con dos
+La release inmutable `staging-2026.08.12-rc2`, commit
+`c3dd44e3effdef9e3fa4fba14e9b0d7c3420b883`, incorpora indicadores de
+Atención al cliente con dos
 permisos separados: consulta propia y consulta global. La foto actual agrupa
 incidencias canónicas abiertas por estado, prioridad y responsable vigente. El
 histórico atribuye la primera actuación a su autor y las resoluciones/cierres al
 responsable capturado en el evento; las reaperturas generan episodios
 independientes y el tiempo de resolución descuenta intervalos pendientes. El
 endpoint y la pantalla no exponen clientes ni textos, usan lectura sin caché y
-auditan alcance y periodo. La migración 151 añade los permisos sin modificar el
-modelo económico ni VeriFactu.
+auditan alcance y periodo. La migración 151 añadió los permisos sin modificar
+el modelo económico ni VeriFactu. La UAT comprobó vista propia, vista global y
+filtro por técnico; la foto mostró una única incidencia canónica abierta y la
+cabecera conservó `STAGING`, `crigestion_staging` y `AEAT TEST`. Health local y
+público respondieron íntegramente `ok` tras la promoción.
 
 ## 5. Riesgos y trabajo posterior
 

@@ -986,3 +986,38 @@ reactivacion terminaron con `Result=success` y `ExecMainStatus=0`; health local
 y publico conservaron todos los componentes en `ok`. La UAT funcional queda
 cerrada satisfactoriamente. No se consulto ni modifico produccion y se conserva
 el acceso SSH temporal conforme a la indicacion operativa vigente.
+
+## 26. Indicadores operativos de Atención al cliente en staging
+
+El 2026-08-12 se promovió la release inmutable
+`staging-2026.08.12-rc2`, commit
+`c3dd44e3effdef9e3fa4fba14e9b0d7c3420b883`. El candidato se instaló y compiló
+en su directorio aislado antes de cambiar el enlace activo. El backup automático
+`crigestion_staging-auto-20260812T104444Z.dump` superó checksum y catálogo de
+`pg_restore`; se conservó como
+`crigestion_staging-pre-staging-2026.08.12-rc2-20260812T104444Z.dump`, tamaño
+1.459.867 bytes y SHA-256
+`70bcaf56cdbc6226fdd19582dd10c7b75807f8c98efb00cb48a4b3a687762828`.
+
+Los dos primeros arranques del migrador no llegaron a Prisma Migrate ni
+alteraron la base: la normalización de permisos había retirado ejecución a
+`esbuild` y a los motores Prisma. Tras restaurar únicamente esos permisos desde
+el patrón de la release anterior, la unidad controlada aplicó
+`20260812040000_add_support_indicator_permissions`, alcanzó 151 migraciones y
+terminó con `Result=success` y `ExecMainStatus=0`. Solo entonces se conmutó
+atómicamente `/opt/crigestion-staging/current` a `rc2`.
+
+La UAT autenticada comprobó los indicadores propios, el alcance global y el
+filtro por el técnico Alberto. La foto actual mostró una incidencia canónica
+abierta en estado nueva y prioridad media, sin reintroducir la incidencia
+duplicada fusionada. Las tablas de carga y desglose global conservaron la misma
+cuenta y los periodos sin muestras se presentaron como tales, no como duración
+cero. La interfaz identificó explícitamente `ENTORNO STAGING`, base
+`crigestion_staging` y `AEAT TEST`.
+
+Tras la promoción quedaron activos aplicación, worker VeriFactu, timer de
+reactivaciones y timers de health y backup. Los health local y público
+devolvieron `status=ok`, `database=ok`, `verifactu=ok` y `worker=ok`. El timer de
+recuperación permaneció inactivo, igual que antes de esta release y sin formar
+parte de la ventana. No se modificó producción y el acceso SSH temporal se
+mantiene conforme a la indicación operativa vigente.
