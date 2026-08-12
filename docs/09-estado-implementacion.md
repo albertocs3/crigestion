@@ -24,7 +24,7 @@ Fecha de corte: 2026-08-12.
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
 | Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata, programada supervisada y automatizada con worker monitorizado, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
-| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros y notificaciones persistentes para asignación, reasignación, alta o cambio a urgente, incorporación, actuación de colaborador, reapertura y fusión. Pendientes tiempo real e indicadores. |
+| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros, notificaciones persistentes e indicadores propios/globales con tiempos activos. La entrega de avisos se refresca al navegar según ADR-0016. |
 | Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
 `Operativa inicial` significa que existe una rebanada integrada y probada, no
@@ -344,6 +344,16 @@ rechazaron modificar la evidencia, alterar la duplicada y añadirle una nueva
 comunicacion. El health y las unidades de staging permanecieron correctos;
 VeriFactu continuo en `TEST`, no se toco produccion y el acceso SSH temporal se
 mantuvo activo.
+
+El siguiente corte local incorpora indicadores de Atención al cliente con dos
+permisos separados: consulta propia y consulta global. La foto actual agrupa
+incidencias canónicas abiertas por estado, prioridad y responsable vigente. El
+histórico atribuye la primera actuación a su autor y las resoluciones/cierres al
+responsable capturado en el evento; las reaperturas generan episodios
+independientes y el tiempo de resolución descuenta intervalos pendientes. El
+endpoint y la pantalla no exponen clientes ni textos, usan lectura sin caché y
+auditan alcance y periodo. La migración 151 añade los permisos sin modificar el
+modelo económico ni VeriFactu.
 
 ## 5. Riesgos y trabajo posterior
 

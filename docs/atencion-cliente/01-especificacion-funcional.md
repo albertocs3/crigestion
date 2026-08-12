@@ -503,6 +503,14 @@ Cada técnico verá únicamente sus propios indicadores:
 - Incidencias resueltas por periodo.
 - Incidencias cerradas por periodo.
 
+La foto de incidencias abiertas se atribuye al responsable vigente. La primera
+actuación se atribuye al autor de la actuación textual real más temprana. Las
+resoluciones y cierres se atribuyen al responsable que constaba en el evento,
+de forma que una reasignación posterior no reescribe indicadores históricos.
+La muestra de primera actuación se imputa al periodo de su fecha real
+`performedAt`, aunque se haya registrado posteriormente; una corrección
+retroactiva legítima puede por tanto actualizar un informe histórico.
+
 ### Para administradores
 
 El administrador verá indicadores globales y desglosados por técnico:
@@ -513,6 +521,11 @@ El administrador verá indicadores globales y desglosados por técnico:
 - Tiempo medio hasta primera actuación.
 - Tiempo medio de resolución.
 - Incidencias resueltas y cerradas por periodo.
+
+La vista global incluye el desglose por técnico aplicando las mismas reglas de
+atribución. Las incidencias cerradas como duplicadas mediante fusión no se
+consideran cierres operativos y las duplicadas fusionadas no forman parte de la
+foto ni de los tiempos de productividad.
 
 ## 16. Cálculo de tiempos
 
@@ -532,6 +545,19 @@ Se excluirá el tiempo permanecido en:
 - Pendiente de tercero.
 
 El sistema deberá registrar los intervalos de estado para calcular correctamente estos tiempos.
+
+Los tiempos son naturales, no laborables, y se expresan internamente en
+segundos enteros. Cada transición a `Resuelta` constituye un episodio: el
+primero comienza en la creación y los siguientes en la reapertura anterior. Se
+descuenta la unión de los intervalos `Pendiente del cliente` y `Pendiente de
+tercero` comprendidos dentro del episodio. Las incidencias sin muestra no
+aportan cero a una media; el indicador muestra media nula y tamaño de muestra
+cero.
+
+Los periodos se introducen como fechas locales inclusivas y se interpretan en
+`Europe/Madrid`. La consulta usa un intervalo UTC semiabierto desde las 00:00
+de la primera fecha hasta las 00:00 del día posterior a la última, respetando
+los cambios de horario. El periodo máximo consultable es de 366 días.
 
 ## 17. Conservación
 
@@ -562,7 +588,8 @@ El sistema deberá registrar los intervalos de estado para calcular correctament
 Estas decisiones no alteran la funcionalidad acordada, pero deberán resolverse antes de implementar:
 
 - Evolución de capacidad y archivado cuando el volumen de adjuntos supere el techo operativo inicial.
-- Convención horaria para fechas reales y fechas de registro.
+- Convención horaria de integraciones futuras distintas de los indicadores,
+  que ya usan `Europe/Madrid` conforme al apartado 16.
 - Estrategia de generación concurrente de números de incidencia.
 - Mecanismo de búsqueda sobre títulos, descripciones y actuaciones.
 - Modelo de permisos y relación con los usuarios existentes.

@@ -62,6 +62,7 @@ import {
   supportIncidentAttachmentRequestHash,
   uploadSupportIncidentAttachment,
 } from "@/modules/support/application/incidentAttachments";
+import { getSupportIndicators } from "@/modules/support/application/indicators";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -313,6 +314,66 @@ describe("support incidents application", () => {
     expect(results.filter((result) => !result.ok && result.status === 409)).toHaveLength(1);
     expect(await prisma.supportIncidentMerge.count()).toBe(1);
     expect(await prisma.supportIncidentEvent.count({ where: { eventType: "INCIDENT_MERGED" } })).toBe(2);
+  });
+
+  it("calculates own and global indicators from historical ownership and excludes pending intervals", async () => {
+    const administrator = await admin();
+    const role = await prisma.role.create({ data: { code: "SupportIndicatorTechnician", name: "Tecnico de indicadores", permissions: { create: ["Support.View", "Support.ViewIndicators", "Support.AddActions", "Support.ManageAssigned", "Support.Reopen"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const technician = await prisma.user.create({ data: { displayName: "Tecnico KPI", userName: "technician-kpi", normalizedUserName: "technician-kpi", passwordHash: hashPassword("Cambiar-technician-kpi-2026"), roleId: role.id } });
+    const logged = await login({ userName: "technician-kpi", password: "Cambiar-technician-kpi-2026" });
+    if (!logged.ok) throw new Error(logged.error.code);
+    const customer = await createCustomerRecord(administrator);
+    const references = await listSupportReferences();
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: technician.id, title: "Indicadores con pausas", description: "Caso sintetico para medir episodios de resolucion.", priority: "HIGH" as const };
+    const incident = await createSupportIncident(create, administrator, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!incident.ok) throw new Error(incident.error.code);
+    const base = new Date(); base.setUTCMinutes(0, 0, 0); base.setUTCHours(base.getUTCHours() - 24);
+    const at = (hours: number) => new Date(base.getTime() + hours * 3_600_000);
+    await prisma.supportIncident.update({ where: { id: incident.value.id }, data: { createdAt: at(0) } });
+    const actionCommand = { expectedVersion: 1, text: "Primera actuacion del tecnico.", performedAt: at(1).toISOString() };
+    const action = await createSupportAction(incident.value.id, actionCommand, logged.value.user, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: incident.value.id, ...actionCommand }), scope: `incident:${incident.value.id}:action:create` });
+    if (!action.ok) throw new Error(action.error.code);
+    const transitions: string[] = [];
+    for (const command of [
+      { action: "set-pending" as const, expectedVersion: 2, targetStatus: "PENDING_CUSTOMER" as const, reason: "Esperando confirmacion del cliente." },
+      { action: "resume" as const, expectedVersion: 3, reason: "El cliente confirma la informacion." },
+      { action: "resolve" as const, expectedVersion: 4, solution: "Servicio verificado y restablecido." },
+      { action: "reopen" as const, expectedVersion: 5, reason: "La incidencia vuelve a reproducirse." },
+      { action: "set-pending" as const, expectedVersion: 6, targetStatus: "PENDING_THIRD_PARTY" as const, reason: "Esperando respuesta del proveedor." },
+      { action: "resume" as const, expectedVersion: 7, reason: "El proveedor confirma la correccion." },
+      { action: "resolve" as const, expectedVersion: 8, solution: "La segunda incidencia queda verificada." },
+    ]) {
+      const result = await transitionSupportIncident(incident.value.id, command, logged.value.user, transitionContext(incident.value.id, command));
+      if (!result.ok) throw new Error(result.error.code);
+      transitions.push(result.value.transition.id);
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"');
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" DISABLE TRIGGER "support_incident_status_transitions_append_only"');
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" DISABLE TRIGGER "support_incident_events_append_only"');
+      await tx.supportIncident.update({ where: { id: incident.value.id }, data: { createdAt: at(0), firstActionAt: at(1) } });
+      await tx.supportIncidentAction.update({ where: { id: action.value.action.id }, data: { performedAt: at(1), recordedAt: at(1) } });
+      const hours = [2, 4, 7, 8, 9, 10, 12];
+      for (let index = 0; index < transitions.length; index += 1) {
+        await tx.supportIncidentStatusTransition.update({ where: { id: transitions[index]! }, data: { occurredAt: at(hours[index]!) } });
+        await tx.supportIncidentEvent.update({ where: { transitionId_companyId: { transitionId: transitions[index]!, companyId: (await tx.installation.findFirstOrThrow()).companyId! } }, data: { createdAt: at(hours[index]!) } });
+      }
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"');
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_status_transitions" ENABLE TRIGGER "support_incident_status_transitions_append_only"');
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_events" ENABLE TRIGGER "support_incident_events_append_only"');
+    });
+    const date = base.toISOString().slice(0, 10);
+    const periodTo = new Date(base.getTime() + 2 * 86_400_000).toISOString().slice(0, 10);
+    const own = await getSupportIndicators({ from: date, to: periodTo, scope: "self" }, logged.value.user, { correlationId: "indicator-self-0001" });
+    expect(own).toMatchObject({ ok: true, value: { scope: { type: "SELF", technician: { id: technician.id } }, performance: { averageFirstActionSeconds: { value: 3600, sampleSize: 1 }, averageResolutionSeconds: { value: 14400, sampleSize: 2 }, resolvedCount: 2, closedCount: 0 } } });
+    if (!own.ok) throw new Error(own.error.code);
+    expect(own.value.snapshot).not.toHaveProperty("assignedByTechnician");
+    expect(own.value).not.toHaveProperty("breakdown");
+    const global = await getSupportIndicators({ from: date, to: periodTo, scope: "global" }, administrator, { correlationId: "indicator-global-0001" });
+    expect(global).toMatchObject({ ok: true, value: { scope: { type: "GLOBAL" }, breakdown: expect.arrayContaining([expect.objectContaining({ id: technician.id, averageResolutionSeconds: { value: 14400, sampleSize: 2 }, resolvedCount: 2 })]) } });
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUPPORT_INDICATORS_VIEWED" } })).toBe(2);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INDICATORS_VIEWED" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(incident.value.title);
   });
 
   it("records actions append-only and advances a new incident exactly once", async () => {

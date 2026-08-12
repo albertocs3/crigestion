@@ -11,6 +11,8 @@ La rebanada actual permite gestionar incidencias, participantes, comunicaciones 
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
 - `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución, cierre y cambio posterior de prioridad por el responsable o un administrador.
 - `Support.MergeIncidents` + `Support.View`: fusión cuando el actor es responsable vigente de ambas incidencias; Administrador puede intervenir.
+- `Support.ViewIndicators` + `Support.View`: indicadores propios del técnico.
+- `Support.ViewGlobalIndicators` + los anteriores: indicadores globales, desglose y selección de técnico; se concede inicialmente al Administrador.
 - `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
 - `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
@@ -20,6 +22,49 @@ La rebanada actual permite gestionar incidencias, participantes, comunicaciones 
 - `Support.DownloadAttachments` + `Support.View`: descarga de adjuntos de incidencias visibles.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
+
+## `GET /api/support/indicators`
+
+Consulta autenticada y auditada de indicadores. Admite exactamente `from` y
+`to` en formato `YYYY-MM-DD`, `scope=self|global` (por defecto `self`) y
+`technicianId` opcional únicamente con alcance global. No acepta `companyId`,
+parámetros desconocidos ni repetidos. El rango es inclusivo en
+`Europe/Madrid`, no puede superar 366 días y se convierte internamente a un
+intervalo UTC semiabierto.
+
+`self` exige `Support.View` + `Support.ViewIndicators` y fuerza el usuario de
+la sesión. `global` exige además `Support.ViewGlobalIndicators`; con
+`technicianId` devuelve solo ese técnico y sin él devuelve totales, carga
+actual y desglose. Un técnico no puede consultar silenciosamente otro usuario:
+se devuelve `403 FORBIDDEN` y queda auditado por el control de acceso. Un técnico objetivo no
+disponible devuelve `404 SUPPORT_TECHNICIAN_NOT_FOUND` solo después de
+autorizar el alcance global.
+
+La respuesta separa `snapshot` (incidencias canónicas abiertas por estado y
+prioridad), `performance` (medias con tamaño de muestra, resoluciones y cierres
+ordinarios) y `breakdown`, presente únicamente en el global sin técnico
+objetivo. La foto se atribuye al responsable vigente; la primera actuación, al
+autor real; y resoluciones/cierres, al responsable capturado en el evento. La
+primera actuación se imputa al periodo de su `performedAt`, mientras los
+hitos se imputan por `occurredAt`. Cada
+resolución posterior a una reapertura es un episodio independiente y descuenta
+los intervalos pendientes de ese episodio. Las duplicadas fusionadas y los
+cierres `DUPLICATE` se excluyen de productividad.
+
+Las medias usan segundos enteros y `{ value:null, sampleSize:0 }` cuando no hay
+muestra. La respuesta no contiene clientes, títulos, descripciones, motivos ni
+textos de actuaciones. Usa `Cache-Control: private, no-store, max-age=0`,
+`Pragma: no-cache`, `Vary: Cookie` y `nosniff`. Cada lectura correcta crea
+`SUPPORT_INDICATORS_VIEWED` con actor, empresa, alcance, periodo y técnico
+objetivo opcional, sin persistir valores calculados ni contenido funcional. Al
+ser GET no usa CSRF, Origin, mantenimiento ni idempotencia. La cuota persistente
+admite 120 consultas por actor y empresa cada 15 minutos; el exceso devuelve
+`429 SUPPORT_INDICATORS_RATE_LIMITED` con `Retry-After`. Errores comunes: `401`,
+`403`, `404`, `422 VALIDATION_ERROR` y `429`.
+
+El selector administrativo solo ofrece usuarios activos que conservan
+`Support.View` y `Support.ViewIndicators`. El desglose histórico puede mantener
+usuarios que ya no sean seleccionables para no perder atribución pasada.
 
 ## `GET /api/support/incidents`
 

@@ -11,6 +11,7 @@ import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
 import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
+import { GET as indicatorsGet } from "@/app/api/support/indicators/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
@@ -89,6 +90,40 @@ describe("support incidents HTTP contracts", () => {
     const notifications = await notificationsGet(request("/api/notifications"));
     expect(notifications.status).toBe(401);
     expect(notifications.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+  });
+
+  it("protects indicator scope and validates its read-only contract", async () => {
+    const unauthenticated = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12"));
+    expect(unauthenticated.status).toBe(401);
+    const role = await prisma.role.create({ data: { code: "SupportIndicatorSelf", name: "Indicadores propios", permissions: { create: ["Support.View", "Support.ViewIndicators"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const technician = await prisma.user.create({ data: { displayName: "Tecnico indicadores", userName: "indicator-self", normalizedUserName: "indicator-self", passwordHash: hashPassword("Cambiar-indicator-self-2026"), roleId: role.id } });
+    await loginAs("indicator-self", "Cambiar-indicator-self-2026");
+    const own = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12"));
+    expect(own.status).toBe(200);
+    expect(own.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(own.headers.get("vary")).toBe("Cookie");
+    expect(await own.json()).toMatchObject({ scope: { type: "SELF" } });
+    const global = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12&scope=global"));
+    expect(global.status).toBe(403);
+    expect(await global.json()).toMatchObject({ code: "FORBIDDEN" });
+    expect(await prisma.auditEvent.count({ where: { eventType: "ACCESS_DENIED" } })).toBeGreaterThan(0);
+    const unknown = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12&unexpected=true"));
+    expect(unknown.status).toBe(422);
+    const repeated = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&from=2026-08-02&to=2026-08-12"));
+    expect(repeated.status).toBe(422);
+    await loginAs("admin", password);
+    const authorizedGlobal = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12&scope=global"));
+    expect(authorizedGlobal.status).toBe(200);
+    expect(await authorizedGlobal.json()).toMatchObject({ scope: { type: "GLOBAL" }, breakdown: expect.any(Array) });
+    const selected = await indicatorsGet(request(`/api/support/indicators?from=2026-08-01&to=2026-08-12&scope=global&technicianId=${technician.id}`));
+    expect(selected.status).toBe(200);
+    expect(await selected.json()).toMatchObject({ scope: { type: "TECHNICIAN", technician: { id: technician.id } } });
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true, initialAdministratorId: true } });
+    await prisma.rateLimitBucket.upsert({ where: { key: `support-indicators:${installation.companyId}:${installation.initialAdministratorId}` }, update: { count: 120, windowStart: new Date() }, create: { key: `support-indicators:${installation.companyId}:${installation.initialAdministratorId}`, count: 120, windowStart: new Date() } });
+    const limited = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12"));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBeTruthy();
+    expect(await limited.json()).toMatchObject({ code: "SUPPORT_INDICATORS_RATE_LIMITED" });
   });
 
   it("requires CSRF before creating an incident", async () => {
