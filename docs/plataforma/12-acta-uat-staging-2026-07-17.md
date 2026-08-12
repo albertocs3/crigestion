@@ -956,7 +956,33 @@ reactivaciones terminaron correctamente; health local y publico devolvieron
 `status=ok`, `database=ok`, `verifactu=ok` y `worker=ok`.
 
 Este corte despliega el contrato, persistencia, RBAC, CSRF, idempotencia,
-auditoria, bloqueo bilateral, consistencia diferida y UI de la fusión. La UAT
-funcional con datos sinteticos se realizara como actividad separada. No se
-consulto ni modifico produccion y se conserva el acceso SSH temporal conforme
-a la indicacion operativa vigente.
+auditoria, bloqueo bilateral, consistencia diferida y UI de la fusión.
+
+La UAT funcional separada se completo el mismo 2026-08-12 con las incidencias
+sinteticas `INC-2026-00001` (principal, UUID
+`0d32b335-7ad3-47b9-9ef1-e4df7629f437`) e `INC-2026-00002` (duplicada, UUID
+`f605e132-1852-4308-8c2f-4eb6187f2f3b`), ambas del mismo cliente y responsable.
+Antes de fusionar se registraron en la duplicada una actuacion, una comunicacion
+telefonica sintetica y un adjunto PDF analizado correctamente. La interfaz
+rechazo previamente un PDF malformado sin persistirlo. Despues cerro la
+duplicada con motivo `DUPLICATE`, retiro todos sus formularios de
+mutacion y mantuvo el enlace a la principal. El detalle principal mostro los
+tres contenidos agregados con procedencia `INC-2026-00002` y mantuvo tambien el
+enlace al registro secundario.
+
+PostgreSQL confirmo una unica relacion de fusion, exactamente dos eventos
+`INCIDENT_MERGED` con roles `PRIMARY` y `DUPLICATE`, una auditoria y una
+notificacion deduplicada porque ambos responsables eran el mismo usuario. Las
+versiones avanzaron de 1 a 2 en la principal y de 2 a 3 en la duplicada; esta
+ultima quedo `CLOSED`, enlazada a la principal, mientras actuacion,
+comunicacion y adjunto conservaron fisicamente su incidencia de origen. Se
+comprobaron tambien las barreras SQL: PostgreSQL rechazo modificar la evidencia
+append-only, alterar la incidencia fusionada y crear una nueva comunicacion
+enlazada a ella.
+
+Al cerrar la UAT, aplicacion, worker VeriFactu TEST y timers de reactivacion,
+health y backup seguian activos. Las ultimas ejecuciones one-shot de health y
+reactivacion terminaron con `Result=success` y `ExecMainStatus=0`; health local
+y publico conservaron todos los componentes en `ok`. La UAT funcional queda
+cerrada satisfactoriamente. No se consulto ni modifico produccion y se conserva
+el acceso SSH temporal conforme a la indicacion operativa vigente.

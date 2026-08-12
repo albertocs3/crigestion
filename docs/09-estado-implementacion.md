@@ -333,6 +333,18 @@ fixtures residuales y produjo fallos en cascada por claves foraneas ajenas;
 tras recrear la base, la regresion proporcional de Soporte volvio a quedar
 verde.
 
+La UAT funcional de fusión quedo cerrada en staging con `INC-2026-00001` como
+principal e `INC-2026-00002` como duplicada. La interfaz agrego en la principal
+la actuacion, comunicacion y adjunto historicos con indicacion de procedencia,
+y dejo la duplicada cerrada, enlazada y sin controles de mutacion. La carga
+segura rechazo un PDF malformado antes de aceptar el adjunto valido. PostgreSQL
+confirmo una relacion, dos eventos de fusion, una auditoria y una notificacion
+deduplicada, conservando el contenido en su incidencia de origen. Los triggers
+rechazaron modificar la evidencia, alterar la duplicada y añadirle una nueva
+comunicacion. El health y las unidades de staging permanecieron correctos;
+VeriFactu continuo en `TEST`, no se toco produccion y el acceso SSH temporal se
+mantuvo activo.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:
