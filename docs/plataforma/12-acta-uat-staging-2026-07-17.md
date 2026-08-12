@@ -911,6 +911,24 @@ una unica evidencia de reactivacion y las ejecuciones posteriores no duplican
 historial, auditoria ni version. Hasta completar esas comprobaciones, esta UAT
 permanece abierta y no acredita todavia la aplicacion automatica end-to-end.
 
+El 2026-08-12 se completo el dia 2 sin alterar el reloj ni ejecutar una
+reactivacion manual. El timer aplico la orden a las 00:04:29 CEST y dejo la
+suscripcion `ACTIVE`, proxima renovacion 2026-08-12 y version 11. La orden quedo
+`APPLIED`, version 2, con `appliedAgainstVersion=10` y
+`appliedSubscriptionVersion=11`. PostgreSQL confirmo exactamente una evidencia
+de reactivacion, un intento automatico `APPLIED`, cero intentos bloqueados y un
+evento `SUBSCRIPTION_REACTIVATION_SCHEDULE_APPLIED` de actor `SYSTEM`, sin las
+claves `reason`, `idempotencyKey`, `token`, `secret` ni `iban`.
+
+Durante la comprobacion se contabilizaron 101 ejecuciones correctas del worker
+en el dia: una con `applied=1` y cien posteriores con `applied=0`; no hubo
+eventos `FAILED`, ordenes vencidas pendientes ni cambios posteriores en la
+version o en `updatedAt`. El timer permanecio habilitado y activo, y la ultima
+unidad one-shot termino con `Result=success` y `ExecMainStatus=0`. La UI mostro
+una sola orden aplicada y una sola reactivacion asociada, sin alertas ni errores
+de consola. Los health local y publico mantuvieron `database`, `verifactu` y
+`worker` en `ok`. La UAT automatica end-to-end queda cerrada y aceptada.
+
 Como refuerzo de regresion se anadio una prueba aislada del clasificador de
 conflictos del worker. Cubre `P2010` con SQLSTATE `40001`, agotamiento tras tres
 `P2034` y ausencia de reintento para errores ajenos. TypeScript, ESLint dirigido,
