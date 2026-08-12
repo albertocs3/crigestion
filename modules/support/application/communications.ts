@@ -317,7 +317,7 @@ export async function listCommunicationReferences() {
   });
   const [incidents, contacts] = await Promise.all([
     prisma.supportIncident.findMany({
-      where: { companyId },
+      where: { companyId, mergedIntoIncidentId: null },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       take: 500,
       select: { id: true, customerId: true, number: true, title: true },
@@ -484,6 +484,7 @@ export async function correctSupportCommunication(
       companyId,
       old.customerId,
       command.incidentId,
+      old.incidentId,
     );
     if (incidentFailure) return incidentFailure;
     const preservesHistoricalContact =
@@ -716,17 +717,24 @@ async function validateIncident(
   companyId: string,
   customerId: string,
   incidentId: string | null,
+  existingIncidentId: string | null = null,
 ): Promise<Failure | null> {
   if (!incidentId) return null;
-  return (await tx.supportIncident.findFirst({
-    where: { id: incidentId, companyId, customerId },
-    select: { id: true },
-  }))
+  const rows = await tx.$queryRaw<Array<{ id: string; mergedIntoIncidentId: string | null }>>(Prisma.sql`
+    SELECT "id", "mergedIntoIncidentId"
+    FROM "support_incidents"
+    WHERE "id" = ${incidentId}::uuid
+      AND "companyId" = ${companyId}::uuid
+      AND "customerId" = ${customerId}::uuid
+    FOR SHARE
+  `);
+  const incident = rows[0];
+  return (incident && (!incident.mergedIntoIncidentId || incidentId === existingIncidentId))
     ? null
     : fail(
         422,
         "SUPPORT_COMMUNICATION_INCIDENT_INVALID",
-        "La incidencia no pertenece al cliente seleccionado.",
+        "La incidencia no pertenece al cliente seleccionado o ya fue fusionada.",
       );
 }
 async function validateContact(

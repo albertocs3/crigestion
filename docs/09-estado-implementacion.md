@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-08-08.
+Fecha de corte: 2026-08-12.
 
 ## 2. Rebanadas disponibles
 
@@ -24,7 +24,7 @@ Fecha de corte: 2026-08-08.
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
 | Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata, programada supervisada y automatizada con worker monitorizado, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
-| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad con evidencia append-only, actuaciones, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros y notificaciones persistentes para asignación, reasignación, alta o cambio a urgente, incorporación, actuación de colaborador y reapertura. Pendientes tiempo real, fusiones e indicadores. |
+| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros y notificaciones persistentes para asignación, reasignación, alta o cambio a urgente, incorporación, actuación de colaborador, reapertura y fusión. Pendientes tiempo real e indicadores. |
 | Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
 `Operativa inicial` significa que existe una rebanada integrada y probada, no

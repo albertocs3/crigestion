@@ -31,6 +31,7 @@ export type SupportIncidentAttachmentDto = {
   sizeBytes: number;
   uploadedAt: string;
   uploadedBy: { id: string; displayName: string };
+  sourceIncident: { id: string; number: string };
   downloadUrl: string;
 };
 export type SupportIncidentAttachmentPage = { attachments: SupportIncidentAttachmentDto[]; nextCursor: string | null };
@@ -64,6 +65,7 @@ const replaySchema: z.ZodType<{ attachment: SupportIncidentAttachmentDto }> = z.
     sizeBytes: z.number().int().positive(),
     uploadedAt: z.string().datetime(),
     uploadedBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+    sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict(),
     downloadUrl: z.string(),
   }).strict(),
 }).strict();
@@ -95,15 +97,19 @@ export async function listSupportIncidentAttachments(
 export async function listSupportIncidentAttachmentPage(incidentId: string, actor: SessionUser, cursor: string | null): Promise<SupportIncidentAttachmentPage | null> {
   if (!actor.permissions.includes("Support.View")) return null;
   const companyId = await currentCompanyId(); if (!companyId) return null;
-  const incident = await prisma.supportIncident.findFirst({ where: { id: incidentId, companyId }, select: { id: true } }); if (!incident) return null;
+  const incident = await prisma.supportIncident.findFirst({
+    where: { id: incidentId, companyId },
+    select: { id: true, number: true, mergedDuplicates: { select: { id: true, number: true } } },
+  }); if (!incident) return null;
+  const visibleIncidentIds = [incident.id, ...incident.mergedDuplicates.map((item) => item.id)];
   const decoded = cursor ? decodeAttachmentCursor(cursor) : null; if (cursor && !decoded) return null;
   const links = await prisma.supportIncidentAttachment.findMany({
-    where: { incidentId, companyId, ...(decoded ? { OR: [{ attachedAt: { lt: decoded.attachedAt } }, { attachedAt: decoded.attachedAt, id: { lt: decoded.id } }] } : {}), attachment: { purpose: "SUPPORT_INCIDENT", status: "AVAILABLE", scanResult: "CLEAN" } },
+    where: { incidentId: { in: visibleIncidentIds }, companyId, ...(decoded ? { OR: [{ attachedAt: { lt: decoded.attachedAt } }, { attachedAt: decoded.attachedAt, id: { lt: decoded.id } }] } : {}), attachment: { purpose: "SUPPORT_INCIDENT", status: "AVAILABLE", scanResult: "CLEAN" } },
     orderBy: [{ attachedAt: "desc" }, { id: "desc" }], take: 101,
-    select: { id: true, attachedAt: true, attachment: { select: attachmentSelect } },
+    select: { id: true, attachedAt: true, incident: { select: { id: true, number: true } }, attachment: { select: attachmentSelect } },
   });
   const hasMore = links.length > 100; const visible = links.slice(0, 100); const last = visible.at(-1);
-  return { attachments: visible.map(({ attachment }) => toDto(incidentId, attachment)), nextCursor: hasMore && last ? encodeAttachmentCursor(last.attachedAt, last.id) : null };
+  return { attachments: visible.map(({ incident: sourceIncident, attachment }) => toDto(sourceIncident, attachment)), nextCursor: hasMore && last ? encodeAttachmentCursor(last.attachedAt, last.id) : null };
 }
 
 export function isSupportIncidentAttachmentCursor(value: string): boolean { return decodeAttachmentCursor(value) !== null; }
@@ -210,14 +216,14 @@ export async function downloadSupportIncidentAttachment(
   if (!companyId) return attachmentNotFound();
   const link = await prisma.supportIncidentAttachment.findFirst({
     where: { incidentId, companyId, attachmentId },
-    select: { attachment: { select: { ...attachmentSelect, purpose: true, status: true, scanResult: true, sha256: true, storageKey: true } } },
+    select: { incident: { select: { id: true, number: true } }, attachment: { select: { ...attachmentSelect, purpose: true, status: true, scanResult: true, sha256: true, storageKey: true } } },
   });
   const attachment = link?.attachment;
   if (!attachment || attachment.purpose !== "SUPPORT_INCIDENT" || attachment.status !== "AVAILABLE" || attachment.scanResult !== "CLEAN" || !attachment.sha256 || !attachment.storageKey) return attachmentNotFound();
   try {
     const bytes = await storage.readVerified(attachment.storageKey, Number(attachment.sizeBytes), attachment.sha256);
     await prisma.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ATTACHMENT_DOWNLOADED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId, attachmentId, correlationId: context.correlationId } } });
-    return { ok: true, status: 200, value: { bytes, attachment: toDto(incidentId, attachment), etag: `"sha256-${attachment.sha256}"` } };
+    return { ok: true, status: 200, value: { bytes, attachment: toDto(link.incident, attachment), etag: `"sha256-${attachment.sha256}"` } };
   } catch (error) {
     if (!(error instanceof AttachmentIntegrityError)) throw error;
     await prisma.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ATTACHMENT_INTEGRITY_FAILED", actorType: "SYSTEM", payload: { actorUserId: actor.id, companyId, incidentId, attachmentId, correlationId: context.correlationId } } });
@@ -276,12 +282,13 @@ async function persist(input: {
       return await prisma.$transaction(async (tx) => {
       const companyRows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT "id" FROM "companies" WHERE "id" = ${input.companyId}::uuid FOR UPDATE`);
       if (!companyRows[0]) return { ok: false, replayed: false, result: notFound() };
-      const rows = await tx.$queryRaw<Array<{ id: string; responsibleUserId: string; number: string }>>(Prisma.sql`
-        SELECT "id", "responsibleUserId", "number" FROM "support_incidents"
+      const rows = await tx.$queryRaw<Array<{ id: string; responsibleUserId: string; number: string; mergedIntoIncidentId: string | null }>>(Prisma.sql`
+        SELECT "id", "responsibleUserId", "number", "mergedIntoIncidentId" FROM "support_incidents"
         WHERE "id" = ${input.incidentId}::uuid AND "companyId" = ${input.companyId}::uuid FOR UPDATE
       `);
       const incident = rows[0];
       if (!incident) return { ok: false, replayed: false, result: notFound() };
+      if (incident.mergedIntoIncidentId) return { ok: false, replayed: false, result: { ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_MERGED_READ_ONLY", message: "Una incidencia fusionada no admite nuevos adjuntos." } } };
       const existing = await tx.idempotencyRecord.findUnique({ where: { key: input.idempotencyKey } });
       if (existing) return { ok: true, replayed: true, result: replayResult(existing, input.requestHash) };
       if (!(await hasUploadAuthority(tx, incident.id, incident.responsibleUserId, input.companyId, input.actor))) return { ok: false, replayed: false, result: forbidden() };
@@ -302,7 +309,7 @@ async function persist(input: {
         uploadedById: input.actor.id,
       }, select: attachmentSelect });
       await tx.supportIncidentAttachment.create({ data: { companyId: input.companyId, incidentId: incident.id, actionId: input.actionId, attachmentId: created.id } });
-      const value = { attachment: toDto(incident.id, created) };
+      const value = { attachment: toDto({ id: incident.id, number: incident.number }, created) };
       await tx.idempotencyRecord.create({ data: { key: input.idempotencyKey, requestHash: input.requestHash, responseStatus: 201, responseBody: value } });
       await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ATTACHMENT_UPLOADED", actorType: "USER", payload: { actorUserId: input.actor.id, companyId: input.companyId, incidentId: incident.id, attachmentId: created.id, actionId: input.actionId, mediaType: input.prepared.mediaType, sizeBytes: input.prepared.bytes.byteLength, correlationId: input.correlationId } } });
       return { ok: true, replayed: false, result: { ok: true, status: 201, value } as UploadResult };
@@ -323,8 +330,9 @@ async function persist(input: {
 }
 
 async function uploadAuthority(incidentId: string, companyId: string, actor: SessionUser): Promise<"allowed" | "forbidden" | "missing"> {
-  const incident = await prisma.supportIncident.findFirst({ where: { id: incidentId, companyId }, select: { id: true, responsibleUserId: true } });
+  const incident = await prisma.supportIncident.findFirst({ where: { id: incidentId, companyId }, select: { id: true, responsibleUserId: true, mergedIntoIncidentId: true } });
   if (!incident) return "missing";
+  if (incident.mergedIntoIncidentId) return "forbidden";
   return await hasUploadAuthority(prisma, incident.id, incident.responsibleUserId, companyId, actor) ? "allowed" : "forbidden";
 }
 
@@ -337,9 +345,9 @@ async function currentCompanyId(): Promise<string | null> {
   return (await prisma.installation.findFirst({ where: { status: "INITIALIZED" }, select: { companyId: true } }))?.companyId ?? null;
 }
 
-function toDto(incidentId: string, attachment: { id: string; originalFileName: string; detectedMimeType: string | null; sizeBytes: bigint; uploadedAt: Date; uploadedBy: { id: string; displayName: string } }): SupportIncidentAttachmentDto {
+function toDto(sourceIncident: { id: string; number: string }, attachment: { id: string; originalFileName: string; detectedMimeType: string | null; sizeBytes: bigint; uploadedAt: Date; uploadedBy: { id: string; displayName: string } }): SupportIncidentAttachmentDto {
   if (attachment.detectedMimeType !== "image/jpeg" && attachment.detectedMimeType !== "application/pdf") throw new Error("SUPPORT_ATTACHMENT_MEDIA_TYPE_INVALID");
-  return { id: attachment.id, originalFileName: attachment.originalFileName, mediaType: attachment.detectedMimeType, sizeBytes: Number(attachment.sizeBytes), uploadedAt: attachment.uploadedAt.toISOString(), uploadedBy: attachment.uploadedBy, downloadUrl: `/api/support/incidents/${incidentId}/attachments/${attachment.id}/download` };
+  return { id: attachment.id, originalFileName: attachment.originalFileName, mediaType: attachment.detectedMimeType, sizeBytes: Number(attachment.sizeBytes), uploadedAt: attachment.uploadedAt.toISOString(), uploadedBy: attachment.uploadedBy, sourceIncident, downloadUrl: `/api/support/incidents/${sourceIncident.id}/attachments/${attachment.id}/download` };
 }
 
 async function readReplay(key: string, requestHash: string): Promise<UploadResult | null> {
@@ -354,8 +362,8 @@ function replayResult(record: { requestHash: string; responseBody: Prisma.JsonVa
 
 async function reconcile(attachmentId: string, companyId: string, incidentId: string, key: string, requestHash: string): Promise<UploadResult | null> {
   const replay = await readReplay(key, requestHash); if (replay?.ok) return replay;
-  const link = await prisma.supportIncidentAttachment.findFirst({ where: { attachmentId, companyId, incidentId }, select: { attachment: { select: attachmentSelect } } });
-  return link ? { ok: true, status: 200, value: { attachment: toDto(incidentId, link.attachment) } } : null;
+  const link = await prisma.supportIncidentAttachment.findFirst({ where: { attachmentId, companyId, incidentId }, select: { incident: { select: { id: true, number: true } }, attachment: { select: attachmentSelect } } });
+  return link ? { ok: true, status: 200, value: { attachment: toDto(link.incident, link.attachment) } } : null;
 }
 
 async function scanFailure(outcome: "clean" | "infected" | "inconclusive", actorUserId: string, companyId: string, incidentId: string, correlationId: string): Promise<UploadResult | null> {

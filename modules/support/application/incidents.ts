@@ -143,6 +143,17 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     performedAt: string;
     recordedAt: string;
     author: { id: string; displayName: string };
+    sourceIncident: { id: string; number: string } | null;
+  }>;
+  communications: Array<{
+    id: string;
+    channel: "PHONE" | "WHATSAPP";
+    direction: "INBOUND" | "OUTBOUND";
+    occurredAt: string;
+    summary: string;
+    result: "RESOLVED_NO_FOLLOW_UP" | "REQUIRES_FOLLOW_UP" | "NO_ANSWER" | "INFORMATION_PROVIDED" | "REFERRED_TO_INCIDENT";
+    registeredBy: { id: string; displayName: string };
+    sourceIncident: { id: string; number: string };
   }>;
   events: Array<{
     id: string;
@@ -190,6 +201,8 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     actor: { id: string; displayName: string };
     occurredAt: string;
   }>;
+  mergedInto: { id: string; number: string } | null;
+  mergedIncidents: Array<{ id: string; number: string; title: string }>;
 };
 
 export type SupportCategoryDto = {
@@ -273,6 +286,18 @@ const incidentDetailSelect = {
       authorUser: { select: { id: true, displayName: true } },
     },
   },
+  communications: {
+    orderBy: [{ occurredAt: "asc" as const }, { id: "asc" as const }],
+    select: {
+      id: true,
+      channel: true,
+      direction: true,
+      occurredAt: true,
+      summary: true,
+      result: true,
+      registeredBy: { select: { id: true, displayName: true } },
+    },
+  },
   events: {
     orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }],
     select: {
@@ -331,6 +356,37 @@ const incidentDetailSelect = {
       reason: true,
       occurredAt: true,
       actorUser: { select: { id: true, displayName: true } },
+    },
+  },
+  mergedIntoIncident: { select: { id: true, number: true } },
+  mergedDuplicates: {
+    orderBy: [{ number: "asc" as const }, { id: "asc" as const }],
+    select: {
+      id: true,
+      number: true,
+      title: true,
+      actions: {
+        orderBy: [{ performedAt: "asc" as const }, { id: "asc" as const }],
+        select: {
+          id: true,
+          text: true,
+          performedAt: true,
+          recordedAt: true,
+          authorUser: { select: { id: true, displayName: true } },
+        },
+      },
+      communications: {
+        orderBy: [{ occurredAt: "asc" as const }, { id: "asc" as const }],
+        select: {
+          id: true,
+          channel: true,
+          direction: true,
+          occurredAt: true,
+          summary: true,
+          result: true,
+          registeredBy: { select: { id: true, displayName: true } },
+        },
+      },
     },
   },
 } satisfies Prisma.SupportIncidentSelect;
@@ -392,9 +448,20 @@ const incidentReplaySchema = z
           author: z
             .object({ id: z.string().uuid(), displayName: z.string() })
             .strict(),
+          sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict().nullable().optional().transform((value) => value ?? null),
         })
         .strict(),
     ),
+    communications: z.array(z.object({
+      id: z.string().uuid(),
+      channel: z.enum(["PHONE", "WHATSAPP"]),
+      direction: z.enum(["INBOUND", "OUTBOUND"]),
+      occurredAt: z.string().datetime(),
+      summary: z.string(),
+      result: z.enum(["RESOLVED_NO_FOLLOW_UP", "REQUIRES_FOLLOW_UP", "NO_ANSWER", "INFORMATION_PROVIDED", "REFERRED_TO_INCIDENT"]),
+      registeredBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+      sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict(),
+    }).strict()).optional().transform((value) => value ?? []),
     events: z.array(
       z
         .object({
@@ -482,6 +549,20 @@ const incidentReplaySchema = z
         occurredAt: z.string().datetime(),
       }).strict(),
     ).optional().transform((value) => value ?? []),
+    mergedInto: z
+      .object({ id: z.string().uuid(), number: z.string() })
+      .strict()
+      .nullable()
+      .optional()
+      .transform((value) => value ?? null),
+    mergedIncidents: z
+      .array(
+        z
+          .object({ id: z.string().uuid(), number: z.string(), title: z.string() })
+          .strict(),
+      )
+      .optional()
+      .transform((value) => value ?? []),
   })
   .strict();
 
@@ -587,7 +668,7 @@ export async function getSupportIncident(
       },
     },
   });
-  return mapIncidentDetail(row);
+  return mapIncidentDetail(row, actor.permissions.includes("Support.ViewCommunications"));
 }
 
 export async function listSupportReferences(): Promise<SupportIncidentReferences> {
@@ -784,7 +865,7 @@ export async function createSupportIncident(
       priority: command.priority,
       correlationId: context.correlationId,
     });
-    const value = mapIncidentDetail(created);
+    const value = mapIncidentDetail(created, actor.permissions.includes("Support.ViewCommunications"));
     await tx.auditEvent.create({
       data: {
         eventType: "SUPPORT_INCIDENT_CREATED",
@@ -1019,7 +1100,7 @@ export async function createIncidentFromCommunication(
         },
       },
     });
-    return { ok: true, status: 201, value: mapIncidentDetail(created) };
+    return { ok: true, status: 201, value: mapIncidentDetail(created, actor.permissions.includes("Support.ViewCommunications")) };
   });
 }
 
@@ -1188,7 +1269,16 @@ function mapIncidentListItem(row: IncidentListRecord): SupportIncidentListItem {
     updatedAt: row.updatedAt.toISOString(),
   };
 }
-function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail {
+function mapIncidentDetail(row: IncidentDetailRecord, canViewCommunications: boolean): SupportIncidentDetail {
+  const incidentRef = { id: row.id, number: row.number };
+  const actions = [
+    ...row.actions.map((action) => ({ action, sourceIncident: incidentRef })),
+    ...row.mergedDuplicates.flatMap((incident) => incident.actions.map((action) => ({ action, sourceIncident: { id: incident.id, number: incident.number } }))),
+  ].sort((left, right) => left.action.performedAt.getTime() - right.action.performedAt.getTime() || left.action.id.localeCompare(right.action.id));
+  const communications = canViewCommunications ? [
+    ...row.communications.map((communication) => ({ communication, sourceIncident: incidentRef })),
+    ...row.mergedDuplicates.flatMap((incident) => incident.communications.map((communication) => ({ communication, sourceIncident: { id: incident.id, number: incident.number } }))),
+  ].sort((left, right) => left.communication.occurredAt.getTime() - right.communication.occurredAt.getTime() || left.communication.id.localeCompare(right.communication.id)) : [];
   return {
     ...mapIncidentListItem(row),
     description: row.description,
@@ -1197,12 +1287,23 @@ function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail {
     closeReasonDetail: row.closeReasonDetail,
     store: row.store,
     createdBy: row.createdBy,
-    actions: row.actions.map((action) => ({
+    actions: actions.map(({ action, sourceIncident }) => ({
       id: action.id,
       text: action.text,
       performedAt: action.performedAt.toISOString(),
       recordedAt: action.recordedAt.toISOString(),
       author: action.authorUser,
+      sourceIncident,
+    })),
+    communications: communications.map(({ communication, sourceIncident }) => ({
+      id: communication.id,
+      channel: communication.channel,
+      direction: communication.direction,
+      occurredAt: communication.occurredAt.toISOString(),
+      summary: communication.summary,
+      result: communication.result,
+      registeredBy: communication.registeredBy,
+      sourceIncident,
     })),
     events: row.events.map((event) => ({
       id: event.id,
@@ -1246,6 +1347,8 @@ function mapIncidentDetail(row: IncidentDetailRecord): SupportIncidentDetail {
       actor: change.actorUser,
       occurredAt: change.occurredAt.toISOString(),
     })),
+    mergedInto: row.mergedIntoIncident,
+    mergedIncidents: row.mergedDuplicates.map(({ id, number, title }) => ({ id, number, title })),
   };
 }
 async function allocateIncidentNumber(

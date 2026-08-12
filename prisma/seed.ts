@@ -25,6 +25,7 @@ async function main() {
     ["Support.ViewCommunications", "Consultar comunicaciones de clientes"],
     ["Support.ManageCommunications", "Registrar y corregir comunicaciones de clientes"],
     ["Support.ManageCategories", "Gestionar categorias de incidencias"],
+    ["Support.MergeIncidents", "Fusionar incidencias duplicadas"],
     ["Suppliers.View", "Consultar proveedores"],
     ["Suppliers.Manage", "Gestionar proveedores"],
     ["Purchases.View", "Consultar compras"],

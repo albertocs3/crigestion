@@ -183,6 +183,15 @@ export async function createIncidentPriorityUrgentNotifications(tx: Prisma.Trans
   }])));
 }
 
+export async function createIncidentMergedNotifications(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; duplicateIncidentId: string; sourceEventId: string; incidentNumber: string; primaryResponsibleUserId: string; duplicateResponsibleUserId: string; correlationId?: string }) {
+  const recipientIds = new Set([input.primaryResponsibleUserId, input.duplicateResponsibleUserId]);
+  await persistGeneratedNotifications(tx, input, new Map([...recipientIds].map((recipientUserId) => [recipientUserId, {
+    kind: "SUPPORT_INCIDENT_MERGED",
+    messageCode: "support.incident.merged",
+    severity: NotificationSeverity.INFO
+  }])));
+}
+
 export async function createIncidentReassignedNotification(tx: Prisma.TransactionClient, input: { companyId: string; incidentId: string; sourceEventId: string; incidentNumber: string; responsibleUserId: string; correlationId?: string }) {
   await persistGeneratedNotifications(tx, input, new Map([[input.responsibleUserId, { kind: "SUPPORT_INCIDENT_REASSIGNED", messageCode: "support.incident.reassigned", severity: NotificationSeverity.INFO }]]));
 }

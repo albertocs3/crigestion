@@ -10,6 +10,7 @@ import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/ac
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
+import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
@@ -326,6 +327,42 @@ describe("support incidents HTTP contracts", () => {
     expect(firstBody.incident).toEqual({ id: incident.id, priority: "URGENT", version: 2 });
     expect(replayBody.change.id).toBe(firstBody.change.id);
     expect(await prisma.supportIncidentPriorityChange.count({ where: { incidentId: incident.id } })).toBe(1);
+  });
+
+  it("merges two incidents once through the protected bilateral contract", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const adminToken = cookieMock.values.get(sessionCookieName)!;
+    const firstPayload = await payload();
+    const firstCreated = await incidentsPost(jsonRequest("/api/support/incidents", firstPayload, { csrf, key: randomUUID() }));
+    const secondPayload = { ...firstPayload, title: "Incidencia duplicada por contrato" };
+    const secondCreated = await incidentsPost(jsonRequest("/api/support/incidents", secondPayload, { csrf, key: randomUUID() }));
+    const primary = (await firstCreated.json()) as { id: string; version: number };
+    const duplicate = (await secondCreated.json()) as { id: string; version: number };
+    const body = { primaryIncidentId: primary.id, duplicateIncidentId: duplicate.id, expectedPrimaryVersion: primary.version, expectedDuplicateVersion: duplicate.version, reason: "Los dos registros describen el mismo problema.", confirmation: "MERGE_DUPLICATE_INCIDENT" };
+    const key = randomUUID();
+    const denied = await incidentMergesPost(jsonRequest("/api/support/incident-merges", body, { key: randomUUID() }));
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const viewerRole = await prisma.role.create({ data: { code: "SupportMergeViewer", name: "Consulta sin fusión", permissions: { create: { permission: { connect: { code: "Support.View" } } } } } });
+    await prisma.user.create({ data: { displayName: "Consulta sin fusión", userName: "merge-viewer", normalizedUserName: "merge-viewer", passwordHash: hashPassword("Cambiar-merge-viewer-2026"), roleId: viewerRole.id } });
+    await loginAs("merge-viewer", "Cambiar-merge-viewer-2026");
+    const viewerCsrf = await csrfToken();
+    const forbidden = await incidentMergesPost(jsonRequest("/api/support/incident-merges", body, { csrf: viewerCsrf, key: randomUUID() }));
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+    cookieMock.values.set(sessionCookieName, adminToken);
+    const first = await incidentMergesPost(jsonRequest("/api/support/incident-merges", body, { csrf, key }));
+    const replay = await incidentMergesPost(jsonRequest("/api/support/incident-merges", body, { csrf, key }));
+    const firstBody = (await first.json()) as { code?: string; message?: string; merge?: { id: string }; primary?: { version: number }; duplicate?: { status: string; closeReason: string; version: number } };
+    expect(first.status, JSON.stringify(firstBody)).toBe(201);
+    if (!firstBody.merge) throw new Error("MERGE_RESPONSE_INVALID");
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const replayBody = (await replay.json()) as { merge: { id: string } };
+    expect(firstBody).toMatchObject({ primary: { version: 2 }, duplicate: { status: "CLOSED", closeReason: "DUPLICATE", version: 2 } });
+    expect(replayBody.merge.id).toBe(firstBody.merge.id);
+    expect(await prisma.supportIncidentMerge.count()).toBe(1);
   });
 
   it("adds a collaborator once through the protected participant contract", async () => {
@@ -836,6 +873,8 @@ async function reset() {
     );
     await tx.$executeRawUnsafe('ALTER TABLE "notifications" DISABLE TRIGGER "notifications_guard"');
     await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" DISABLE TRIGGER "notification_state_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_merges" DISABLE TRIGGER "support_incident_merges_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" DISABLE TRIGGER "support_incidents_merged_duplicate_guard"');
     await tx.notificationStateChange.deleteMany();
     await tx.notification.deleteMany();
     await tx.supportCommunicationCorrection.deleteMany();
@@ -848,6 +887,7 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_priority_changes" DISABLE TRIGGER "support_priority_changes_append_only"');
     await tx.supportIncidentPriorityChange.deleteMany();
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_priority_changes" ENABLE TRIGGER "support_priority_changes_append_only"');
+    await tx.supportIncidentMerge.deleteMany();
     await tx.supportIncident.deleteMany();
     await tx.customerContact.deleteMany();
     await tx.$executeRawUnsafe(
@@ -876,6 +916,8 @@ async function reset() {
     );
     await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" ENABLE TRIGGER "notification_state_changes_append_only"');
     await tx.$executeRawUnsafe('ALTER TABLE "notifications" ENABLE TRIGGER "notifications_guard"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_merges" ENABLE TRIGGER "support_incident_merges_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" ENABLE TRIGGER "support_incidents_merged_duplicate_guard"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

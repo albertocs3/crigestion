@@ -11,6 +11,7 @@ import {
   listCustomerContacts,
 } from "@/modules/customers/application/contacts";
 import { login } from "@/modules/platform/application/auth";
+import { hashPassword } from "@/modules/platform/application/passwords";
 import { changeNotificationState, hashNotificationStateRequest, listNotifications } from "@/modules/platform/application/notifications";
 import {
   hashRequestBody,
@@ -32,8 +33,13 @@ import {
 } from "@/modules/support/application/incidents";
 import {
   hashSupportStatusTransitionRequest,
+  supportStatusTransitionSchema,
   transitionSupportIncident,
 } from "@/modules/support/application/statusTransitions";
+import {
+  hashSupportIncidentMergeRequest,
+  mergeSupportIncidents,
+} from "@/modules/support/application/merges";
 import {
   changeSupportParticipants,
   hashSupportParticipantRequest,
@@ -191,6 +197,122 @@ describe("support incidents application", () => {
     expect(JSON.stringify(audit.payload)).not.toContain(command.reason);
     await expect(prisma.supportIncidentPriorityChange.update({ where: { id: first.ok ? first.value.change.id : randomUUID() }, data: { reason: "Intento de alterar la evidencia." } })).rejects.toThrow();
     await expect(prisma.supportIncident.update({ where: { id: created.value.id }, data: { priority: "HIGH", version: 3 } })).rejects.toThrow();
+  });
+
+  it("merges two active incidents atomically without moving their history", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const baseCommand = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      description: "Incidencia sintética para verificar una fusión trazable.",
+      priority: "MEDIUM" as const,
+    };
+    const primary = await createSupportIncident(
+      { ...baseCommand, title: "Incidencia principal" },
+      actor,
+      { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...baseCommand, title: "Incidencia principal" }), scope: "incident:create" },
+    );
+    const duplicate = await createSupportIncident(
+      { ...baseCommand, title: "Incidencia duplicada" },
+      actor,
+      { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...baseCommand, title: "Incidencia duplicada" }), scope: "incident:create" },
+    );
+    if (!primary.ok || !duplicate.ok) throw new Error("MERGE_FIXTURE_NOT_CREATED");
+    const actionCommand = { expectedVersion: 1, text: "Evidencia que debe conservar su incidencia de origen.", performedAt: new Date().toISOString() };
+    const action = await createSupportAction(duplicate.value.id, actionCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: duplicate.value.id, ...actionCommand }), scope: `incident:${duplicate.value.id}:action:create` });
+    if (!action.ok) throw new Error(action.error.code);
+    const collaboratorRole = await prisma.role.create({ data: { code: "MergeInactiveCollaborator", name: "Colaborador de fusión", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const collaborator = await prisma.user.create({ data: { displayName: "Colaborador inactivo", userName: "merge-inactive", normalizedUserName: "merge-inactive", passwordHash: hashPassword("Cambiar-merge-inactive-2026"), roleId: collaboratorRole.id } });
+    const participantCommand = { action: "add-collaborator" as const, expectedVersion: action.value.incident.version, userId: collaborator.id };
+    const participant = await changeSupportParticipants(duplicate.value.id, participantCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportParticipantRequest({ incidentId: duplicate.value.id, ...participantCommand }), scope: `incident:${duplicate.value.id}:participant-change` });
+    if (!participant.ok) throw new Error(participant.error.code);
+    await prisma.user.update({ where: { id: collaborator.id }, data: { status: "INACTIVE" } });
+    const communicationCommand = {
+      customerId: customer.id,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt: new Date().toISOString(),
+      contactId: null,
+      contactNumber: "+34910000003",
+      durationSeconds: 90,
+      summary: "Comunicación vinculada a la incidencia duplicada.",
+      result: "REFERRED_TO_INCIDENT" as const,
+      incidentId: duplicate.value.id,
+    };
+    const communication = await createSupportCommunication(communicationCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(communicationCommand), scope: "communication:create" });
+    if (!communication.ok) throw new Error(communication.error.code);
+    const unlinkedCommunicationCommand = { ...communicationCommand, incidentId: null, contactNumber: "+34910000005", summary: "Comunicación sin incidencia para probar la barrera SQL.", result: "INFORMATION_PROVIDED" as const };
+    const unlinkedCommunication = await createSupportCommunication(unlinkedCommunicationCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(unlinkedCommunicationCommand), scope: "communication:create" });
+    if (!unlinkedCommunication.ok) throw new Error(unlinkedCommunication.error.code);
+    const attachmentInput = { incidentId: duplicate.value.id, actionId: null, bytes: Buffer.from("merge-source-pdf"), fileName: "fusion.pdf", declaredMimeType: "application/pdf", clientIdempotencyKey: randomUUID(), requestHash: "" };
+    attachmentInput.requestHash = supportIncidentAttachmentRequestHash(attachmentInput);
+    const attachment = await uploadSupportIncidentAttachment(attachmentInput, actor, { correlationId: "merge-attachment-0001" }, {
+      storage: new IncidentAttachmentMemoryStorage(),
+      scanner: { scan: async () => ({ outcome: "clean" as const, engine: "test-scanner", version: "1" }) },
+      prepare: async () => ({ bytes: Buffer.from("merge-canonical-pdf"), originalFileName: "fusion.pdf", extension: "pdf" as const, mediaType: "application/pdf" as const }),
+    });
+    if (!attachment.ok) throw new Error(attachment.error.code);
+    const command = {
+      primaryIncidentId: primary.value.id,
+      duplicateIncidentId: duplicate.value.id,
+      expectedPrimaryVersion: primary.value.version,
+      expectedDuplicateVersion: participant.value.incident.version,
+      reason: "Ambos registros documentan el mismo problema operativo.",
+      confirmation: "MERGE_DUPLICATE_INCIDENT" as const,
+    };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentMergeRequest(command), scope: "support:incident-merge", correlationId: "merge-test-0001" };
+
+    const first = await mergeSupportIncidents(command, actor, context);
+    const replay = await mergeSupportIncidents(command, actor, context);
+
+    expect(first).toMatchObject({ ok: true, status: 201, value: { primary: { id: primary.value.id, version: 2 }, duplicate: { id: duplicate.value.id, status: "CLOSED", closeReason: "DUPLICATE", version: 4 } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { merge: { id: first.ok ? first.value.merge.id : "" } } });
+    const reusedCommand = { ...command, reason: "La misma clave no puede autorizar un cuerpo distinto." };
+    expect(await mergeSupportIncidents(reusedCommand, actor, { ...context, requestHash: hashSupportIncidentMergeRequest(reusedCommand) })).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
+    expect(await prisma.supportIncidentMerge.count()).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { eventType: "INCIDENT_MERGED" } })).toBe(2);
+    expect(await prisma.notification.count({ where: { kind: "SUPPORT_INCIDENT_MERGED" } })).toBe(1);
+    const storedAction = await prisma.supportIncidentAction.findUniqueOrThrow({ where: { id: action.value.action.id } });
+    expect(storedAction.incidentId).toBe(duplicate.value.id);
+    const primaryDetail = await getSupportIncident(primary.value.id, actor);
+    const duplicateDetail = await getSupportIncident(duplicate.value.id, actor);
+    expect(primaryDetail?.mergedIncidents).toEqual([{ id: duplicate.value.id, number: duplicate.value.number, title: duplicate.value.title }]);
+    expect(primaryDetail?.actions).toEqual(expect.arrayContaining([expect.objectContaining({ id: action.value.action.id, sourceIncident: { id: duplicate.value.id, number: duplicate.value.number } })]));
+    expect(primaryDetail?.communications).toEqual(expect.arrayContaining([expect.objectContaining({ id: communication.value.id, sourceIncident: { id: duplicate.value.id, number: duplicate.value.number } })]));
+    expect(await listSupportIncidentAttachments(primary.value.id, actor)).toEqual(expect.arrayContaining([expect.objectContaining({ id: attachment.value.attachment.id, sourceIncident: { id: duplicate.value.id, number: duplicate.value.number } })]));
+    expect(duplicateDetail?.mergedInto).toEqual({ id: primary.value.id, number: primary.value.number });
+    const rejectedCommunication = { ...communicationCommand, contactNumber: "+34910000004", summary: "Intento posterior a la fusión." };
+    expect(await createSupportCommunication(rejectedCommunication, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(rejectedCommunication), scope: "communication:create" })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_COMMUNICATION_INCIDENT_INVALID" } });
+    await expect(prisma.$executeRaw`UPDATE "support_communications" SET "incidentId" = ${duplicate.value.id}::uuid WHERE "id" = ${unlinkedCommunication.value.id}::uuid`).rejects.toThrow();
+    expect(supportStatusTransitionSchema.safeParse({ action: "close", expectedVersion: 1, closeReason: "DUPLICATE" }).success).toBe(false);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENTS_MERGED" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(command.reason);
+    await expect(prisma.supportIncidentMerge.update({ where: { id: first.ok ? first.value.merge.id : randomUUID() }, data: { reason: "Alteración" } })).rejects.toThrow();
+  });
+
+  it("serializes concurrent merges over the same duplicate", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const base = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, description: "Incidencia para comprobar exclusión concurrente.", priority: "MEDIUM" as const };
+    const [primary, duplicate] = await Promise.all([
+      createSupportIncident({ ...base, title: "Principal concurrente" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Principal concurrente" }), scope: "incident:create" }),
+      createSupportIncident({ ...base, title: "Duplicada concurrente" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Duplicada concurrente" }), scope: "incident:create" }),
+    ]);
+    if (!primary.ok || !duplicate.ok) throw new Error("CONCURRENT_MERGE_FIXTURE_NOT_CREATED");
+    const command = { primaryIncidentId: primary.value.id, duplicateIncidentId: duplicate.value.id, expectedPrimaryVersion: 1, expectedDuplicateVersion: 1, reason: "Ambos registros son el mismo caso concurrente.", confirmation: "MERGE_DUPLICATE_INCIDENT" as const };
+    const results = await Promise.all([
+      mergeSupportIncidents(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentMergeRequest(command), scope: "incident-merge", correlationId: "merge-race-1" }),
+      mergeSupportIncidents(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentMergeRequest(command), scope: "incident-merge", correlationId: "merge-race-2" }),
+    ]);
+    expect(results.filter((result) => result.ok && result.status === 201)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok && result.status === 409)).toHaveLength(1);
+    expect(await prisma.supportIncidentMerge.count()).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { eventType: "INCIDENT_MERGED" } })).toBe(2);
   });
 
   it("records actions append-only and advances a new incident exactly once", async () => {
@@ -1443,6 +1565,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_attachments" DISABLE TRIGGER "support_incident_attachments_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_merges" DISABLE TRIGGER "support_incident_merges_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" DISABLE TRIGGER "support_incidents_merged_duplicate_guard"');
     await tx.$executeRawUnsafe('ALTER TABLE "notifications" DISABLE TRIGGER "notifications_guard"');
     await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" DISABLE TRIGGER "notification_state_changes_append_only"');
     await tx.notificationStateChange.deleteMany();
@@ -1457,6 +1581,7 @@ async function reset() {
     await tx.supportIncidentAttachment.deleteMany();
     await tx.attachment.deleteMany();
     await tx.supportIncidentAction.deleteMany();
+    await tx.supportIncidentMerge.deleteMany();
     await tx.supportIncident.deleteMany();
     await tx.customerContact.deleteMany();
     await tx.$executeRawUnsafe(
@@ -1491,6 +1616,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_attachments" ENABLE TRIGGER "support_incident_attachments_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_merges" ENABLE TRIGGER "support_incident_merges_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" ENABLE TRIGGER "support_incidents_merged_duplicate_guard"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
   await prisma.supportIncidentCategory.deleteMany();

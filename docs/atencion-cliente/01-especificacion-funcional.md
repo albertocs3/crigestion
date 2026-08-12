@@ -279,6 +279,7 @@ Una incidencia resuelta o cerrada no admite nuevas actuaciones hasta que sea rea
 - Otro.
 
 Cuando se seleccione `Otro`, será obligatorio escribir una explicación.
+El motivo `Duplicada` se aplica exclusivamente mediante la fusión con una incidencia principal; no está disponible en el cierre ordinario.
 
 ### 5.8 Reglas
 
@@ -351,14 +352,18 @@ Las incidencias duplicadas se pueden fusionar.
 
 ### Reglas
 
-- El responsable selecciona cuál será la incidencia principal.
-- El administrador puede intervenir sin restricciones.
+- La fusión requiere `Support.MergeIncidents`. Salvo el administrador, el actor debe ser responsable vigente tanto de la principal como de la duplicada.
+- El responsable selecciona cuál será la incidencia principal; el administrador puede intervenir sin esa restricción de asignación.
+- Ambas incidencias pertenecen a la misma empresa y al mismo cliente. La principal debe ser un registro canónico y no puede estar fusionada a otra.
 - La incidencia duplicada queda en estado `Cerrada`.
 - Su motivo de cierre será `Duplicada`.
 - La incidencia duplicada mantiene un enlace a la principal.
+- Ambas incidencias deben estar activas. La incidencia duplicada es terminal tras la fusión: no puede reabrirse ni recibir nuevas modificaciones operativas.
+- Una principal que ya agrupa duplicadas no puede fusionarse a su vez dentro de otra incidencia.
 - Comunicaciones, actuaciones y adjuntos permanecen en sus registros originales.
 - Todo el contenido relacionado se muestra conjuntamente desde la incidencia principal.
 - La fusión queda registrada en el historial de ambas incidencias.
+- La operación exige motivo y confirmación explícita, incrementa la versión de ambas incidencias y no puede deshacerse mediante el flujo ordinario.
 
 ## 11. Historial y auditoría
 
@@ -546,7 +551,7 @@ El sistema deberá registrar los intervalos de estado para calcular correctament
 8. Una incidencia finalizada debe reabrirse antes de admitir nuevas actuaciones o cambios de prioridad.
 9. Todas las modificaciones relevantes quedan auditadas.
 10. Ninguna comunicación o actuación puede eliminarse.
-11. Una incidencia duplicada puede cerrarse y enlazarse con su principal mediante una fusión.
+11. Una incidencia duplicada solo puede cerrarse con motivo `Duplicada` mediante una fusión confirmada que la enlace con una principal del mismo cliente.
 12. Las notificaciones enlazan con la incidencia y pueden marcarse como leídas.
 13. Los técnicos ven sus indicadores y el administrador puede consultar los globales.
 14. Los tiempos de resolución excluyen los periodos pendientes.

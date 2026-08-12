@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros y notificaciones internas persistentes. Las fusiones quedan fuera del contrato actual.
+La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas y notificaciones internas persistentes.
 
 ## Permisos
 
@@ -10,6 +10,7 @@ La rebanada actual permite gestionar incidencias, participantes, comunicaciones 
 - `Support.Create` + `Support.View`: creación de incidencias.
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
 - `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución, cierre y cambio posterior de prioridad por el responsable o un administrador.
+- `Support.MergeIncidents` + `Support.View`: fusión cuando el actor es responsable vigente de ambas incidencias; Administrador puede intervenir.
 - `Support.Reopen` + `Support.View`: reapertura de incidencias finalizadas por un técnico autorizado.
 - `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
@@ -52,7 +53,7 @@ Errores funcionales: `PLATFORM_NOT_INITIALIZED`, `SUPPORT_CUSTOMER_NOT_FOUND`, `
 
 ## `GET /api/support/incidents/{incidentId}`
 
-Requiere `Support.View`. Devuelve el detalle y sus eventos o `404 SUPPORT_INCIDENT_NOT_FOUND`. UUID inválido devuelve `422 VALIDATION_ERROR` después de autorizar.
+Requiere `Support.View`. Devuelve el detalle y sus eventos o `404 SUPPORT_INCIDENT_NOT_FOUND`. Cuando es principal, las actuaciones de sus duplicadas se agregan en orden estable conservando `sourceIncident`; las comunicaciones se agregan del mismo modo solo si el actor posee además `Support.ViewCommunications`. UUID inválido devuelve `422 VALIDATION_ERROR` después de autorizar.
 
 ## `POST /api/support/incidents/{incidentId}/actions`
 
@@ -79,10 +80,29 @@ Los cuerpos admitidos son estrictos:
 - pendiente: `{ "action":"set-pending", "expectedVersion":2, "targetStatus":"PENDING_CUSTOMER", "reason":"..." }`;
 - retomar: `{ "action":"resume", "expectedVersion":3, "reason":"..." }`;
 - resolver: `{ "action":"resolve", "expectedVersion":4, "solution":"..." }`;
-- cerrar: `{ "action":"close", "expectedVersion":4, "closeReason":"DUPLICATE" }`; `OTHER` exige `detail`;
+- cerrar: `{ "action":"close", "expectedVersion":4, "closeReason":"NOT_APPLICABLE" }`; `OTHER` exige `detail`; `DUPLICATE` queda reservado al contrato de fusión;
 - reabrir: `{ "action":"reopen", "expectedVersion":5, "reason":"..." }`.
 
 Resolver y cerrar son estados finales: no admiten actuaciones hasta reabrir. Cada transición incrementa una sola versión, crea evidencia append-only y un evento enlazado. Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_TRANSITION_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_TRANSITION_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
+
+## `POST /api/support/incident-merges`
+
+Fusión top-level autenticada con `Support.MergeIncidents` + `Support.View`. Salvo Administrador, el actor debe ser responsable vigente de ambas incidencias. Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 4 KiB, `Idempotency-Key`, cuota persistente de 10 intentos por actor y empresa en 15 minutos, y control optimista de las dos versiones.
+
+```json
+{
+  "primaryIncidentId": "uuid",
+  "duplicateIncidentId": "uuid",
+  "expectedPrimaryVersion": 3,
+  "expectedDuplicateVersion": 2,
+  "reason": "Ambos registros describen el mismo problema.",
+  "confirmation": "MERGE_DUPLICATE_INCIDENT"
+}
+```
+
+Las incidencias deben ser distintas, activas, pertenecer a la misma empresa y cliente, y la principal no puede estar fusionada a otra. La duplicada no puede estar fusionada ni ser una principal que ya agrupa duplicadas. La operación bloquea ambos registros en orden estable, cierra la duplicada con motivo `DUPLICATE`, enlaza la principal, incrementa ambas versiones y crea evidencia append-only y eventos `INCIDENT_MERGED` en los dos historiales. Comunicaciones, actuaciones y adjuntos conservan su incidencia original y se agregan solo al consultar la principal. La duplicada es terminal y no admite reapertura ni nuevas mutaciones.
+
+Respuesta `201`; un replay idéntico devuelve `200` sin repetir relación, versiones, eventos, notificaciones ni auditoría. Errores estables: `SUPPORT_INCIDENT_MERGE_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_MERGE_SAME_INCIDENT`, `SUPPORT_INCIDENT_MERGE_CUSTOMER_MISMATCH`, `SUPPORT_INCIDENT_MERGE_VERSION_CONFLICT`, `SUPPORT_INCIDENT_MERGE_PRIMARY_ALREADY_MERGED`, `SUPPORT_INCIDENT_MERGE_DUPLICATE_ALREADY_MERGED`, `SUPPORT_INCIDENT_MERGE_FINALIZED`, `SUPPORT_INCIDENT_MERGE_RATE_LIMITED`, `SUPPORT_INCIDENT_MERGE_BUSY`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`, además de los errores comunes de validación, autenticación, formato, CSRF y mantenimiento. La cuota devuelve `429` con `Retry-After`; el agotamiento de reintentos serializables devuelve `503` con `Retry-After: 3`.
 
 ## `POST /api/support/incidents/{incidentId}/priority-changes`
 
@@ -134,7 +154,7 @@ La migración crea la categoría `General` para empresas ya existentes. En una i
 
 ### `GET /api/support/incidents/{incidentId}/attachments`
 
-Requiere `Support.View`. Devuelve hasta 100 adjuntos disponibles y limpios, ordenados del más reciente al más antiguo, más `nextCursor`; `cursor` permite continuar sin omitir adjuntos antiguos. No expone clave de almacenamiento, hash, resultado interno del antivirus ni ruta física. Incidencia inexistente o de otra empresa devuelve `404 SUPPORT_INCIDENT_NOT_FOUND`.
+Requiere `Support.View`. Devuelve hasta 100 adjuntos disponibles y limpios, ordenados del más reciente al más antiguo, más `nextCursor`; `cursor` permite continuar sin omitir adjuntos antiguos. Al consultar una principal incluye los adjuntos de sus duplicadas, conserva `sourceIncident` y genera la descarga contra el registro de origen. No expone clave de almacenamiento, hash, resultado interno del antivirus ni ruta física. Incidencia inexistente o de otra empresa devuelve `404 SUPPORT_INCIDENT_NOT_FOUND`.
 
 ### `POST /api/support/incidents/{incidentId}/attachments`
 
@@ -143,6 +163,8 @@ Requiere `Support.ManageAttachments` + `Support.View` y ser responsable, colabor
 El original se mantiene en cuarentena, se analiza, se valida y, para JPG, se recodifica sin metadatos. El artefacto final vuelve a analizarse antes de publicarse con clave opaca. PDF cifrado, activo, incremental o no inspeccionable se rechaza. La autorización se revalida bajo bloqueo al persistir. La respuesta `201` incluye solo metadatos observables. Replay válido devuelve `200`; clave reutilizada con otro archivo devuelve `409`.
 
 Errores específicos: `403 SUPPORT_ATTACHMENT_FORBIDDEN`, `404 SUPPORT_INCIDENT_NOT_FOUND`, `409 IDEMPOTENCY_KEY_REUSED|IDEMPOTENCY_REPLAY_INVALID`, `413 PAYLOAD_TOO_LARGE`, `415 UNSUPPORTED_MEDIA_TYPE`, `422 SUPPORT_ATTACHMENT_*|SUPPORT_ATTACHMENT_FILE_REJECTED`, `429 SUPPORT_ATTACHMENT_RATE_LIMITED` con `Retry-After: 900`, y `503 ANTIVIRUS_UNAVAILABLE|SUPPORT_ATTACHMENT_CAPACITY_UNAVAILABLE|SUPPORT_ATTACHMENT_DATABASE_BUSY` con `Retry-After`.
+
+Una duplicada fusionada es de solo lectura y rechaza nuevas cargas con `409 SUPPORT_INCIDENT_MERGED_READ_ONLY` aunque el actor conserve autoridad histórica.
 
 ### `POST /api/support/incidents/{incidentId}/attachments/{attachmentId}/download`
 
@@ -154,7 +176,7 @@ Deuda operativa controlada: el semáforo de cuatro lecturas es por proceso y el 
 
 ## `/api/support/communications`
 
-`GET` requiere `Support.ViewCommunications` y admite cursor, cliente, incidencia y canal. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia.
+`GET` requiere `Support.ViewCommunications` y admite cursor, cliente, incidencia y canal. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada; una corrección puede conservar el enlace histórico que ya existía antes de la fusión.
 
 `GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. `contactId` es opcional para históricos, pero cuando se informa debe pertenecer al cliente, estar activo y contener exactamente el número utilizado para el canal seleccionado. `contactNumber` permanece como instantánea aunque el maestro cambie posteriormente.
 
@@ -175,6 +197,7 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 - Las actuaciones son append-only y cada una exige un evento coincidente. PostgreSQL verifica también `firstActionAt` y que una incidencia con actuaciones ya no permanezca `NEW`.
 - Las transiciones son append-only. PostgreSQL exige un único evento por versión resultante y mantiene coherentes estado, solución, motivo de cierre y marcas temporales.
 - Los cambios de prioridad son append-only. PostgreSQL exige un único evento `PRIORITY_CHANGED` por versión resultante, correspondencia exacta entre prioridad anterior y nueva, y la notificación obligatoria a los receptores autorizados cuando el destino es `URGENT`.
+- Las fusiones son append-only y únicas por incidencia duplicada. PostgreSQL exige el enlace, cierre `DUPLICATE`, versiones consecutivas y eventos coincidentes en principal y duplicada; una fusionada no puede reabrirse, recibir nuevos enlaces de comunicaciones ni convertirse en principal de otra cadena.
 - Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
 - Las comunicaciones no se borran y cada actualización exige una corrección exacta append-only con versión consecutiva.
 - No existe borrado físico de incidencias en la API.
@@ -187,7 +210,9 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 
 El alta de incidencia notifica al responsable. Una incidencia creada como `URGENT`, o cambiada posteriormente desde una prioridad no urgente a `URGENT`, notifica a los usuarios activos con `Support.ReceiveUrgentNotifications`; si el responsable también posee ese permiso recibe una única notificación urgente por evento. Una reasignación notifica solo al nuevo responsable. La incorporación de un colaborador le notifica exclusivamente a él; una actuación registrada por un colaborador activo notifica al responsable vigente en ese evento; y una reapertura notifica al responsable vigente, incluso cuando él mismo la ejecuta. La creación ocurre en la misma transacción que el evento funcional, con unicidad por destinatario y evento fuente. Los cambios de estado y prioridad conservan evidencia append-only y control de versión en PostgreSQL.
 
-La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. Las fusiones, acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+La fusión notifica a los responsables vigentes de la principal y la duplicada, deduplicados si coinciden. El aviso utiliza un código controlado, enlaza con la principal y no contiene motivo, títulos, cliente ni nombres de actores.
+
+La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. Las acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
 
 Las clases adicionales son `SUPPORT_INCIDENT_COLLABORATOR_ADDED`, `SUPPORT_INCIDENT_COLLABORATOR_ACTION` y `SUPPORT_INCIDENT_REOPENED`, todas de severidad `INFO`. Sus mensajes se derivan de códigos controlados y del número de incidencia; nunca contienen texto de actuación, motivo de reapertura, cliente ni nombre del actor. Las actuaciones están limitadas a 30 intentos por actor y empresa cada 15 minutos; el replay válido queda exento y el exceso devuelve `429 SUPPORT_ACTION_RATE_LIMITED` con `Retry-After`. Tras agotar tres reintentos serializables se devuelve `503 SUPPORT_ACTION_BUSY` con `Retry-After: 3`.
 

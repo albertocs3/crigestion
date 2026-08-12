@@ -19,6 +19,7 @@ export const supportStatusTransitionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("close"), expectedVersion: versionSchema, closeReason: closeReasonSchema, detail: z.string().trim().min(3).max(500).optional() }).strict(),
   z.object({ action: z.literal("reopen"), expectedVersion: versionSchema, reason: reasonSchema }).strict()
 ]).superRefine((value, ctx) => {
+  if (value.action === "close" && value.closeReason === "DUPLICATE") ctx.addIssue({ code: "custom", path: ["closeReason"], message: "Usa la fusión para cerrar una incidencia duplicada." });
   if (value.action === "close" && value.closeReason === "OTHER" && !value.detail) ctx.addIssue({ code: "custom", path: ["detail"], message: "El detalle es obligatorio para Otros." });
   if (value.action === "close" && value.closeReason !== "OTHER" && value.detail) ctx.addIssue({ code: "custom", path: ["detail"], message: "El detalle solo se admite para Otros." });
 });
@@ -34,7 +35,7 @@ const replaySchema: z.ZodType<SupportStatusTransitionDto> = z.object({
   transition: z.object({ id: z.string().uuid(), fromStatus: statusSchema, toStatus: statusSchema, occurredAt: z.string().datetime() }).strict()
 }).strict();
 
-type LockedIncident = { id: string; companyId: string; number: string; status: z.infer<typeof statusSchema>; version: number; responsibleUserId: string };
+type LockedIncident = { id: string; companyId: string; number: string; status: z.infer<typeof statusSchema>; version: number; responsibleUserId: string; mergedIntoIncidentId: string | null };
 
 export async function transitionSupportIncident(incidentId: string, command: SupportStatusTransitionCommand, actor: SessionUser, context: SupportStatusTransitionContext): Promise<SupportStatusTransitionResult> {
   const requiredPermission = command.action === "reopen" ? "Support.Reopen" : "Support.ManageAssigned";
@@ -47,9 +48,10 @@ export async function transitionSupportIncident(incidentId: string, command: Sup
         if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
         const companyId = (await tx.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId;
         if (!companyId) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
-        const rows = await tx.$queryRaw<LockedIncident[]>(Prisma.sql`SELECT "id", "companyId", "number", "status", "version", "responsibleUserId" FROM "support_incidents" WHERE "id" = ${incidentId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
+        const rows = await tx.$queryRaw<LockedIncident[]>(Prisma.sql`SELECT "id", "companyId", "number", "status", "version", "responsibleUserId", "mergedIntoIncidentId" FROM "support_incidents" WHERE "id" = ${incidentId}::uuid AND "companyId" = ${companyId}::uuid FOR UPDATE`);
         const incident = rows[0];
         if (!incident) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
+        if (incident.mergedIntoIncidentId) return failure(409, "SUPPORT_INCIDENT_TRANSITION_INVALID", "Una incidencia fusionada no admite nuevas transiciones.");
         if (command.action !== "reopen" && actor.id !== incident.responsibleUserId && actor.role.code !== "Administrador") {
           await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_TRANSITION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId, reason: "NOT_RESPONSIBLE", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
           return failure(403, "SUPPORT_INCIDENT_TRANSITION_FORBIDDEN", "Solo el responsable o un administrador puede cambiar este estado.");
