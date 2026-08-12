@@ -1021,3 +1021,29 @@ devolvieron `status=ok`, `database=ok`, `verifactu=ok` y `worker=ok`. El timer d
 recuperación permaneció inactivo, igual que antes de esta release y sin formar
 parte de la ventana. No se modificó producción y el acceso SSH temporal se
 mantiene conforme a la indicación operativa vigente.
+
+## 27. Panel operativo de Atención al cliente en staging
+
+El 2026-08-12 se promovió la release inmutable
+`staging-2026.08.12-rc3`, commit
+`825cfc7b48a90f7bc1095c6cc02315a14d4d5567`. El artefacto se compiló en un
+directorio aislado y el migrador controlado confirmó las 151 migraciones sin
+pendientes, con `Result=success` y `ExecMainStatus=0`. Antes de la ventana se
+creó y verificó por checksum y catálogo de `pg_restore` el dump
+`crigestion_staging-pre-staging-2026.08.12-rc3-20260812T114705Z.dump`, tamaño
+1.460.428 bytes y SHA-256
+`9253f51db07fb2b836db5bbe7e5ebc5f8f56b4f4c035371ca4554845c0efb6ad`.
+
+Tras la conmutación quedaron activos aplicación, worker VeriFactu, timer de
+reactivaciones y timers de health y backup. VeriFactu permaneció en `TEST`; la
+unidad one-shot de health terminó con `Result=success` y
+`ExecMainStatus=0`, y los health local y público devolvieron todos los
+componentes en `ok`. El nuevo endpoint respondió `401 UNAUTHENTICATED` sin
+sesión, conforme al contrato.
+
+La UAT visual autenticada del nuevo panel no se da todavía por cerrada: la
+sesión disponible había expirado y la navegación redirigió correctamente a
+`/login`. No se consultaron ni reutilizaron credenciales. Queda pendiente
+comprobar con una sesión autorizada los contadores, carga por técnico, últimas
+comunicaciones, avisos y enlaces del panel. No se modificó producción y se
+mantiene el acceso SSH temporal.

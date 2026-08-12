@@ -360,12 +360,16 @@ filtro por técnico; la foto mostró una única incidencia canónica abierta y l
 cabecera conservó `STAGING`, `crigestion_staging` y `AEAT TEST`. Health local y
 público respondieron íntegramente `ok` tras la promoción.
 
-El corte local siguiente completa el panel principal de Atención al cliente
+La release inmutable `staging-2026.08.12-rc3`, commit
+`825cfc7b48a90f7bc1095c6cc02315a14d4d5567`, completa el panel principal de Atención al cliente
 sin alterar persistencia. Una lectura `REPEATABLE READ` reúne contadores de
 incidencias canónicas abiertas, incidencias propias, avisos no leídos, carga por
 técnico condicionada a permiso global y últimas comunicaciones condicionadas a
 su permiso específico. Las proyecciones omiten textos y teléfonos, el contrato
 HTTP no admite parámetros y una única auditoría opaca registra cada foto.
+La promoción conservó 151 migraciones, VeriFactu TEST y health íntegro. La UAT
+visual autenticada queda pendiente porque la sesión disponible expiró y el
+servidor redirigió correctamente a login; no se introdujeron credenciales.
 
 ## 5. Riesgos y trabajo posterior
 

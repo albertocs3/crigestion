@@ -14,9 +14,9 @@ Estado verificado el 2026-08-12:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extension `btree_gist` instalada.
-- Release activa `staging-2026.08.12-rc2`.
-- Commit `c3dd44e3effdef9e3fa4fba14e9b0d7c3420b883`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.08.12-rc2` y
+- Release activa `staging-2026.08.12-rc3`.
+- Commit `825cfc7b48a90f7bc1095c6cc02315a14d4d5567`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.12-rc3` y
   enlace `/opt/crigestion-staging/current`.
 - 151 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
