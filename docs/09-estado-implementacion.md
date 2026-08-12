@@ -315,6 +315,24 @@ permanecio en `TEST` y produccion no se toco.
 La cobertura bancaria incluye importacion, propuesta, conciliacion y deshacer
 desde navegador, contratos HTTP, concurrencia e invariantes PostgreSQL.
 
+La release inmutable `staging-2026.08.12-rc1`, commit
+`bb95ab194eb4be036c986a502f5de2a91fde5dab`, desplego la fusión segura de
+incidencias. La migracion elevo el catalogo de staging a 150 migraciones,
+incluida `20260812030000_add_support_incident_merges`, y termino con
+`Result=success` y `ExecMainStatus=0`. Antes de migrar se creo y verifico el
+dump `crigestion_staging-pre-staging-2026.08.12-rc1-20260812T072734Z.dump`.
+La aplicacion, el worker VeriFactu TEST y los timers de reactivacion, health y
+backup quedaron activos; health local y publico respondieron `ok` para base,
+VeriFactu y worker. Produccion no se consulto ni modifico.
+
+La validacion local aplico desde cero las 150 migraciones y supero 52 pruebas
+dirigidas de Soporte sobre tres archivos, ademas de Prisma Validate,
+TypeScript, ESLint, build optimizado y `npm audit` sin vulnerabilidades. La
+suite global no dio una señal valida: un deadlock de limpieza en Compras dejo
+fixtures residuales y produjo fallos en cascada por claves foraneas ajenas;
+tras recrear la base, la regresion proporcional de Soporte volvio a quedar
+verde.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

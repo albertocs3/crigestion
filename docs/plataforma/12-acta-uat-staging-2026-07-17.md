@@ -934,3 +934,29 @@ conflictos del worker. Cubre `P2010` con SQLSTATE `40001`, agotamiento tras tres
 `P2034` y ausencia de reintento para errores ajenos. TypeScript, ESLint dirigido,
 la prueba de despliegue del worker y las tres pruebas de reintento finalizaron
 correctamente.
+
+## 25. Fusión segura de incidencias en staging
+
+El 2026-08-12 se promovio la release inmutable
+`staging-2026.08.12-rc1`, commit
+`bb95ab194eb4be036c986a502f5de2a91fde5dab`. Antes de la ventana se materializo
+y compilo la release en un directorio aislado. El backup automatico
+`crigestion_staging-auto-20260812T072734Z.dump` supero checksum y catalogo de
+`pg_restore`; se conservo como
+`crigestion_staging-pre-staging-2026.08.12-rc1-20260812T072734Z.dump`.
+
+Con web, worker VeriFactu y timer de reactivaciones detenidos, el migrador
+controlado aplico las 14 migraciones pendientes de Atencion al cliente hasta
+alcanzar 150 migraciones. La unidad
+`crigestion-staging-migrate@staging-2026.08.12-rc1.service` termino con
+`Result=success` y `ExecMainStatus=0`. Tras la conmutacion atomica quedaron
+activos aplicacion, worker VeriFactu TEST, timer de reactivaciones y timers de
+health y backup. La unidad de health y la ultima ejecucion del worker de
+reactivaciones terminaron correctamente; health local y publico devolvieron
+`status=ok`, `database=ok`, `verifactu=ok` y `worker=ok`.
+
+Este corte despliega el contrato, persistencia, RBAC, CSRF, idempotencia,
+auditoria, bloqueo bilateral, consistencia diferida y UI de la fusión. La UAT
+funcional con datos sinteticos se realizara como actividad separada. No se
+consulto ni modifico produccion y se conserva el acceso SSH temporal conforme
+a la indicacion operativa vigente.
