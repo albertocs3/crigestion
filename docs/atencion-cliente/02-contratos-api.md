@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas y notificaciones internas persistentes.
+La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas, notificaciones internas persistentes y un panel operativo de soporte.
 
 ## Permisos
 
@@ -22,6 +22,39 @@ La rebanada actual permite gestionar incidencias, participantes, comunicaciones 
 - `Support.DownloadAttachments` + `Support.View`: descarga de adjuntos de incidencias visibles.
 
 Los permisos se validan siempre en servidor. El rol técnico de soporte no obtiene por estos permisos acceso a suscripciones, facturación, tesorería ni contabilidad.
+
+## `GET /api/support/dashboard`
+
+Foto operativa autenticada y auditada que exige `Support.View`. No admite
+parámetros; cualquier query string devuelve `422 VALIDATION_ERROR`. Deriva la
+empresa exclusivamente en servidor y ejecuta todos los bloques autorizados en
+una transacción `REPEATABLE READ` con un único `asOf`.
+La lista general que continúa debajo del panel conserva su contrato paginado y
+su auditoría `SUPPORT_INCIDENTS_VIEWED`; no forma parte de ese snapshot.
+
+La respuesta contiene contadores de incidencias canónicas abiertas: nuevas, en
+curso, pendientes por cliente y tercero, total pendiente, urgentes y asignadas
+al actor. Incluye como máximo sus cinco incidencias abiertas y sus cinco
+notificaciones `UNREAD` no expiradas. Las notificaciones se limitan a código
+controlado, severidad, fecha y enlace derivado a la incidencia.
+
+`assignedByTechnician` solo está presente con
+`Support.ViewGlobalIndicators`; agrupa por responsable vigente y conserva la
+carga de usuarios inactivos. `latestCommunications` solo está presente con
+`Support.ViewCommunications`; devuelve como máximo cinco filas ordenadas por
+`occurredAt DESC, id DESC`, con canal, dirección, fecha, cliente mínimo e
+incidencia opcional. Si falta el permiso, la propiedad se omite en vez de
+simular una colección vacía.
+
+El DTO no incluye descripción de incidencia, resumen, teléfono, duración,
+contacto ni correcciones de comunicación. Cada consulta correcta crea un único
+evento `SUPPORT_DASHBOARD_VIEWED` con actor, empresa, instante, secciones
+reveladas y tamaños de las vistas previas, sin títulos, clientes, números,
+mensajes ni valores agregados. Usa `Cache-Control: private, no-store,
+max-age=0`, `Pragma: no-cache`, `Vary: Cookie` y `nosniff`. Al ser GET no usa
+CSRF, Origin, mantenimiento ni idempotencia. Respuestas: `200`, `401`, `403`,
+`409 PLATFORM_NOT_INITIALIZED`, `422` y `503 SUPPORT_DASHBOARD_BUSY` con
+`Retry-After: 3` tras agotar tres intentos de lectura consistente.
 
 ## `GET /api/support/indicators`
 

@@ -302,6 +302,33 @@ a {
   font-size: 24px;
 }
 
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 12px;
+}
+
+.summary-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: var(--foreground);
+  text-decoration: none;
+}
+
+.summary-card:hover,
+.summary-card:focus-visible {
+  border-color: var(--accent-strong);
+  background: var(--panel);
+}
+
+.summary-card strong {
+  font-size: 24px;
+}
+
 @media (max-width: 760px) {
   .ops-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));

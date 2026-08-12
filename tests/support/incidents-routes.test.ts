@@ -12,6 +12,7 @@ import { POST as participantsPost } from "@/app/api/support/incidents/[incidentI
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
 import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
 import { GET as indicatorsGet } from "@/app/api/support/indicators/route";
+import { GET as dashboardGet } from "@/app/api/support/dashboard/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
@@ -124,6 +125,41 @@ describe("support incidents HTTP contracts", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBeTruthy();
     expect(await limited.json()).toMatchObject({ code: "SUPPORT_INDICATORS_RATE_LIMITED" });
+  });
+
+  it("protects the support dashboard and keeps its GET contract strict", async () => {
+    const unauthenticated = await dashboardGet(request("/api/support/dashboard"));
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const deniedRole = await prisma.role.create({ data: { code: "SupportDashboardDenied", name: "Sin acceso al panel" } });
+    await prisma.user.create({ data: { displayName: "Sin acceso", userName: "dashboard-denied", normalizedUserName: "dashboard-denied", passwordHash: hashPassword("Cambiar-dashboard-denied-2026"), roleId: deniedRole.id } });
+    await loginAs("dashboard-denied", "Cambiar-dashboard-denied-2026");
+    const denied = await dashboardGet(request("/api/support/dashboard"));
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toMatchObject({ code: "FORBIDDEN" });
+    const viewerRole = await prisma.role.create({
+      data: {
+        code: "SupportDashboardViewer",
+        name: "Consulta de panel",
+        permissions: { create: { permission: { connect: { code: "Support.View" } } } },
+      },
+    });
+    await prisma.user.create({ data: { displayName: "Consulta de panel", userName: "dashboard-viewer", normalizedUserName: "dashboard-viewer", passwordHash: hashPassword("Cambiar-dashboard-viewer-2026"), roleId: viewerRole.id } });
+    await loginAs("dashboard-viewer", "Cambiar-dashboard-viewer-2026");
+    const restricted = await dashboardGet(request("/api/support/dashboard"));
+    const restrictedBody = await restricted.json() as Record<string, unknown>;
+    expect(restricted.status).toBe(200);
+    expect(restrictedBody).not.toHaveProperty("assignedByTechnician");
+    expect(restrictedBody).not.toHaveProperty("latestCommunications");
+    await loginAs("admin", password);
+    const invalid = await dashboardGet(request("/api/support/dashboard?companyId=forbidden"));
+    expect(invalid.status).toBe(422);
+    const response = await dashboardGet(request("/api/support/dashboard"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("pragma")).toBe("no-cache");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await response.json()).toMatchObject({ snapshot: { newCount: 0, pendingCount: 0, urgentCount: 0, mineCount: 0 }, myIncidents: [], unreadNotifications: { count: 0, items: [] }, assignedByTechnician: [], latestCommunications: [] });
   });
 
   it("requires CSRF before creating an incident", async () => {

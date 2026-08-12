@@ -425,6 +425,21 @@ Mostrará:
 
 No existirá una lista de incidencias sin responsable porque el responsable es obligatorio.
 
+La foto considera únicamente incidencias canónicas abiertas. `Pendientes` es
+la suma de `Pendiente del cliente` y `Pendiente de tercero`, aunque el panel
+mantiene visibles ambos subtotales. `Mis incidencias` son las que tienen al
+usuario de la sesión como responsable vigente; la colaboración no altera esta
+atribución.
+
+La carga nominal por técnico solo se muestra a quien posee
+`Support.ViewGlobalIndicators`. Conserva responsables inactivos mientras aún
+tengan carga abierta, para que esa carga no quede oculta. Las cinco últimas
+comunicaciones se ordenan por `occurredAt` e identificador y solo se muestran
+con `Support.ViewCommunications`; la vista resumida no expone teléfono, resumen,
+duración, contacto ni correcciones. Las notificaciones pendientes son las no
+leídas, no expiradas y destinadas al usuario de la sesión. El panel se actualiza
+al navegar o recargar y no promete entrega en tiempo real.
+
 ### 13.2 Comunicaciones
 
 Vista independiente con todas las comunicaciones, incluidas las que no generaron incidencia.

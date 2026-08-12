@@ -63,6 +63,7 @@ import {
   uploadSupportIncidentAttachment,
 } from "@/modules/support/application/incidentAttachments";
 import { getSupportIndicators } from "@/modules/support/application/indicators";
+import { getSupportDashboard } from "@/modules/support/application/dashboard";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -293,6 +294,38 @@ describe("support incidents application", () => {
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENTS_MERGED" } });
     expect(JSON.stringify(audit.payload)).not.toContain(command.reason);
     await expect(prisma.supportIncidentMerge.update({ where: { id: first.ok ? first.value.merge.id : randomUUID() }, data: { reason: "Alteración" } })).rejects.toThrow();
+  });
+
+  it("builds an opaque permission-aware support dashboard from one canonical snapshot", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const base = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, description: "Descripción que no debe salir en el panel.", priority: "MEDIUM" as const };
+    const primary = await createSupportIncident({ ...base, title: "Principal visible" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Principal visible" }), scope: "incident:create" });
+    const duplicate = await createSupportIncident({ ...base, title: "Duplicada excluida", priority: "URGENT" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Duplicada excluida", priority: "URGENT" }), scope: "incident:create" });
+    if (!primary.ok || !duplicate.ok) throw new Error("DASHBOARD_FIXTURE_NOT_CREATED");
+    const merge = { primaryIncidentId: primary.value.id, duplicateIncidentId: duplicate.value.id, expectedPrimaryVersion: 1, expectedDuplicateVersion: 1, reason: "Duplicado sintético para el panel.", confirmation: "MERGE_DUPLICATE_INCIDENT" as const };
+    const merged = await mergeSupportIncidents(merge, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentMergeRequest(merge), scope: "support:incident-merge" });
+    if (!merged.ok) throw new Error(merged.error.code);
+    const communication = { customerId: customer.id, channel: "PHONE" as const, direction: "INBOUND" as const, occurredAt: new Date().toISOString(), contactId: null, contactNumber: "+34910000999", durationSeconds: 25, summary: "Resumen secreto del panel.", result: "INFORMATION_PROVIDED" as const, incidentId: primary.value.id };
+    const createdCommunication = await createSupportCommunication(communication, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(communication), scope: "communication:create" });
+    if (!createdCommunication.ok) throw new Error(createdCommunication.error.code);
+
+    const result = await getSupportDashboard(actor, { correlationId: "support-dashboard-test" });
+    expect(result).toMatchObject({ ok: true, value: { snapshot: { newCount: 1, urgentCount: 0, mineCount: 1 }, myIncidents: [{ id: primary.value.id }], assignedByTechnician: [{ id: actor.id, count: 1 }], latestCommunications: [{ id: createdCommunication.value.id }], unreadNotifications: { count: expect.any(Number) } } });
+    expect(JSON.stringify(result)).not.toContain(communication.summary);
+    expect(JSON.stringify(result)).not.toContain(communication.contactNumber);
+    expect(JSON.stringify(result)).not.toContain(base.description);
+    const restricted = await getSupportDashboard({ ...actor, permissions: ["Support.View"] });
+    expect(restricted.ok && "assignedByTechnician" in restricted.value).toBe(false);
+    expect(restricted.ok && "latestCommunications" in restricted.value).toBe(false);
+    const otherRole = await prisma.role.create({ data: { code: "SupportDashboardOther", name: "Otro técnico", permissions: { create: { permission: { connect: { code: "Support.View" } } } } } });
+    const other = await prisma.user.create({ data: { displayName: "Otro técnico", userName: "dashboard-other", normalizedUserName: "dashboard-other", passwordHash: hashPassword("Cambiar-dashboard-other-2026"), roleId: otherRole.id } });
+    const otherResult = await getSupportDashboard({ id: other.id, displayName: other.displayName, userName: other.userName, role: { code: otherRole.code, name: otherRole.name }, permissions: ["Support.View"] });
+    expect(otherResult).toMatchObject({ ok: true, value: { snapshot: { mineCount: 0 }, myIncidents: [], unreadNotifications: { count: 0, items: [] } } });
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_DASHBOARD_VIEWED" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(primary.value.title);
+    expect(JSON.stringify(audit.payload)).not.toContain(customer.legalName);
   });
 
   it("serializes concurrent merges over the same duplicate", async () => {

@@ -360,6 +360,13 @@ filtro por técnico; la foto mostró una única incidencia canónica abierta y l
 cabecera conservó `STAGING`, `crigestion_staging` y `AEAT TEST`. Health local y
 público respondieron íntegramente `ok` tras la promoción.
 
+El corte local siguiente completa el panel principal de Atención al cliente
+sin alterar persistencia. Una lectura `REPEATABLE READ` reúne contadores de
+incidencias canónicas abiertas, incidencias propias, avisos no leídos, carga por
+técnico condicionada a permiso global y últimas comunicaciones condicionadas a
+su permiso específico. Las proyecciones omiten textos y teléfonos, el contrato
+HTTP no admite parámetros y una única auditoría opaca registra cada foto.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:
