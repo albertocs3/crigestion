@@ -14,11 +14,11 @@ Estado verificado el 2026-08-20:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extensiones `btree_gist` y `pg_trgm` instaladas.
-- Release activa `staging-2026.08.20-rc4`.
-- Commit `2802a62746463c62af6208e15cca084c511d740b`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.08.20-rc4` y
+- Release activa `staging-2026.08.20-rc5`.
+- Commit `307793852bd44de8cc17f8ba0a7c79cb8ee2949f`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.20-rc5` y
   enlace `/opt/crigestion-staging/current`.
-- 153 migraciones aplicadas y 0 incompletas.
+- 154 migraciones aplicadas y 0 incompletas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
 - Health local y publico en estado `ok` con HTTP 200.
 - Backup PostgreSQL diario y health cada cinco minutos activos mediante timers.
@@ -215,10 +215,13 @@ parametrizado sin su env romperia el aviso instalado.
 11. Arrancar el worker y exigir entonces health completo HTTP 200.
 
 Tras el migrador y `npm prune --omit=dev`, normalizar a
-`root:crigestion-staging-release` y modo `0750` la biblioteca
-`node_modules/.prisma/client/libquery_engine-*.so.node`. La unidad runtime
-necesita lectura y ejecucion de ese archivo; un modo `0711` provoca
-`PrismaClientInitializationError` y exige rollback del enlace.
+`root:crigestion-staging-release` y modo `0750` tanto la biblioteca
+`node_modules/.prisma/client/libquery_engine-*.so.node` como el binario
+`node_modules/@esbuild/linux-x64/bin/esbuild`. El runtime necesita ejecutar
+ambos artefactos: Prisma sirve a la aplicación y `tsx` usa esbuild en los
+workers VeriFactu y de reactivación. Un modo `0640`/`0711` incorrecto provoca
+`EACCES` o `PrismaClientInitializationError` y debe corregirse antes de dar por
+terminada la promoción.
 
 La unidad migradora tiene un timeout deliberado de 30 minutos. Observar
 `systemctl status` y el journal ante bloqueos; no matar arbitrariamente una

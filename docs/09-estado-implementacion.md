@@ -481,7 +481,8 @@ reactivación y health quedaron activos, y los dos one-shot informaron su últim
 `Result=success`. Producción no se consultó ni modificó y el acceso SSH temporal
 permanece activo.
 
-Sobre `rc4` se ha integrado localmente, todavía sin desplegar, la edición
+La release inmutable `staging-2026.08.20-rc5`, commit
+`307793852bd44de8cc17f8ba0a7c79cb8ee2949f`, integra la edición
 versionada de los datos principales de una incidencia. El responsable vigente
 o un Administrador con `Support.ManageAssigned` puede corregir título,
 descripción, categoría y tienda indicando un motivo. La operación usa bloqueo,
@@ -491,14 +492,35 @@ versión y rechaza una proyección incompleta. La duplicada fusionada continúa 
 solo lectura y la auditoría omite los textos y el motivo. El cambio de cliente
 queda fuera de esta rebanada porque la relación vigente con comunicaciones usa
 cascada y modificarla sin un flujo específico alteraría historia ya registrada.
-La migración local `20260820030000_add_support_incident_details_changes` se ha
-aplicado desde cero en la base desechable; no se ha aplicado aún en staging.
+La migración `20260820030000_add_support_incident_details_changes` se aplicó
+desde cero en la base desechable y mediante la unidad controlada en staging,
+que quedó con 154 migraciones completas y cero incompletas.
 La regresión completa de Soporte superó 69 pruebas y la suite de aplicación,
 incluidos replay tras reasignación, carrera serializable, referencias inactivas,
 incidencia finalizada, duplicada fusionada y bypasses SQL, superó 26 pruebas.
 Prisma Validate, TypeScript, ESLint y el build optimizado quedaron verdes. La
 auditoría npm conserva las cuatro vulnerabilidades altas transitivas ya
 documentadas de `deepmerge-ts`/Prisma y `nanoid`; no se modificaron dependencias.
+
+El artefacto aislado de `rc5` tiene build ID `Hueffmisi15U2jaSfDISL`. Antes de
+migrar se generó y verificó por SHA-256 y catálogo `pg_restore` el backup
+`crigestion_staging-auto-20260820T104620Z.dump`, de 1.469.110 bytes. El primer
+intento del migrador terminó antes de conectar por faltar ejecución en el
+`schema-engine`; tras restaurar su modo, la unidad aplicó la única migración y
+terminó con `Result=success`. Después de `npm prune`, esbuild quedó también sin
+ejecución y afectó brevemente al arranque de los dos workers. Se corrigió a
+`0750`, el worker VeriFactu volvió a `TEST: idle` y la ejecución repetida del
+one-shot de reactivación terminó `SUBSCRIPTION_REACTIVATION_AUTOMATION_OK` con
+cero cambios. Health local y público respondieron HTTP 200 con todos los
+componentes en `ok`, los timers permanecieron activos y no quedaron unidades
+fallidas. Producción no se consultó ni modificó; el acceso SSH temporal sigue
+activo.
+
+La comprobación autenticada con `TECNICO_SOPORTE` confirmó que una incidencia
+ajena no muestra la edición de datos y que la duplicada fusionada continúa
+identificando su principal sin exponer controles de mutación. Este usuario no
+tiene incidencias propias en staging; la UAT de una corrección persistente desde
+el formulario queda pendiente de crear o asignarle un registro sintético.
 
 ## 5. Riesgos y trabajo posterior
 
