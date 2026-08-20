@@ -371,6 +371,24 @@ La promoción conservó 151 migraciones, VeriFactu TEST y health íntegro. La UA
 visual autenticada queda pendiente porque la sesión disponible expiró y el
 servidor redirigió correctamente a login; no se introdujeron credenciales.
 
+El candidato local posterior integra Atención al cliente en la ficha del
+cliente sin modificar persistencia. Añade una proyección mínima y consistente
+de incidencias abiertas, finalizadas y comunicaciones condicionadas por RBAC,
+con auditoría única y contrato HTTP sin caché. Las duplicadas permanecen
+visibles en el histórico con enlace a su principal; no se recuperan ni exponen
+resúmenes, teléfonos, correcciones ni descripciones. Los enlaces de alta
+reutilizan las mutaciones existentes y solo preseleccionan un `customerId`
+presente en las referencias autorizadas. Esta rebanada todavía no se ha
+promovido a staging ni cambia la release activa `staging-2026.08.12-rc3`.
+La validación local pasó typecheck, lint, build, 58 pruebas de Soporte y 30
+pruebas aisladas de Clientes. La ejecución paralela conjunta de Clientes y
+Soporte no fue una señal válida: dos suites antiguas de direcciones intentaron
+eliminar clientes mientras otras conservaban contactos y fallaron por la FK
+`customer_contacts_customerId_fkey`; aisladas, las suites proporcionales
+quedaron verdes. `npm audit --audit-level=high` continúa señalando cuatro
+vulnerabilidades transitivas ya presentes en `deepmerge-ts`/Prisma y `nanoid`;
+no se alteraron dependencias dentro de esta rebanada.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

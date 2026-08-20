@@ -476,6 +476,19 @@ La ficha del cliente incluirá:
 - Acceso a la creación de una comunicación.
 - Acceso a la creación de una incidencia con el cliente ya seleccionado.
 
+La integración no amplía por sí sola el acceso del técnico a la ficha fiscal o
+económica del cliente: la ficha continúa exigiendo `Customers.View`. Dentro de
+ella, las incidencias se consultan únicamente con `Support.View` y las
+comunicaciones solo con `Support.ViewCommunications`. Las acciones de alta
+requieren además `Support.Create` o `Support.ManageCommunications`, según
+corresponda, y reutilizan los contratos protegidos con CSRF e idempotencia.
+
+La vista muestra como máximo las diez filas más recientes de cada bloque y
+enlaza a los listados completos filtrados por cliente. Las incidencias
+fusionadas se conservan entre las finalizadas e identifican su principal. La
+proyección de comunicaciones no incluye número utilizado, resumen ni
+correcciones.
+
 ### 13.5 Categorías
 
 Pantalla administrativa para crear, modificar, activar y desactivar categorías.

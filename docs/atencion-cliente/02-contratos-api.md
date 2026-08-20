@@ -2,7 +2,7 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas, notificaciones internas persistentes y un panel operativo de soporte.
+La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas, notificaciones internas persistentes, un panel operativo de soporte y el contexto de soporte integrado en la ficha del cliente.
 
 ## Permisos
 
@@ -55,6 +55,42 @@ max-age=0`, `Pragma: no-cache`, `Vary: Cookie` y `nosniff`. Al ser GET no usa
 CSRF, Origin, mantenimiento ni idempotencia. Respuestas: `200`, `401`, `403`,
 `409 PLATFORM_NOT_INITIALIZED`, `422` y `503 SUPPORT_DASHBOARD_BUSY` con
 `Retry-After: 3` tras agotar tres intentos de lectura consistente.
+
+## `GET /api/customers/{customerId}/support-context`
+
+Lectura autenticada y auditada para integrar Atención al cliente en la ficha
+del cliente. Exige conjuntamente `Customers.View` y `Support.View`; no concede
+acceso a la ficha a un usuario que solo tenga permisos de soporte. La sección
+`communications` solo está presente si el actor conserva además
+`Support.ViewCommunications`.
+
+No admite query string. El identificador de ruta es UUID estricto y la empresa
+se deriva exclusivamente de la instalación. Todas las consultas de soporte se
+acotan por `companyId` y `customerId` dentro de una transacción
+`REPEATABLE READ`. Devuelve una foto con fecha, hasta diez incidencias abiertas
+canónicas, hasta diez finalizadas y sus totales. Las duplicadas cerradas se
+conservan en el histórico finalizado con `mergedInto` para no ocultar la
+trazabilidad.
+
+Las comunicaciones, cuando están autorizadas, se limitan a fecha, canal,
+dirección, resultado e incidencia opcional. El DTO nunca incluye descripción
+de incidencia, resumen, número utilizado, contacto ni correcciones. Una lectura
+correcta crea un único evento `SUPPORT_CUSTOMER_CONTEXT_VIEWED` con actor,
+empresa, cliente, secciones reveladas y tamaños de las vistas previas, sin
+títulos, textos ni datos económicos.
+
+Usa `Cache-Control: private, no-store, max-age=0`, `Pragma: no-cache`,
+`Vary: Cookie` y `nosniff`. Al ser GET no usa CSRF, Origin, mantenimiento ni
+idempotencia. Respuestas: `200`, `401`, `403`, `404
+SUPPORT_CUSTOMER_NOT_FOUND`, `409 PLATFORM_NOT_INITIALIZED`, `422` y `503
+SUPPORT_CUSTOMER_CONTEXT_BUSY` con `Retry-After: 3` tras agotar tres intentos
+de lectura consistente.
+
+Los accesos de alta desde la ficha son enlaces a los formularios existentes
+con `customerId` preseleccionado. El cliente solo se preselecciona si pertenece
+al catálogo autorizado; un valor inválido o desconocido nunca selecciona
+silenciosamente otro cliente. Las mutaciones conservan íntegros sus contratos
+Origin/CSRF, mantenimiento, validación e idempotencia.
 
 ## `GET /api/support/indicators`
 
