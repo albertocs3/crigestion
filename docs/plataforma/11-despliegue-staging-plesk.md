@@ -14,11 +14,11 @@ Estado verificado el 2026-08-20:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extensiones `btree_gist` y `pg_trgm` instaladas.
-- Release activa `staging-2026.08.20-rc5`.
-- Commit `307793852bd44de8cc17f8ba0a7c79cb8ee2949f`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.08.20-rc5` y
+- Release activa `staging-2026.08.20-rc6`.
+- Commit `c19a3b7bb952f55b9899fb050af534bf65624591`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.20-rc6` y
   enlace `/opt/crigestion-staging/current`.
-- 154 migraciones aplicadas y 0 incompletas.
+- 155 migraciones completadas y 0 incompletas activas.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
 - Health local y publico en estado `ok` con HTTP 200.
 - Backup PostgreSQL diario y health cada cinco minutos activos mediante timers.

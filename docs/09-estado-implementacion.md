@@ -549,8 +549,28 @@ replay tras reasignación, autoría y pertenencia, Administrador, incidencia
 resuelta, duplicada fusionada, carrera concurrente, búsqueda vigente y barreras
 SQL. La base desechable aplicó las 155 migraciones desde cero; la regresión de
 Soporte pasó 74/74, junto con `typecheck`, `lint` y el build de producción. Dos
-revisiones independientes cerraron sin P0/P1. Esta rebanada permanece local
-hasta su despliegue aislado posterior en staging.
+revisiones independientes cerraron sin P0/P1 antes del despliegue aislado.
+
+La release inmutable `staging-2026.08.20-rc6`, commit
+`c19a3b7bb952f55b9899fb050af534bf65624591`, desplegó esta rebanada con build ID
+`TWmNWxY0XgilYh4e9IDC9`. El backup previo
+`crigestion_staging-auto-20260820T113145Z.dump`, de 1.498.164 bytes y SHA-256
+`a61743089abdc5dc1d4c501906cc43acbf12374f710356c44ab72a20ed18806a`, superó
+su catálogo `pg_restore`. La unidad migradora aplicó únicamente
+`20260820040000_add_support_action_corrections`, terminó con `Result=success` y
+dejó 155 migraciones completas y cero incompletas activas. El rol UAT
+`TECNICO_SOPORTE` recibió el permiso nuevo con auditoría `SYSTEM` opaca.
+
+La UAT autenticada sobre `INC-2026-00003` registró una actuación sintética y
+la corrigió desde el formulario. La pantalla mostró la versión 2, el texto
+vigente, OLD→NEW, motivo y el evento `Actuación corregida`. PostgreSQL confirmó
+la incidencia en versión 4, exactamente una corrección append-only, un evento
+`ACTION_CORRECTED` y una auditoría `SUPPORT_INCIDENT_ACTION_CORRECTED` sin texto
+ni motivo. La búsqueda devolvió la incidencia con el texto corregido y una
+lista vacía con el texto superado. Aplicación, worker VeriFactu TEST y los
+timers quedaron activos; el one-shot de reactivación terminó sin cambios y los
+health local y público devolvieron todos los componentes en `ok`. Producción no
+se consultó ni modificó y el acceso SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 

@@ -1120,3 +1120,48 @@ VeriFactu TEST, timer de reactivaciones y timer de health quedaron activos; los
 dos servicios one-shot conservan `Result=success` y `ExecMainStatus=0`.
 Producción no se consultó ni modificó. El acceso SSH temporal se mantiene por
 indicación expresa del usuario.
+
+## 30. Corrección versionada de actuaciones
+
+El 2026-08-20 se promovió la release inmutable
+`staging-2026.08.20-rc6`, commit
+`c19a3b7bb952f55b9899fb050af534bf65624591`, con build ID
+`TWmNWxY0XgilYh4e9IDC9`. La candidata había aplicado desde cero las 155
+migraciones en la base desechable, superado 74/74 pruebas de Soporte,
+TypeScript, ESLint y el build optimizado, y cerrado dos revisiones
+independientes sin P0/P1. La auditoría npm mantuvo las cuatro vulnerabilidades
+altas transitivas ya conocidas de `deepmerge-ts`/Prisma y `nanoid`; no se
+alteraron dependencias en esta rebanada.
+
+Antes de la ventana se generó el dump
+`crigestion_staging-auto-20260820T113145Z.dump`, de 1.498.164 bytes y SHA-256
+`a61743089abdc5dc1d4c501906cc43acbf12374f710356c44ab72a20ed18806a`. El
+checksum y el catálogo `pg_restore` fueron válidos. La unidad controlada aplicó
+solo `20260820040000_add_support_action_corrections`, terminó con
+`Result=success` y dejó 155 migraciones completas y cero incompletas activas.
+Después de normalizar el artefacto se conmutó atómicamente `current` a `rc6`.
+
+El permiso `Support.CorrectActions` quedó asignado por migración al
+Administrador. Para la UAT se añadió también al rol exclusivo de staging
+`TECNICO_SOPORTE`, registrando el evento opaco
+`STAGING_UAT_ROLE_PERMISSION_GRANTED`. Con su sesión ya iniciada, el técnico
+registró en `INC-2026-00003` la actuación sintética
+`UAT-ACTION-CORRECTION-RC6 texto original sintético.` y la corrigió a
+`UAT-ACTION-CORRECTION-RC6 texto corregido y vigente.` con confirmación y motivo
+explícitos.
+
+La ficha mostró versión lógica 2, el historial OLD→NEW, actor, fecha, motivo y
+el evento `Actuación corregida`. PostgreSQL confirmó la incidencia en versión
+4, exactamente una fila append-only en
+`support_incident_action_corrections`, un evento `ACTION_CORRECTED` y una
+auditoría `SUPPORT_INCIDENT_ACTION_CORRECTED`; evidencia, evento y proyección
+comparten versiones coherentes. La auditoría no contiene texto anterior,
+texto corregido ni motivo. El listado encontró la incidencia al buscar el
+texto vigente y devolvió vacío al buscar el texto superado.
+
+Aplicación, worker VeriFactu y timers de reactivación, health, backup y bundle
+de recuperación quedaron activos. VeriFactu continuó en `TEST: idle`, el
+one-shot de reactivación terminó con cero cambios, no quedaron unidades
+fallidas y los health local y público respondieron HTTP 200 con todos los
+componentes en `ok`. Producción no se consultó ni modificó y el acceso SSH
+temporal permanece activo.
