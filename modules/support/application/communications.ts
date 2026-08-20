@@ -787,16 +787,18 @@ async function validateIncident(
   existingIncidentId: string | null = null,
 ): Promise<Failure | null> {
   if (!incidentId) return null;
-  const rows = await tx.$queryRaw<Array<{ id: string; mergedIntoIncidentId: string | null }>>(Prisma.sql`
-    SELECT "id", "mergedIntoIncidentId"
+  const rows = await tx.$queryRaw<Array<{ id: string; customerId: string; mergedIntoIncidentId: string | null }>>(Prisma.sql`
+    SELECT "id", "customerId", "mergedIntoIncidentId"
     FROM "support_incidents"
     WHERE "id" = ${incidentId}::uuid
       AND "companyId" = ${companyId}::uuid
-      AND "customerId" = ${customerId}::uuid
     FOR SHARE
   `);
   const incident = rows[0];
-  return (incident && (!incident.mergedIntoIncidentId || incidentId === existingIncidentId))
+  const preservesHistoricalLink = incidentId === existingIncidentId;
+  return (incident
+      && (incident.customerId === customerId || preservesHistoricalLink)
+      && (!incident.mergedIntoIncidentId || preservesHistoricalLink))
     ? null
     : fail(
         422,

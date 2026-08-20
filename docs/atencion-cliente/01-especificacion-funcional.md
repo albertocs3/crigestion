@@ -299,9 +299,19 @@ El motivo `Duplicada` se aplica exclusivamente mediante la fusión con una incid
 - El responsable o el administrador pueden resolver o cerrar.
 - Cualquier técnico puede reabrir una incidencia.
 - La reapertura exige motivo, conserva al responsable y cambia el estado a `En curso`.
-- El cambio de cliente queda reservado a un flujo administrativo específico aún
-  no habilitado. No se incluye en la edición ordinaria porque debe preservar sin
-  cascadas el cliente y el contacto de las comunicaciones históricas vinculadas.
+- El cambio de cliente se realiza mediante un flujo administrativo específico,
+  reservado al Administrador y separado de la edición ordinaria. Exige motivo,
+  confirmación explícita, cliente esperado y control de versión. La incidencia
+  no puede tener tienda ni participar en una fusión; si tiene tienda se retira
+  primero mediante la edición de datos principales.
+- El cambio no traslada hechos históricos: las comunicaciones ya vinculadas
+  conservan su cliente, contacto, número y correcciones originales, aunque el
+  expediente pase a mostrarse bajo el cliente corregido. Solo pueden crearse o
+  relinkarse comunicaciones nuevas cuando su cliente coincide con el cliente
+  vigente de la incidencia.
+- Cada cambio de cliente incrementa una sola versión y conserva evidencia
+  append-only con los identificadores y etiquetas anterior/corregida, actor,
+  fecha y motivo. Se permite sobre incidencias canónicas abiertas o finalizadas.
 
 ## 6. Categorías
 

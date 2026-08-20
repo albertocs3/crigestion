@@ -55,6 +55,10 @@ import {
   hashSupportIncidentDetailsChangeRequest,
 } from "@/modules/support/application/detailsChanges";
 import {
+  changeSupportIncidentCustomer,
+  hashSupportIncidentCustomerChangeRequest,
+} from "@/modules/support/application/customerChanges";
+import {
   correctSupportCommunication,
   createSupportCommunication,
   createSupportCommunicationSchema,
@@ -501,6 +505,161 @@ describe("support incidents application", () => {
     const deniedAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_DETAILS_CHANGE_DENIED", payload: { path: ["reason"], equals: "NOT_RESPONSIBLE" } } });
     expect(deniedAudit.payload).toMatchObject({ correlationId: "details-denied-0001" });
     expect(JSON.stringify(deniedAudit.payload)).not.toContain(created.value.id);
+  });
+
+  it("changes the incident customer without rewriting linked communication history", async () => {
+    const actor = await admin();
+    const previousCustomer = await createCustomerRecord(actor);
+    const correctedCustomer = await createCustomerRecord(actor, {
+      legalName: "Cliente Destino SL",
+      tradeName: "Cliente Destino",
+      taxId: "B87654321",
+      email: "destino@example.test",
+      sepaMandate: { reference: "SEPA-DESTINO-1", signedAt: "2026-07-02" },
+    });
+    const references = await listSupportReferences();
+    const create = {
+      customerId: previousCustomer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Cliente asignado incorrectamente",
+      description: "La incidencia debe conservar toda la historia al corregir el cliente.",
+      priority: "MEDIUM" as const,
+    };
+    const incident = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!incident.ok) throw new Error(incident.error.code);
+    const communicationCommand = {
+      customerId: previousCustomer.id,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt: new Date().toISOString(),
+      contactId: null,
+      contactNumber: "+34910000061",
+      durationSeconds: 75,
+      summary: "Comunicación histórica del cliente original.",
+      result: "REFERRED_TO_INCIDENT" as const,
+      incidentId: incident.value.id,
+    };
+    const communication = await createSupportCommunication(communicationCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(communicationCommand), scope: "communication:create" });
+    if (!communication.ok) throw new Error(communication.error.code);
+    const before = await prisma.supportCommunication.findUniqueOrThrow({ where: { id: communication.value.id } });
+    const command = {
+      expectedVersion: incident.value.version,
+      expectedCustomerId: previousCustomer.id,
+      customerId: correctedCustomer.id,
+      reason: "Se verifica documentalmente que el expediente pertenece al cliente de destino.",
+      confirmation: "CHANGE_INCIDENT_CUSTOMER" as const,
+    };
+    const context = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: incident.value.id, ...command }),
+      scope: `incident:${incident.value.id}:customer-change`,
+      correlationId: "customer-change-0001",
+    };
+
+    const first = await changeSupportIncidentCustomer(incident.value.id, command, actor, context);
+    const replay = await changeSupportIncidentCustomer(incident.value.id, command, actor, context);
+    expect(first).toMatchObject({ ok: true, status: 201, value: { incident: { id: incident.value.id, customerId: correctedCustomer.id, storeId: null, version: 2 } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { change: { id: first.ok ? first.value.change.id : "" } } });
+    expect(await prisma.supportIncidentCustomerChange.count({ where: { incidentId: incident.value.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: incident.value.id, eventType: "CUSTOMER_CHANGED" } })).toBe(1);
+    const reused = { ...command, reason: "Una clave usada no admite un motivo diferente." };
+    expect(await changeSupportIncidentCustomer(incident.value.id, reused, actor, { ...context, requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: incident.value.id, ...reused }) })).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
+    const storedReplay = await prisma.idempotencyRecord.findFirstOrThrow({ where: { requestHash: context.requestHash } });
+    await prisma.idempotencyRecord.update({ where: { id: storedReplay.id }, data: { responseBody: { incident: { id: incident.value.id } } } });
+    expect(await changeSupportIncidentCustomer(incident.value.id, command, actor, context)).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID" } });
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUPPORT_INCIDENT_CUSTOMER_CHANGE_DENIED" } })).toBeGreaterThanOrEqual(2);
+    const after = await prisma.supportCommunication.findUniqueOrThrow({ where: { id: communication.value.id } });
+    expect(after).toEqual(before);
+    const historicalCorrection = {
+      expectedVersion: before.version,
+      channel: communicationCommand.channel,
+      direction: communicationCommand.direction,
+      occurredAt: communicationCommand.occurredAt,
+      contactId: null,
+      contactNumber: "+34910000064",
+      durationSeconds: 90,
+      summary: "Comunicación histórica corregida sin trasladarla de cliente.",
+      result: communicationCommand.result,
+      incidentId: incident.value.id,
+      reason: "Se corrigen los datos de la llamada conservando su cliente de origen.",
+    };
+    expect(await correctSupportCommunication(communication.value.id, historicalCorrection, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: communication.value.id, ...historicalCorrection }), scope: `communication:${communication.value.id}:correct` })).toMatchObject({ ok: true, status: 201, value: { incidentId: incident.value.id, version: 2 } });
+    expect(await prisma.supportCommunication.findUniqueOrThrow({ where: { id: communication.value.id }, select: { customerId: true, incidentId: true } })).toEqual({ customerId: previousCustomer.id, incidentId: incident.value.id });
+    const detail = await getSupportIncident(incident.value.id, actor);
+    expect(detail?.customerChanges).toEqual([expect.objectContaining({ previousCustomer: expect.objectContaining({ id: previousCustomer.id }), correctedCustomer: expect.objectContaining({ id: correctedCustomer.id }) })]);
+    expect(detail?.communications).toEqual([expect.objectContaining({ id: communication.value.id, sourceCustomer: { id: previousCustomer.id, code: previousCustomer.code, legalName: previousCustomer.legalName } })]);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_CUSTOMER_CHANGED" } });
+    expect(audit.payload).toMatchObject({ correlationId: "customer-change-0001", hadLinkedCommunications: true });
+    expect(JSON.stringify(audit.payload)).not.toContain(command.reason);
+    expect(JSON.stringify(audit.payload)).not.toContain(previousCustomer.legalName);
+
+    const oldCustomerLink = { ...communicationCommand, contactNumber: "+34910000062", summary: "No puede crearse un enlace histórico nuevo." };
+    expect(await createSupportCommunication(oldCustomerLink, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(oldCustomerLink), scope: "communication:create" })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_COMMUNICATION_INCIDENT_INVALID" } });
+    const newCustomerLink = { ...oldCustomerLink, customerId: correctedCustomer.id, contactNumber: "+34910000063", summary: "Enlace nuevo con el cliente vigente." };
+    expect(await createSupportCommunication(newCustomerLink, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(newCustomerLink), scope: "communication:create" })).toMatchObject({ ok: true, status: 201 });
+
+    const detailChange = { expectedVersion: 2, title: "Cliente corregido y datos revisados", description: create.description, categoryId: create.categoryId, storeId: null, reason: "Se valida que la edición ordinaria continúa después del cambio administrativo." };
+    expect(await changeSupportIncidentDetails(incident.value.id, detailChange, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: incident.value.id, ...detailChange }), scope: `incident:${incident.value.id}:details-change` })).toMatchObject({ ok: true, status: 201, value: { incident: { version: 3 } } });
+    expect(await prisma.supportIncident.findUniqueOrThrow({ where: { id: incident.value.id }, select: { customerId: true } })).toEqual({ customerId: correctedCustomer.id });
+
+    const changeId = first.ok ? first.value.change.id : randomUUID();
+    await expect(prisma.supportIncidentCustomerChange.update({ where: { id: changeId }, data: { reason: "No mutable" } })).rejects.toThrow();
+    await expect(prisma.supportIncidentCustomerChange.delete({ where: { id: changeId } })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.supportIncident.update({ where: { id: incident.value.id }, data: { customerId: previousCustomer.id, version: { increment: 1 } } });
+    })).rejects.toThrow();
+    const currentIncident = await prisma.supportIncident.findUniqueOrThrow({ where: { id: incident.value.id } });
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!;
+    const falseChangedAt = new Date("2020-01-01T00:00:00.000Z");
+    await expect(prisma.$transaction(async (tx) => {
+      const falseChange = await tx.supportIncidentCustomerChange.create({ data: { companyId, incidentId: incident.value.id, actorUserId: actor.id, previousCustomerId: correctedCustomer.id, correctedCustomerId: previousCustomer.id, previousCustomerCode: correctedCustomer.code, previousCustomerLegalName: correctedCustomer.legalName, correctedCustomerCode: previousCustomer.code, correctedCustomerLegalName: previousCustomer.legalName, reason: "Evidencia con cronología deliberadamente inválida.", resultingVersion: currentIncident.version + 1, changedAt: falseChangedAt } });
+      await tx.supportIncident.update({ where: { id: incident.value.id }, data: { customerId: previousCustomer.id, version: currentIncident.version + 1, updatedAt: new Date() } });
+      await tx.supportIncidentEvent.create({ data: { companyId, incidentId: incident.value.id, actorUserId: actor.id, responsibleUserIdAtEvent: actor.id, customerChangeId: falseChange.id, eventType: "CUSTOMER_CHANGED", fromStatus: currentIncident.status, toStatus: currentIncident.status, resultingVersion: currentIncident.version + 1, createdAt: falseChangedAt } });
+    })).rejects.toThrow();
+  });
+
+  it("rejects customer changes with a store or merge family and serializes stale versions", async () => {
+    const actor = await admin();
+    const firstCustomer = await createCustomerRecord(actor);
+    const secondCustomer = await createCustomerRecord(actor, { legalName: "Segundo Cliente SL", tradeName: "Segundo Cliente", taxId: "B87654322", email: "segundo@example.test", sepaMandate: { reference: "SEPA-DESTINO-2", signedAt: "2026-07-03" } });
+    const references = await listSupportReferences();
+    const base = { customerId: firstCustomer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, description: "Incidencia para barreras del cambio administrativo.", priority: "MEDIUM" as const };
+    const installation = await prisma.installation.findFirstOrThrow();
+    const store = await prisma.customerStore.create({ data: { customerId: firstCustomer.id, code: "STORE-CUST-CHANGE", name: "Tienda vinculada", addressLine: "Calle Tienda 1", postalCode: "28003", city: "Madrid", country: "ES", createdById: installation.initialAdministratorId! } });
+    const withStoreCommand = { ...base, storeId: store.id, title: "Incidencia con tienda" };
+    const withStore = await createSupportIncident(withStoreCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(withStoreCommand), scope: "incident:create" });
+    if (!withStore.ok) throw new Error(withStore.error.code);
+    const storeChange = { expectedVersion: 1, expectedCustomerId: firstCustomer.id, customerId: secondCustomer.id, reason: "La tienda debe retirarse antes de cambiar el cliente.", confirmation: "CHANGE_INCIDENT_CUSTOMER" as const };
+    expect(await changeSupportIncidentCustomer(withStore.value.id, storeChange, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: withStore.value.id, ...storeChange }), scope: `incident:${withStore.value.id}:customer-change` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_CUSTOMER_CHANGE_STORE_ATTACHED" } });
+
+    const role = await prisma.role.create({ data: { code: "CustomerChangeNonAdmin", name: "No administrador con permisos", permissions: { create: ["Support.View", "Support.ChangeIncidentCustomer", "Customers.View"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const nonAdmin = await prisma.user.create({ data: { displayName: "No administrador", userName: "customer-change-non-admin", normalizedUserName: "customer-change-non-admin", passwordHash: hashPassword("Cambiar-customer-change-2026"), roleId: role.id } });
+    const unauthorized = { id: nonAdmin.id, displayName: nonAdmin.displayName, userName: nonAdmin.userName, role: { code: role.code, name: role.name }, permissions: ["Support.View", "Support.ChangeIncidentCustomer", "Customers.View"] };
+    expect(await changeSupportIncidentCustomer(withStore.value.id, storeChange, unauthorized, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: withStore.value.id, ...storeChange }), scope: `incident:${withStore.value.id}:customer-change` })).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_INCIDENT_CUSTOMER_CHANGE_FORBIDDEN" } });
+    expect(await prisma.auditEvent.findFirst({ where: { eventType: "SUPPORT_INCIDENT_CUSTOMER_CHANGE_DENIED", payload: { path: ["reason"], equals: "ROLE_OR_PERMISSION" } } })).not.toBeNull();
+
+    const concurrentCommand = { ...base, title: "Cambio concurrente de cliente" };
+    const concurrentIncident = await createSupportIncident(concurrentCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(concurrentCommand), scope: "incident:create" });
+    if (!concurrentIncident.ok) throw new Error(concurrentIncident.error.code);
+    const change = { expectedVersion: 1, expectedCustomerId: firstCustomer.id, customerId: secondCustomer.id, reason: "Dos solicitudes compiten por la misma versión.", confirmation: "CHANGE_INCIDENT_CUSTOMER" as const };
+    const concurrentResults = await Promise.all([1, 2].map(() => changeSupportIncidentCustomer(concurrentIncident.value.id, change, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: concurrentIncident.value.id, ...change }), scope: `incident:${concurrentIncident.value.id}:customer-change` })));
+    expect(concurrentResults.filter((result) => result.ok && result.status === 201)).toHaveLength(1);
+    expect(concurrentResults.filter((result) => !result.ok && result.error.code === "SUPPORT_INCIDENT_VERSION_CONFLICT")).toHaveLength(1);
+    expect(await prisma.supportIncidentCustomerChange.count({ where: { incidentId: concurrentIncident.value.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: concurrentIncident.value.id, eventType: "CUSTOMER_CHANGED" } })).toBe(1);
+    const primary = await createSupportIncident({ ...base, title: "Principal del grupo" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Principal del grupo" }), scope: "incident:create" });
+    const duplicate = await createSupportIncident({ ...base, title: "Duplicada del grupo" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...base, title: "Duplicada del grupo" }), scope: "incident:create" });
+    if (!primary.ok || !duplicate.ok) throw new Error("CUSTOMER_CHANGE_FIXTURE_NOT_CREATED");
+    const mergeCommand = { primaryIncidentId: primary.value.id, duplicateIncidentId: duplicate.value.id, expectedPrimaryVersion: 1, expectedDuplicateVersion: 1, reason: "Fusión previa a la barrera de cliente.", confirmation: "MERGE_DUPLICATE_INCIDENT" as const };
+    const merged = await mergeSupportIncidents(mergeCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentMergeRequest(mergeCommand), scope: "support:incident-merge" });
+    if (!merged.ok) throw new Error(merged.error.code);
+    for (const target of [merged.value.primary, merged.value.duplicate]) {
+      const command = { expectedVersion: target.version, expectedCustomerId: firstCustomer.id, customerId: secondCustomer.id, reason: "No se permite separar una familia fusionada.", confirmation: "CHANGE_INCIDENT_CUSTOMER" as const };
+      expect(await changeSupportIncidentCustomer(target.id, command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: target.id, ...command }), scope: `incident:${target.id}:customer-change` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_CUSTOMER_CHANGE_MERGED" } });
+    }
   });
 
   it("merges two active incidents atomically without moving their history", async () => {
@@ -2248,6 +2407,7 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" DISABLE TRIGGER "support_incident_details_changes_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_customer_changes" DISABLE TRIGGER "support_incident_customer_changes_append_only"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
     );
@@ -2274,6 +2434,7 @@ async function reset() {
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
+    await tx.supportIncidentCustomerChange.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
     await tx.supportIncidentActionCorrection.deleteMany();
     await tx.supportIncidentCategoryChange.deleteMany();
@@ -2303,6 +2464,7 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" ENABLE TRIGGER "support_incident_details_changes_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_customer_changes" ENABLE TRIGGER "support_incident_customer_changes_append_only"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );

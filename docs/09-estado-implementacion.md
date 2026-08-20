@@ -24,7 +24,7 @@ Fecha de corte: 2026-08-20.
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
 | Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata, programada supervisada y automatizada con worker monitorizado, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
-| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones con corrección versionada de texto, categorías administrables con edición y estado versionados, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros, notificaciones persistentes e indicadores propios/globales con tiempos activos. La entrega de avisos se refresca al navegar según ADR-0016. |
+| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad, corrección administrativa de cliente y fusión de duplicadas con evidencia append-only, actuaciones con corrección versionada de texto, categorías administrables con edición y estado versionados, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros, notificaciones persistentes e indicadores propios/globales con tiempos activos. La entrega de avisos se refresca al navegar según ADR-0016. |
 | Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
 `Operativa inicial` significa que existe una rebanada integrada y probada, no
@@ -610,6 +610,18 @@ nombre, descripción, color ni ninguno de los motivos UAT. La categoría
 inactiva continúa disponible en filtros históricos con etiqueta explícita. El
 health permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
+
+El siguiente corte local incorpora el cambio administrativo y versionado del
+cliente de una incidencia. El contrato separado exige rol Administrador y los
+permisos `Support.View`, `Support.ChangeIncidentCustomer` y `Customers.View`,
+además de Origin/CSRF, confirmación, cliente esperado, idempotencia, cuota y
+versión optimista. La operación queda bloqueada si existe tienda o si la
+incidencia participa en una fusión. PostgreSQL exige una evidencia append-only
+y un evento `CUSTOMER_CHANGED` por versión. La FK de comunicaciones deja de
+cascadear el cliente: cada comunicación histórica conserva cliente, contacto,
+número y correcciones, mientras los enlaces nuevos siguen exigiendo el cliente
+vigente de la incidencia. Esta rebanada todavía no se ha desplegado en staging;
+`rc7` continúa siendo la release activa y producción permanece fuera de alcance.
 
 ## 5. Riesgos y trabajo posterior
 

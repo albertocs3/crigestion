@@ -59,6 +59,7 @@ const platformPermissions = [
   ["Support.ViewCommunications", "Consultar comunicaciones de clientes"],
   ["Support.ManageCommunications", "Registrar y corregir comunicaciones de clientes"],
   ["Support.ManageCategories", "Gestionar categorias de incidencias"],
+  ["Support.ChangeIncidentCustomer", "Corregir administrativamente el cliente de una incidencia"],
   ["Support.MergeIncidents", "Fusionar incidencias duplicadas"],
   ["Support.ViewIndicators", "Consultar indicadores propios de atencion al cliente"],
   ["Support.ViewGlobalIndicators", "Consultar indicadores globales de atencion al cliente"],

@@ -22,6 +22,7 @@ operativo de soporte y el contexto de soporte integrado en la ficha del cliente.
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
 - `Support.ManageCommunications` + `Support.ViewCommunications`: alta y corrección de comunicaciones.
 - `Support.ManageCategories` + `Support.View`: pantalla, creación y cambios versionados de categorías.
+- `Support.ChangeIncidentCustomer` + `Support.View` + `Customers.View`: cambio administrativo del cliente de una incidencia; se concede solo al rol Administrador.
 - `Support.ManageAttachments` + `Support.View`: carga de adjuntos por el responsable, un colaborador activo o Administrador.
 - `Support.DownloadAttachments` + `Support.View`: descarga de adjuntos de incidencias visibles.
 
@@ -341,9 +342,8 @@ Título y descripción conservan los límites de la incidencia; el motivo contie
 entre 3 y 500 caracteres. Una categoría distinta debe estar activa y pertenecer
 a la empresa. Una tienda distinta debe estar activa y pertenecer al cliente de
 la incidencia. Se permite conservar una categoría o tienda histórica que haya
-quedado inactiva. La operación no admite `customerId`: cambiar de cliente exige
-un flujo administrativo posterior que preserve las comunicaciones históricas y
-no active la cascada relacional actual.
+quedado inactiva. La operación no admite `customerId`: el cambio administrativo
+usa el contrato específico siguiente y preserva las comunicaciones históricas.
 
 La incidencia duplicada fusionada es de solo lectura. Una incidencia canónica
 `RESOLVED` o `CLOSED` sí puede corregir estos datos sin alterar su ciclo. El
@@ -367,6 +367,58 @@ evento ni auditoría. Errores estables: `SUPPORT_INCIDENT_DETAILS_FORBIDDEN`,
 La cuota persistente admite 20 intentos por actor y empresa en 15 minutos y
 devuelve `429` con el tiempo restante en `Retry-After`; el agotamiento de tres
 intentos serializables devuelve `503` con `Retry-After: 3`.
+
+## `POST /api/support/incidents/{incidentId}/customer-changes`
+
+Requiere simultáneamente `Support.View`, `Support.ChangeIncidentCustomer`,
+`Customers.View` y el rol `Administrador`. La ruta valida los tres permisos y
+la aplicación vuelve a validarlos, exige el rol y audita su denegación. Aplica
+Origin/CSRF, mantenimiento, `application/json`, cuerpo
+estricto máximo de 4 KiB, `Idempotency-Key`, cuota persistente y control
+optimista. El cuerpo es:
+
+```json
+{
+  "expectedVersion": 3,
+  "expectedCustomerId": "uuid-cliente-vigente",
+  "customerId": "uuid-cliente-corregido",
+  "reason": "Se contrasta la titularidad correcta del expediente.",
+  "confirmation": "CHANGE_INCIDENT_CUSTOMER"
+}
+```
+
+El cliente corregido puede estar activo o inactivo. La incidencia debe ser
+canónica, no puede ser una duplicada ni una principal con duplicadas y debe
+tener `storeId = null`; si conserva tienda, el Administrador la retira primero
+con `detail-changes`. Se admiten incidencias abiertas, resueltas o cerradas. La
+operación incrementa exactamente una versión, crea una evidencia append-only
+OLD→NEW, un evento `CUSTOMER_CHANGED` y auditoría opaca. El detalle muestra como
+máximo los 100 cambios más recientes y conserva el resto en PostgreSQL.
+La pantalla ofrece búsqueda acotada por código o razón social y no carga el
+directorio completo de clientes en el HTML.
+
+Las comunicaciones existentes no cambian de cliente ni de contacto y pueden
+seguir corrigiéndose conservando su enlace histórico. Después del cambio, una
+comunicación nueva o relinkada solo puede apuntar a la incidencia si pertenece
+al cliente vigente. La incidencia deja el contexto del cliente anterior y pasa
+al nuevo; las comunicaciones históricas continúan en el contexto de su cliente
+original. PostgreSQL usa una FK por incidencia/empresa con `ON UPDATE RESTRICT`
+y triggers de enlace para evitar cascadas o vínculos cruzados nuevos.
+
+La primera respuesta es `201`; el replay idéntico devuelve `200` sin duplicar
+versión, evidencia, evento ni auditoría. La cuota admite 10 intentos por actor y
+empresa cada 15 minutos; el replay válido queda exento. Errores estables:
+`SUPPORT_INCIDENT_CUSTOMER_CHANGE_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`,
+`SUPPORT_CUSTOMER_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`,
+`SUPPORT_INCIDENT_CUSTOMER_EXPECTATION_CONFLICT`,
+`SUPPORT_INCIDENT_CUSTOMER_UNCHANGED`,
+`SUPPORT_INCIDENT_CUSTOMER_CHANGE_STORE_ATTACHED`,
+`SUPPORT_INCIDENT_CUSTOMER_CHANGE_MERGED`,
+`SUPPORT_INCIDENT_CUSTOMER_CHANGE_RATE_LIMITED`,
+`SUPPORT_INCIDENT_CUSTOMER_CHANGE_BUSY`, `IDEMPOTENCY_KEY_REUSED` e
+`IDEMPOTENCY_REPLAY_INVALID`, además de los errores HTTP comunes. `429` incluye
+el tiempo restante en `Retry-After`; tras tres conflictos serializables se
+devuelve `503` con `Retry-After: 3`.
 
 ## `POST /api/support/incidents/{incidentId}/participant-changes`
 
@@ -480,7 +532,7 @@ la misma convención inclusiva de Madrid y el máximo de 366 días. El cursor es
 firmado y ligado a los filtros; parámetros desconocidos, repetidos, rangos
 incompletos o un cursor reutilizado con otra consulta devuelven `422`. Un UUID
 válido inexistente o ajeno produce una colección vacía y no permite enumerar
-recursos. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada; una corrección puede conservar el enlace histórico que ya existía antes de la fusión.
+recursos. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada o hacia una incidencia cuyo cliente vigente sea distinto; una corrección puede conservar el enlace histórico que ya existía antes de la fusión o antes de un cambio administrativo de cliente.
 
 `GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. `contactId` es opcional para históricos, pero cuando se informa debe pertenecer al cliente, estar activo y contener exactamente el número utilizado para el canal seleccionado. `contactNumber` permanece como instantánea aunque el maestro cambie posteriormente.
 
@@ -504,6 +556,7 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 - Las fusiones son append-only y únicas por incidencia duplicada. PostgreSQL exige el enlace, cierre `DUPLICATE`, versiones consecutivas y eventos coincidentes en principal y duplicada; una fusionada no puede reabrirse, recibir nuevos enlaces de comunicaciones ni convertirse en principal de otra cadena.
 - Los cambios de participación son append-only; las bajas conservan la incorporación original y PostgreSQL exige evidencia enlazada para alta, retirada y reasignación.
 - Las comunicaciones no se borran y cada actualización exige una corrección exacta append-only con versión consecutiva.
+- Los cambios administrativos de cliente son append-only, incrementan una sola versión y exigen un evento `CUSTOMER_CHANGED` coincidente. PostgreSQL impide aplicarlos con tienda o sobre familias fusionadas y no permite que la FK de comunicaciones traslade el cliente histórico por cascada.
 - No existe borrado físico de incidencias en la API.
 
 ## Notificaciones internas

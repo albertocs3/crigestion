@@ -171,6 +171,7 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     result: "RESOLVED_NO_FOLLOW_UP" | "REQUIRES_FOLLOW_UP" | "NO_ANSWER" | "INFORMATION_PROVIDED" | "REFERRED_TO_INCIDENT";
     registeredBy: { id: string; displayName: string };
     sourceIncident: { id: string; number: string };
+    sourceCustomer: { id: string; code: string; legalName: string };
   }>;
   events: Array<{
     id: string;
@@ -233,6 +234,15 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     changedAt: string;
   }>;
   detailsChangesHasMore: boolean;
+  customerChanges: Array<{
+    id: string;
+    previousCustomer: { id: string; code: string; legalName: string };
+    correctedCustomer: { id: string; code: string; legalName: string };
+    reason: string;
+    actor: { id: string; displayName: string };
+    changedAt: string;
+  }>;
+  customerChangesHasMore: boolean;
   mergedInto: { id: string; number: string } | null;
   mergedIncidents: Array<{ id: string; number: string; title: string }>;
 };
@@ -346,6 +356,7 @@ const incidentDetailSelect = {
       occurredAt: true,
       summary: true,
       result: true,
+      customer: { select: { id: true, code: true, legalName: true } },
       registeredBy: { select: { id: true, displayName: true } },
     },
   },
@@ -433,6 +444,23 @@ const incidentDetailSelect = {
       actorUser: { select: { id: true, displayName: true } },
     },
   },
+  customerChanges: {
+    orderBy: [{ resultingVersion: "desc" as const }],
+    take: 101,
+    select: {
+      id: true,
+      previousCustomerId: true,
+      correctedCustomerId: true,
+      previousCustomerCode: true,
+      previousCustomerLegalName: true,
+      correctedCustomerCode: true,
+      correctedCustomerLegalName: true,
+      reason: true,
+      resultingVersion: true,
+      changedAt: true,
+      actorUser: { select: { id: true, displayName: true } },
+    },
+  },
   mergedIntoIncident: { select: { id: true, number: true } },
   mergedDuplicates: {
     orderBy: [{ number: "asc" as const }, { id: "asc" as const }],
@@ -464,6 +492,7 @@ const incidentDetailSelect = {
           occurredAt: true,
           summary: true,
           result: true,
+          customer: { select: { id: true, code: true, legalName: true } },
           registeredBy: { select: { id: true, displayName: true } },
         },
       },
@@ -552,8 +581,9 @@ const incidentReplaySchema = z
       occurredAt: z.string().datetime(),
       summary: z.string(),
       result: z.enum(["RESOLVED_NO_FOLLOW_UP", "REQUIRES_FOLLOW_UP", "NO_ANSWER", "INFORMATION_PROVIDED", "REFERRED_TO_INCIDENT"]),
-      registeredBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
-      sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict(),
+          registeredBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+          sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict(),
+          sourceCustomer: z.object({ id: z.string().uuid(), code: z.string(), legalName: z.string() }).strict(),
     }).strict()).optional().transform((value) => value ?? []),
     events: z.array(
       z
@@ -657,6 +687,15 @@ const incidentReplaySchema = z
       changedAt: z.string().datetime(),
     }).strict()).optional().transform((value) => value ?? []),
     detailsChangesHasMore: z.boolean().optional().transform((value) => value ?? false),
+    customerChanges: z.array(z.object({
+      id: z.string().uuid(),
+      previousCustomer: z.object({ id: z.string().uuid(), code: z.string(), legalName: z.string() }).strict(),
+      correctedCustomer: z.object({ id: z.string().uuid(), code: z.string(), legalName: z.string() }).strict(),
+      reason: z.string(),
+      actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+      changedAt: z.string().datetime(),
+    }).strict()).optional().transform((value) => value ?? []),
+    customerChangesHasMore: z.boolean().optional().transform((value) => value ?? false),
     mergedInto: z
       .object({ id: z.string().uuid(), number: z.string() })
       .strict()
@@ -1561,6 +1600,7 @@ function mapIncidentDetail(row: IncidentDetailRecord, canViewCommunications: boo
       result: communication.result,
       registeredBy: communication.registeredBy,
       sourceIncident,
+      sourceCustomer: communication.customer,
     })),
     events: row.events.map((event) => ({
       id: event.id,
@@ -1619,6 +1659,15 @@ function mapIncidentDetail(row: IncidentDetailRecord, canViewCommunications: boo
       changedAt: change.changedAt.toISOString(),
     })),
     detailsChangesHasMore: row.detailsChanges.length > 100,
+    customerChanges: row.customerChanges.slice(0, 100).reverse().map((change) => ({
+      id: change.id,
+      previousCustomer: { id: change.previousCustomerId, code: change.previousCustomerCode, legalName: change.previousCustomerLegalName },
+      correctedCustomer: { id: change.correctedCustomerId, code: change.correctedCustomerCode, legalName: change.correctedCustomerLegalName },
+      reason: change.reason,
+      actor: change.actorUser,
+      changedAt: change.changedAt.toISOString(),
+    })),
+    customerChangesHasMore: row.customerChanges.length > 100,
     mergedInto: row.mergedIntoIncident,
     mergedIncidents: row.mergedDuplicates.map(({ id, number, title }) => ({ id, number, title })),
   };

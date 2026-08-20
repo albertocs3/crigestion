@@ -770,6 +770,7 @@ model Company {
   supportIncidents                           SupportIncident[]
   supportIncidentEvents                      SupportIncidentEvent[]
   supportIncidentDetailsChanges              SupportIncidentDetailsChange[]
+  supportIncidentCustomerChanges             SupportIncidentCustomerChange[]
   supportIncidentPriorityChanges             SupportIncidentPriorityChange[]
   supportIncidentMerges                      SupportIncidentMerge[]
   supportIncidentActions                     SupportIncidentAction[]
@@ -857,22 +858,24 @@ model Customer {
   createdAt            DateTime                 @default(now()) @db.Timestamptz(3)
   updatedAt            DateTime                 @updatedAt @db.Timestamptz(3)
 
-  createdBy                          User                                @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy                          User?                               @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  addresses                          CustomerAddress[]
-  stores                             CustomerStore[]
-  sepaMandates                       CustomerSepaMandate[]
-  remittanceLines                    CustomerRemittanceLine[]
-  invoices                           Invoice[]
-  credits                            CustomerCredit[]
-  creditRefunds                      CustomerCreditRefund[]
-  subscriptions                      Subscription[]
-  subscriptionRenewalReservations    SubscriptionRenewalReservation[]
-  subscriptionRenewalWaiverSnapshots SubscriptionRenewalWaiverSnapshot[]
-  supportIncidents                   SupportIncident[]
-  supportIncidentDetailsChanges      SupportIncidentDetailsChange[]
-  supportCommunications              SupportCommunication[]
-  contacts                           CustomerContact[]
+  createdBy                               User                                @relation("CustomersCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                               User?                               @relation("CustomersUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  addresses                               CustomerAddress[]
+  stores                                  CustomerStore[]
+  sepaMandates                            CustomerSepaMandate[]
+  remittanceLines                         CustomerRemittanceLine[]
+  invoices                                Invoice[]
+  credits                                 CustomerCredit[]
+  creditRefunds                           CustomerCreditRefund[]
+  subscriptions                           Subscription[]
+  subscriptionRenewalReservations         SubscriptionRenewalReservation[]
+  subscriptionRenewalWaiverSnapshots      SubscriptionRenewalWaiverSnapshot[]
+  supportIncidents                        SupportIncident[]
+  supportIncidentDetailsChanges           SupportIncidentDetailsChange[]
+  previousSupportIncidentCustomerChanges  SupportIncidentCustomerChange[]     @relation("SupportIncidentCustomerChangesPreviousCustomer")
+  correctedSupportIncidentCustomerChanges SupportIncidentCustomerChange[]     @relation("SupportIncidentCustomerChangesCorrectedCustomer")
+  supportCommunications                   SupportCommunication[]
+  contacts                                CustomerContact[]
 
   @@index([status, legalName, id])
   @@index([createdAt, id])
@@ -1292,13 +1295,13 @@ model CustomerStore {
   createdAt       DateTime            @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime            @updatedAt @db.Timestamptz(3)
 
-  customer         Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  createdBy        User              @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  updatedBy        User?             @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
-  supportIncidents SupportIncident[]
+  customer                               Customer                       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy                              User                           @relation("CustomerStoresCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy                              User?                          @relation("CustomerStoresUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+  supportIncidents                       SupportIncident[]
   previousSupportIncidentDetailsChanges  SupportIncidentDetailsChange[] @relation("SupportIncidentDetailsPreviousStore")
   correctedSupportIncidentDetailsChanges SupportIncidentDetailsChange[] @relation("SupportIncidentDetailsCorrectedStore")
-  contact          CustomerContact?
+  contact                                CustomerContact?
 
   @@unique([id, customerId])
   @@index([customerId, status, name, id])
@@ -1439,6 +1442,7 @@ model SupportIncident {
   events             SupportIncidentEvent[]
   priorityChanges    SupportIncidentPriorityChange[]
   detailsChanges     SupportIncidentDetailsChange[]
+  customerChanges    SupportIncidentCustomerChange[]
   primaryMerges      SupportIncidentMerge[]             @relation("SupportIncidentMergePrimary")
   duplicateMerge     SupportIncidentMerge?              @relation("SupportIncidentMergeDuplicate")
   actions            SupportIncidentAction[]
@@ -1481,6 +1485,7 @@ model SupportIncidentEvent {
   priorityChangeId         String?                   @db.Uuid
   detailsChangeId          String?                   @db.Uuid
   actionCorrectionId       String?                   @db.Uuid
+  customerChangeId         String?                   @db.Uuid
   mergeId                  String?                   @db.Uuid
   mergeRole                SupportIncidentMergeRole?
   resultingVersion         Int
@@ -1499,6 +1504,7 @@ model SupportIncidentEvent {
   priorityChange         SupportIncidentPriorityChange?    @relation(fields: [priorityChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_priority_incident_fkey")
   detailsChange          SupportIncidentDetailsChange?     @relation(fields: [detailsChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_details_incident_fkey")
   actionCorrection       SupportIncidentActionCorrection?  @relation(fields: [actionCorrectionId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_action_correction_incident_fkey")
+  customerChange         SupportIncidentCustomerChange?    @relation(fields: [customerChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_customer_change_incident_fkey")
   merge                  SupportIncidentMerge?             @relation(fields: [mergeId, companyId], references: [id, companyId], onDelete: Restrict, map: "support_event_merge_fkey")
   notifications          Notification[]
 
@@ -1509,6 +1515,7 @@ model SupportIncidentEvent {
   @@unique([priorityChangeId, companyId, incidentId], map: "support_event_priority_incident_key")
   @@unique([detailsChangeId, companyId, incidentId], map: "support_event_details_incident_key")
   @@unique([actionCorrectionId, companyId, incidentId], map: "support_event_action_correction_incident_key")
+  @@unique([customerChangeId, companyId, incidentId], map: "support_event_customer_change_incident_key")
   @@unique([mergeId, companyId, incidentId], map: "support_event_merge_incident_key")
   @@unique([mergeId, mergeRole], map: "support_event_merge_role_key")
   @@unique([incidentId, resultingVersion])
@@ -1568,28 +1575,28 @@ model SupportIncidentPriorityChange {
 }
 
 model SupportIncidentDetailsChange {
-  id                           String   @id @default(uuid()) @db.Uuid
-  companyId                    String   @db.Uuid
-  incidentId                   String   @db.Uuid
-  actorUserId                  String   @db.Uuid
-  customerId                   String   @db.Uuid
-  previousStoreId              String?  @db.Uuid
-  correctedStoreId             String?  @db.Uuid
-  previousCategoryId           String   @db.Uuid
-  correctedCategoryId          String   @db.Uuid
-  previousCategoryName         String   @db.VarChar(120)
-  correctedCategoryName        String   @db.VarChar(120)
-  previousStoreCode            String?  @db.VarChar(20)
-  previousStoreName            String?  @db.VarChar(160)
-  correctedStoreCode           String?  @db.VarChar(20)
-  correctedStoreName           String?  @db.VarChar(160)
-  previousTitle                String   @db.VarChar(200)
-  correctedTitle               String   @db.VarChar(200)
-  previousDescription          String   @db.VarChar(4000)
-  correctedDescription         String   @db.VarChar(4000)
-  reason                       String   @db.VarChar(500)
-  resultingVersion             Int
-  changedAt                    DateTime @default(now()) @db.Timestamptz(3)
+  id                    String   @id @default(uuid()) @db.Uuid
+  companyId             String   @db.Uuid
+  incidentId            String   @db.Uuid
+  actorUserId           String   @db.Uuid
+  customerId            String   @db.Uuid
+  previousStoreId       String?  @db.Uuid
+  correctedStoreId      String?  @db.Uuid
+  previousCategoryId    String   @db.Uuid
+  correctedCategoryId   String   @db.Uuid
+  previousCategoryName  String   @db.VarChar(120)
+  correctedCategoryName String   @db.VarChar(120)
+  previousStoreCode     String?  @db.VarChar(20)
+  previousStoreName     String?  @db.VarChar(160)
+  correctedStoreCode    String?  @db.VarChar(20)
+  correctedStoreName    String?  @db.VarChar(160)
+  previousTitle         String   @db.VarChar(200)
+  correctedTitle        String   @db.VarChar(200)
+  previousDescription   String   @db.VarChar(4000)
+  correctedDescription  String   @db.VarChar(4000)
+  reason                String   @db.VarChar(500)
+  resultingVersion      Int
+  changedAt             DateTime @default(now()) @db.Timestamptz(3)
 
   company           Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
   incident          SupportIncident         @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
@@ -1599,12 +1606,40 @@ model SupportIncidentDetailsChange {
   correctedStore    CustomerStore?          @relation("SupportIncidentDetailsCorrectedStore", fields: [correctedStoreId, customerId], references: [id, customerId], onDelete: Restrict)
   previousCategory  SupportIncidentCategory @relation("SupportIncidentDetailsPreviousCategory", fields: [previousCategoryId, companyId], references: [id, companyId], onDelete: Restrict)
   correctedCategory SupportIncidentCategory @relation("SupportIncidentDetailsCorrectedCategory", fields: [correctedCategoryId, companyId], references: [id, companyId], onDelete: Restrict)
-  event              SupportIncidentEvent?
+  event             SupportIncidentEvent?
 
   @@unique([id, companyId, incidentId], map: "support_details_change_incident_key")
   @@unique([incidentId, resultingVersion])
   @@index([incidentId, changedAt, id])
   @@map("support_incident_details_changes")
+}
+
+model SupportIncidentCustomerChange {
+  id                         String   @id @default(uuid()) @db.Uuid
+  companyId                  String   @db.Uuid
+  incidentId                 String   @db.Uuid
+  actorUserId                String   @db.Uuid
+  previousCustomerId         String   @db.Uuid
+  correctedCustomerId        String   @db.Uuid
+  previousCustomerCode       String   @db.VarChar(20)
+  previousCustomerLegalName  String   @db.VarChar(200)
+  correctedCustomerCode      String   @db.VarChar(20)
+  correctedCustomerLegalName String   @db.VarChar(200)
+  reason                     String   @db.VarChar(500)
+  resultingVersion           Int
+  changedAt                  DateTime @default(now()) @db.Timestamptz(3)
+
+  company           Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident          SupportIncident       @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  actorUser         User                  @relation("SupportIncidentCustomerChangesActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+  previousCustomer  Customer              @relation("SupportIncidentCustomerChangesPreviousCustomer", fields: [previousCustomerId], references: [id], onDelete: Restrict)
+  correctedCustomer Customer              @relation("SupportIncidentCustomerChangesCorrectedCustomer", fields: [correctedCustomerId], references: [id], onDelete: Restrict)
+  event             SupportIncidentEvent?
+
+  @@unique([id, companyId, incidentId], map: "support_customer_change_incident_key")
+  @@unique([incidentId, resultingVersion])
+  @@index([companyId, actorUserId, changedAt, id])
+  @@map("support_incident_customer_changes")
 }
 
 model SupportIncidentMerge {
@@ -1713,7 +1748,7 @@ model SupportCommunication {
   company      Company                          @relation(fields: [companyId], references: [id], onDelete: Restrict)
   customer     Customer                         @relation(fields: [customerId], references: [id], onDelete: Restrict)
   contact      CustomerContact?                 @relation(fields: [contactId, customerId], references: [id, customerId], onDelete: Restrict)
-  incident     SupportIncident?                 @relation(fields: [incidentId, companyId, customerId], references: [id, companyId, customerId], onDelete: Restrict)
+  incident     SupportIncident?                 @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
   registeredBy User                             @relation("SupportCommunicationsRegisteredBy", fields: [registeredByUserId], references: [id], onDelete: Restrict)
   corrections  SupportCommunicationCorrection[]
 
@@ -1979,6 +2014,7 @@ model User {
   supportIncidentStatusTransitions        SupportIncidentStatusTransition[]            @relation("SupportIncidentTransitionsActor")
   supportIncidentPriorityChanges          SupportIncidentPriorityChange[]              @relation("SupportIncidentPriorityChangesActor")
   supportIncidentDetailsChanges           SupportIncidentDetailsChange[]               @relation("SupportIncidentDetailsChangesActor")
+  supportIncidentCustomerChanges          SupportIncidentCustomerChange[]              @relation("SupportIncidentCustomerChangesActor")
   supportIncidentCategoryChanges          SupportIncidentCategoryChange[]              @relation("SupportIncidentCategoryChangesActor")
   supportIncidentMerges                   SupportIncidentMerge[]                       @relation("SupportIncidentMergesActor")
   primaryResponsibleIncidentMerges        SupportIncidentMerge[]                       @relation("SupportIncidentMergesPrimaryResponsible")

@@ -13,6 +13,7 @@ import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
 import { POST as detailsChangesPost } from "@/app/api/support/incidents/[incidentId]/detail-changes/route";
+import { POST as customerChangesPost } from "@/app/api/support/incidents/[incidentId]/customer-changes/route";
 import { POST as categoryChangesPost } from "@/app/api/support/categories/[categoryId]/changes/route";
 import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
 import { GET as indicatorsGet } from "@/app/api/support/indicators/route";
@@ -599,6 +600,36 @@ describe("support incidents HTTP contracts", () => {
     const forbidden = await detailsChangesPost(jsonRequest(`/api/support/incidents/${incident.id}/detail-changes`, { ...body, expectedVersion: 2, title: "Intento no autorizado" }, { csrf: viewerCsrf, key: randomUUID() }), context);
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("changes the incident customer once through the administrator-only contract", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const createBody = await payload();
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", createBody, { csrf, key: randomUUID() }));
+    const incident = (await created.json()) as { id: string; version: number };
+    const installation = await prisma.installation.findFirstOrThrow();
+    const target = await prisma.customer.create({ data: { code: randomUUID().slice(0, 8), type: "COMPANY", legalName: "Cliente destino HTTP SL", taxId: `X${randomUUID().replaceAll("-", "").slice(0, 20)}`, normalizedTaxId: randomUUID(), fiscalTreatment: "DOMESTIC", fiscalAddressLine: "Calle Dos 2", fiscalPostalCode: "28002", fiscalCity: "Madrid", fiscalCountry: "ES", createdById: installation.initialAdministratorId! } });
+    const body = { expectedVersion: incident.version, expectedCustomerId: createBody.customerId, customerId: target.id, reason: "Corrección administrativa contrastada por HTTP.", confirmation: "CHANGE_INCIDENT_CUSTOMER" };
+    const context = { params: Promise.resolve({ incidentId: incident.id }) };
+    const url = `/api/support/incidents/${incident.id}/customer-changes`;
+    const missingCsrf = await customerChangesPost(jsonRequest(url, body, { key: randomUUID() }), context);
+    expect(missingCsrf.status).toBe(403);
+    expect(await missingCsrf.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const invalid = await customerChangesPost(jsonRequest(url, { ...body, customerId: createBody.customerId, unknown: true }, { csrf, key: randomUUID() }), context);
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    const key = randomUUID();
+    const first = await customerChangesPost(jsonRequest(url, body, { csrf, key }), context);
+    const replay = await customerChangesPost(jsonRequest(url, body, { csrf, key }), context);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const firstBody = (await first.json()) as { incident: { id: string; customerId: string; version: number }; change: { id: string } };
+    const replayBody = (await replay.json()) as { change: { id: string } };
+    expect(firstBody.incident).toEqual({ id: incident.id, customerId: target.id, storeId: null, version: 2 });
+    expect(replayBody.change.id).toBe(firstBody.change.id);
+    expect(await prisma.supportIncidentCustomerChange.count({ where: { incidentId: incident.id } })).toBe(1);
   });
 
   it("corrects an action once through the protected strict contract", async () => {
@@ -1229,6 +1260,7 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" DISABLE TRIGGER "support_incident_details_changes_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_customer_changes" DISABLE TRIGGER "support_incident_customer_changes_append_only"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
     );
@@ -1258,6 +1290,7 @@ async function reset() {
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
+    await tx.supportIncidentCustomerChange.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
     await tx.supportIncidentActionCorrection.deleteMany();
     await tx.supportIncidentCategoryChange.deleteMany();
@@ -1290,6 +1323,7 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" ENABLE TRIGGER "support_incident_details_changes_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_customer_changes" ENABLE TRIGGER "support_incident_customer_changes_append_only"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );
