@@ -412,10 +412,18 @@ desconocido dejó el formulario deshabilitado y no seleccionó silenciosamente
 otro cliente. La vista móvil a 390 x 844 mantuvo la sección visible y sin
 desbordamiento horizontal de página. PostgreSQL registró
 `SUPPORT_CUSTOMER_CONTEXT_VIEWED` con identificadores, capacidades y conteos,
-sin título, descripción, resumen, teléfono, IBAN, NIF ni motivo. Queda pendiente
-la UAT específica con rol Técnico para verificar visualmente la omisión de datos
-económicos y de los bloques sin permiso; las pruebas automáticas de RBAC ya
-cubren ese contrato.
+sin título, descripción, resumen, teléfono, IBAN, NIF ni motivo.
+
+La UAT autenticada de Técnico del mismo día utilizó el rol mínimo
+`TECNICO_SOPORTE`, con doce permisos operativos de Soporte y sin
+`Customers.View` ni permisos económicos, fiscales o de plataforma. El inicio
+mostró únicamente Atención al cliente; el panel omitió carga global y gestión de
+categorías, las comunicaciones permanecieron disponibles y los indicadores
+ofrecieron solo el alcance propio. El listado y la ficha fiscal de Clientes
+respondieron con denegación completa. El detalle de una incidencia ajena fue
+consultable, incluido el contenido histórico agregado de su duplicada, pero no
+mostró controles de mutación. Con estas comprobaciones queda cerrada la UAT
+autenticada de esta rebanada.
 
 ## 5. Riesgos y trabajo posterior
 
