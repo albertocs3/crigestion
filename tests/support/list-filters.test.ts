@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { madridDateRange, supportDateOnlySchema } from "@/modules/support/application/listFilters";
+import { compactSupportListParams, madridDateRange, supportDateOnlySchema } from "@/modules/support/application/listFilters";
 import { listSupportIncidentsSchema } from "@/modules/support/application/incidents";
 import { listSupportCommunicationsSchema } from "@/modules/support/application/communications";
 
@@ -23,5 +23,19 @@ describe("support list date filters", () => {
     expect(listSupportIncidentsSchema.safeParse({ createdFrom: "2025-01-01", createdTo: "2026-01-02" }).success).toBe(false);
     expect(listSupportCommunicationsSchema.safeParse({ occurredFrom: "2026-01-01" }).success).toBe(false);
     expect(supportDateOnlySchema.safeParse("2026-02-30").success).toBe(false);
+    expect(() => supportDateOnlySchema.safeParse("")).not.toThrow();
+    expect(supportDateOnlySchema.safeParse("").success).toBe(false);
+    expect(supportDateOnlySchema.safeParse("0099-01-01").success).toBe(false);
+  });
+
+  it("removes known empty HTML controls without hiding unknown or repeated parameters", () => {
+    expect(compactSupportListParams(
+      { search: "actuación", status: "", createdFrom: "", typo: "", repeated: ["A", "B"] },
+      ["search", "status", "createdFrom"],
+    )).toEqual({
+      search: "actuación",
+      typo: "",
+      repeated: ["A", "B"],
+    });
   });
 });

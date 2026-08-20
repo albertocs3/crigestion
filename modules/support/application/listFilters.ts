@@ -5,7 +5,15 @@ import { z } from "zod";
 export const supportDateOnlySchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe tener formato YYYY-MM-DD.")
-  .refine((value) => formatDateOnly(parseDateOnly(value)) === value, "La fecha no es válida.");
+  .refine(isValidDateOnly, "La fecha no es válida.");
+
+export function compactSupportListParams<T extends Record<string, string | string[] | undefined>>(
+  params: T,
+  emptyControlKeys: readonly (keyof T & string)[],
+): Partial<T> {
+  const compactable = new Set<string>(emptyControlKeys);
+  return Object.fromEntries(Object.entries(params).filter(([key, value]) => value !== "" || !compactable.has(key))) as Partial<T>;
+}
 
 export function validateMadridDateRange(
   from: string | undefined,
@@ -41,6 +49,13 @@ export function madridDateRange(from: string, to: string): { gte: Date; lt: Date
 
 function parseDateOnly(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
+}
+
+function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (Number(value.slice(0, 4)) < 1900) return false;
+  const parsed = parseDateOnly(value);
+  return Number.isFinite(parsed.getTime()) && formatDateOnly(parsed) === value;
 }
 
 function formatDateOnly(value: Date): string {

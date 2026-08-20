@@ -3,6 +3,7 @@ import { authorizePagePermission } from "@/modules/platform/presentation/pageAcc
 import { listSupportIncidentFilterReferences, listSupportIncidents, listSupportIncidentsSchema, listSupportReferences } from "@/modules/support/application/incidents";
 import { SupportIncidentCreateForm } from "@/modules/support/presentation/SupportIncidentCreateForm";
 import { getSupportDashboard } from "@/modules/support/application/dashboard";
+import { compactSupportListParams } from "@/modules/support/application/listFilters";
 
 export const dynamic = "force-dynamic";
 type IncidentParams = { cursor?: string; status?: string; priority?: string; responsibleUserId?: string; customerId?: string; categoryId?: string; activeCollaboratorUserId?: string; createdFrom?: string; createdTo?: string; search?: string };
@@ -12,7 +13,10 @@ export default async function SupportPage({ searchParams }: Props) {
   const authorization = await authorizePagePermission("Support.View");
   if (!authorization.ok) return <Denied message={authorization.message}/>;
   const params = await searchParams;
-  const parsed = listSupportIncidentsSchema.safeParse({ limit: 25, ...params });
+  const parsed = listSupportIncidentsSchema.safeParse({
+    limit: 25,
+    ...compactSupportListParams(params, ["cursor", "status", "priority", "responsibleUserId", "customerId", "categoryId", "activeCollaboratorUserId", "createdFrom", "createdTo", "search"]),
+  });
   const safeParams: IncidentParams = parsed.success ? parsed.data : {};
   const result = parsed.success ? await listSupportIncidents(parsed.data, authorization.user) : { incidents: [], nextCursor: null, rateLimited: false, searchBusy: false, searchTooBroad: false };
   const canCreate = authorization.user.permissions.includes("Support.Create");

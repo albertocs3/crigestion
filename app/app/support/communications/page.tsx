@@ -7,6 +7,7 @@ import {
   listSupportCommunicationsSchema,
 } from "@/modules/support/application/communications";
 import { SupportCommunicationForm } from "@/modules/support/presentation/SupportCommunicationForm";
+import { compactSupportListParams } from "@/modules/support/application/listFilters";
 export const dynamic = "force-dynamic";
 type CommunicationParams = { cursor?: string; customerId?: string; channel?: string; contactId?: string; incidentId?: string; direction?: string; result?: string; occurredFrom?: string; occurredTo?: string };
 export default async function CommunicationsPage({
@@ -28,7 +29,7 @@ export default async function CommunicationsPage({
   const params = await searchParams;
   const parsed = listSupportCommunicationsSchema.safeParse({
     limit: 25,
-    ...params,
+    ...compactSupportListParams(params, ["cursor", "customerId", "channel", "contactId", "incidentId", "direction", "result", "occurredFrom", "occurredTo"]),
   });
   const safeParams: CommunicationParams = parsed.success ? parsed.data : {};
   const result = parsed.success
