@@ -755,6 +755,32 @@ igualdad de cliente en enlaces nuevos o modificados. Así no existe cascada
 sobre el cliente histórico. Producción no se consultó ni modificó y el acceso
 SSH temporal permanece activo.
 
+### 8.6 Historial paginado de correcciones de comunicaciones del 2026-08-20
+
+La release inmutable `staging-2026.08.20-rc9`, commit
+`7c60f148dd20f1054182f0094dff4add2e0b7206`, se materializó desde el tag
+publicado mediante un archivo de 1.531.118 bytes y SHA-256
+`d93fccbde46435b99aac50733e0b8184cc458eece45b2d465471ebd69bdf6c70`.
+El build aislado de staging produjo el identificador
+`4MyWWii4rPPVYcap2g2U5`.
+
+Antes del corte se creó el dump custom
+`crigestion_staging-auto-20260820T203738Z.dump`, de 1.562.833 bytes y SHA-256
+`eed227dd50096be083c7d39c432be3e155c582c17c302e6f432f08001b3cd214`;
+su catálogo se verificó con `pg_restore --list`. La release no contiene
+migraciones nuevas, por lo que no se ejecutó una unidad migradora. Tras podar
+dependencias y normalizar permisos, se detuvieron aplicación, worker y timers
+de health/reactivación, se conmutó `current` atómicamente desde `rc8` a `rc9` y
+se restauraron los cuatro servicios.
+
+La aplicación, el worker VeriFactu TEST y los timers quedaron activos; no hubo
+unidades fallidas. El health canónico terminó con `Result=success` y el health
+público devolvió HTTP 200 con aplicación, PostgreSQL, VeriFactu y worker en
+`ok`. La comprobación visual autenticada queda pendiente porque la sesión del
+navegador incrustado había expirado y mostró el login. No se introdujeron datos
+de prueba durante el smoke. Producción no se consultó ni modificó y el acceso
+SSH temporal permanece activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

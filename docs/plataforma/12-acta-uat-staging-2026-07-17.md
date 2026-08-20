@@ -1206,3 +1206,27 @@ Aplicación y worker VeriFactu TEST quedaron activos; los timers operativos
 permanecieron activos, no hubo unidades fallidas y el health público devolvió
 todos los componentes en `ok`. Producción no se consultó ni modificó. El acceso
 SSH temporal continúa activo por indicación expresa del usuario.
+
+## 32. Historial de correcciones de comunicaciones
+
+El 2026-08-20 se promovió la release inmutable
+`staging-2026.08.20-rc9`, commit
+`7c60f148dd20f1054182f0094dff4add2e0b7206`, con build ID
+`4MyWWii4rPPVYcap2g2U5`. La candidata superó 61/61 pruebas dirigidas de
+Soporte, TypeScript, ESLint, Prisma y el build optimizado, y cerró dos
+revisiones independientes sin P0/P1 ni P2 bloqueante. La auditoría npm mantuvo
+las cuatro vulnerabilidades altas transitivas ya conocidas de
+`deepmerge-ts`/Prisma y `nanoid`; no hubo cambios de dependencias.
+
+El dump predeploy
+`crigestion_staging-auto-20260820T203738Z.dump` quedó verificado por SHA-256 y
+`pg_restore --list`. No existían migraciones nuevas. La conmutación de
+`current` desde `rc8` a `rc9` fue atómica y dejó aplicación, worker VeriFactu
+TEST y timers operativos activos, sin unidades fallidas. El health canónico
+terminó con `Result=success` y el público respondió HTTP 200 con todos los
+componentes en `ok`.
+
+La UAT autenticada del historial queda abierta: al reclamar la pestaña del
+navegador incrustado, la aplicación mostró el formulario de login. No se usaron
+credenciales ni se crearon o corrigieron datos durante el smoke. Producción no
+se consultó ni modificó y el acceso SSH temporal permanece activo.

@@ -643,8 +643,10 @@ recientes, señala si existe historia anterior y resuelve las incidencias
 anterior y corregida únicamente por identificadores exactos dentro de la
 empresa. La ficha muestra solo los campos modificados y conserva la semántica
 OLD→NEW incluso después de un cambio administrativo de cliente. Esta rebanada
-todavía no se ha desplegado; `rc8` continúa activa en staging, producción sigue
-fuera de alcance y el acceso SSH temporal permanece activo.
+se desplegó como `staging-2026.08.20-rc9`, commit `7c60f14`, sin migraciones.
+La validación técnica y el health completo quedaron en `ok`; la UAT visual
+autenticada queda pendiente porque la sesión del navegador expiró. Producción
+sigue fuera de alcance y el acceso SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 
