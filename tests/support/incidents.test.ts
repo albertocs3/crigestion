@@ -64,6 +64,7 @@ import {
 } from "@/modules/support/application/incidentAttachments";
 import { getSupportIndicators } from "@/modules/support/application/indicators";
 import { getSupportDashboard } from "@/modules/support/application/dashboard";
+import { getCustomerSupportContext } from "@/modules/support/application/customerContext";
 
 const password = "Cambiar-esta-clave-2026";
 const installation: InitializeCommand = {
@@ -324,6 +325,134 @@ describe("support incidents application", () => {
     const otherResult = await getSupportDashboard({ id: other.id, displayName: other.displayName, userName: other.userName, role: { code: otherRole.code, name: otherRole.name }, permissions: ["Support.View"] });
     expect(otherResult).toMatchObject({ ok: true, value: { snapshot: { mineCount: 0 }, myIncidents: [], unreadNotifications: { count: 0, items: [] } } });
     const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_DASHBOARD_VIEWED" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(audit.payload)).not.toContain(primary.value.title);
+    expect(JSON.stringify(audit.payload)).not.toContain(customer.legalName);
+  });
+
+  it("builds a permission-aware customer support context with merged history", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const base = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      description: "Descripción privada del contexto del cliente.",
+      priority: "MEDIUM" as const,
+    };
+    const primaryCommand = { ...base, title: "Incidencia principal del cliente" };
+    const duplicateCommand = {
+      ...base,
+      title: "Incidencia duplicada del cliente",
+      priority: "HIGH" as const,
+    };
+    const primary = await createSupportIncident(primaryCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportRequest(primaryCommand),
+      scope: "incident:create",
+    });
+    const duplicate = await createSupportIncident(duplicateCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportRequest(duplicateCommand),
+      scope: "incident:create",
+    });
+    if (!primary.ok || !duplicate.ok) throw new Error("CUSTOMER_CONTEXT_FIXTURE_NOT_CREATED");
+    const mergeCommand = {
+      primaryIncidentId: primary.value.id,
+      duplicateIncidentId: duplicate.value.id,
+      expectedPrimaryVersion: 1,
+      expectedDuplicateVersion: 1,
+      reason: "Duplicado sintético para el contexto del cliente.",
+      confirmation: "MERGE_DUPLICATE_INCIDENT" as const,
+    };
+    const merge = await mergeSupportIncidents(mergeCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportIncidentMergeRequest(mergeCommand),
+      scope: "support:incident-merge",
+    });
+    if (!merge.ok) throw new Error(merge.error.code);
+    const communicationCommand = {
+      customerId: customer.id,
+      channel: "WHATSAPP" as const,
+      direction: "OUTBOUND" as const,
+      occurredAt: new Date().toISOString(),
+      contactId: null,
+      contactNumber: "+34910000888",
+      durationSeconds: null,
+      summary: "Resumen privado que no pertenece a la proyección.",
+      result: "INFORMATION_PROVIDED" as const,
+      incidentId: primary.value.id,
+    };
+    const communication = await createSupportCommunication(
+      communicationCommand,
+      actor,
+      {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportCommunicationRequest(communicationCommand),
+        scope: "communication:create",
+      },
+    );
+    if (!communication.ok) throw new Error(communication.error.code);
+
+    const result = await getCustomerSupportContext(customer.id, actor, {
+      correlationId: "customer-support-context-test",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        customerId: customer.id,
+        openIncidents: { total: 1, items: [{ id: primary.value.id }] },
+        finalizedIncidents: {
+          total: 1,
+          items: [
+            {
+              id: duplicate.value.id,
+              status: "CLOSED",
+              mergedInto: { id: primary.value.id, number: primary.value.number },
+            },
+          ],
+        },
+        communications: {
+          total: 1,
+          items: [{ id: communication.value.id, incident: { id: primary.value.id } }],
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(communicationCommand.summary);
+    expect(JSON.stringify(result)).not.toContain(communicationCommand.contactNumber);
+    expect(JSON.stringify(result)).not.toContain(base.description);
+
+    const restricted = await getCustomerSupportContext(customer.id, {
+      ...actor,
+      permissions: ["Customers.View", "Support.View"],
+    });
+    expect(restricted.ok && "communications" in restricted.value).toBe(false);
+    expect(
+      await getCustomerSupportContext(customer.id, {
+        ...actor,
+        permissions: ["Support.View"],
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: 403,
+      error: { code: "SUPPORT_CUSTOMER_CONTEXT_FORBIDDEN" },
+    });
+    expect(await getCustomerSupportContext(randomUUID(), actor)).toMatchObject({
+      ok: false,
+      status: 404,
+      error: { code: "SUPPORT_CUSTOMER_NOT_FOUND" },
+    });
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_CUSTOMER_CONTEXT_VIEWED" },
+      orderBy: { createdAt: "asc" },
+    });
+    expect(audit.payload).toMatchObject({
+      actorUserId: actor.id,
+      customerId: customer.id,
+      disclosedCommunications: true,
+      correlationId: "customer-support-context-test",
+    });
     expect(JSON.stringify(audit.payload)).not.toContain(primary.value.title);
     expect(JSON.stringify(audit.payload)).not.toContain(customer.legalName);
   });

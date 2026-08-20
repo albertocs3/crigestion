@@ -13,6 +13,7 @@ import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incide
 import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
 import { GET as indicatorsGet } from "@/app/api/support/indicators/route";
 import { GET as dashboardGet } from "@/app/api/support/dashboard/route";
+import { GET as customerSupportContextGet } from "@/app/api/customers/[customerId]/support-context/route";
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
@@ -160,6 +161,69 @@ describe("support incidents HTTP contracts", () => {
     expect(response.headers.get("vary")).toBe("Cookie");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     expect(await response.json()).toMatchObject({ snapshot: { newCount: 0, pendingCount: 0, urgentCount: 0, mineCount: 0 }, myIncidents: [], unreadNotifications: { count: 0, items: [] }, assignedByTechnician: [], latestCommunications: [] });
+  });
+
+  it("protects the customer support context and keeps its read contract strict", async () => {
+    const customerId = (await payload()).customerId;
+    const call = (id: string, suffix = "") =>
+      customerSupportContextGet(
+        request(`/api/customers/${id}/support-context${suffix}`),
+        { params: Promise.resolve({ customerId: id }) },
+      );
+
+    const unauthenticated = await call(customerId);
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+
+    const customerOnlyRole = await prisma.role.create({
+      data: {
+        code: "CustomerContextCustomerOnly",
+        name: "Solo clientes",
+        permissions: {
+          create: {
+            permission: { connect: { code: "Customers.View" } },
+          },
+        },
+      },
+    });
+    await prisma.user.create({
+      data: {
+        displayName: "Solo clientes",
+        userName: "customer-context-only",
+        normalizedUserName: "customer-context-only",
+        passwordHash: hashPassword("Cambiar-context-only-2026"),
+        roleId: customerOnlyRole.id,
+      },
+    });
+    await loginAs("customer-context-only", "Cambiar-context-only-2026");
+    const forbidden = await call(customerId);
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+
+    await loginAs("admin", password);
+    const authorized = await call(customerId);
+    expect(authorized.status).toBe(200);
+    expect(authorized.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+    expect(authorized.headers.get("vary")).toBe("Cookie");
+    expect(authorized.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await authorized.json()).toMatchObject({
+      customerId,
+      openIncidents: { total: 0, items: [] },
+      finalizedIncidents: { total: 0, items: [] },
+      communications: { total: 0, items: [] },
+    });
+
+    expect((await call(customerId, "?unexpected=true")).status).toBe(422);
+    expect((await call("not-a-uuid")).status).toBe(422);
+    const missing = await call(randomUUID());
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({
+      code: "SUPPORT_CUSTOMER_NOT_FOUND",
+    });
   });
 
   it("requires CSRF before creating an incident", async () => {
@@ -534,7 +598,20 @@ describe("support incidents HTTP contracts", () => {
     const firstBody = (await first.json()) as { id: string };
     const replayBody = (await replay.json()) as { id: string };
     expect(replayBody.id).toBe(firstBody.id);
-    expect(await prisma.supportCommunication.count()).toBe(1);
+    const second = await communicationsPost(
+      jsonRequest(
+        "/api/support/communications",
+        {
+          ...body,
+          occurredAt: new Date(Date.now() - 60_000).toISOString(),
+          summary: "Segunda comunicación para verificar el cursor filtrado.",
+        },
+        { csrf, key: randomUUID() },
+      ),
+    );
+    expect(second.status).toBe(201);
+    const secondBody = (await second.json()) as { id: string };
+    expect(await prisma.supportCommunication.count()).toBe(2);
 
     const installation = await prisma.installation.findFirstOrThrow();
     const actor = await prisma.user.findUniqueOrThrow({
@@ -543,7 +620,7 @@ describe("support incidents HTTP contracts", () => {
     const bucketKey = `support-communication-create:${installation.companyId}:${actor.id}`;
     expect(
       await prisma.rateLimitBucket.findUnique({ where: { key: bucketKey } }),
-    ).toMatchObject({ count: 1 });
+    ).toMatchObject({ count: 2 });
     await prisma.rateLimitBucket.update({
       where: { key: bucketKey },
       data: { count: 20 },
@@ -571,8 +648,27 @@ describe("support incidents HTTP contracts", () => {
     ).toBe(1);
 
     const list = await communicationsGet(
-      request("/api/support/communications"),
+      request(
+        `/api/support/communications?limit=1&customerId=${body.customerId}`,
+      ),
     );
+    const listBody = (await list.json()) as {
+      communications: Array<{ id: string }>;
+      nextCursor: string | null;
+    };
+    expect(listBody.communications).toHaveLength(1);
+    expect(listBody.communications[0]).toMatchObject({ id: firstBody.id });
+    expect(listBody.nextCursor).toEqual(expect.any(String));
+    const nextPage = await communicationsGet(
+      request(
+        `/api/support/communications?limit=1&customerId=${body.customerId}&cursor=${listBody.nextCursor}`,
+      ),
+    );
+    expect(nextPage.status).toBe(200);
+    expect(await nextPage.json()).toMatchObject({
+      communications: [{ id: secondBody.id }],
+      nextCursor: null,
+    });
     const detail = await communicationGet(
       request(`/api/support/communications/${firstBody.id}`),
       { params: Promise.resolve({ communicationId: firstBody.id }) },
@@ -587,7 +683,7 @@ describe("support incidents HTTP contracts", () => {
       },
       select: { payload: true },
     });
-    expect(readAudits).toHaveLength(2);
+    expect(readAudits).toHaveLength(3);
     expect(JSON.stringify(readAudits)).not.toContain(body.summary);
     expect(JSON.stringify(readAudits)).not.toContain(body.contactNumber);
   });
@@ -600,6 +696,15 @@ describe("support incidents HTTP contracts", () => {
     expect(anonymous.headers.get("cache-control")).toBe(
       "private, no-store, max-age=0",
     );
+
+    await loginAs("admin", password);
+    const invalidCursor = await communicationsGet(
+      request("/api/support/communications?cursor=not-a-cursor"),
+    );
+    expect(invalidCursor.status).toBe(422);
+    expect(await invalidCursor.json()).toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
 
     const role = await prisma.role.create({
       data: {

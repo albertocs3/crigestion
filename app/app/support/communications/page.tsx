@@ -38,7 +38,11 @@ export default async function CommunicationsPage({
   const canManage = auth.user.permissions.includes(
     "Support.ManageCommunications",
   );
-  const refs = canManage ? await listCommunicationReferences() : null;
+  const refs = canManage
+    ? await listCommunicationReferences(
+        parsed.success ? parsed.data.customerId : undefined,
+      )
+    : null;
   return (
     <main className="shell">
       <header className="topbar">
@@ -110,10 +114,21 @@ export default async function CommunicationsPage({
               </tbody>
             </table>
           </div>
+          {result.nextCursor ? (
+            <Link
+              className="button button-secondary"
+              href={nextHref(result.nextCursor, params)}
+            >
+              Siguiente página
+            </Link>
+          ) : null}
         </div>
         {canManage && refs ? (
-          <div className="panel stack">
-            <SupportCommunicationForm references={refs} />
+          <div className="panel stack" id="new-communication">
+            <SupportCommunicationForm
+              references={refs}
+              defaultCustomerId={params.customerId}
+            />
           </div>
         ) : null}
       </section>
@@ -132,4 +147,14 @@ function resultLabel(value: string) {
       } as Record<string, string>
     )[value] ?? value
   );
+}
+
+function nextHref(
+  cursor: string,
+  params: { customerId?: string; channel?: string },
+): string {
+  const query = new URLSearchParams({ cursor });
+  if (params.customerId) query.set("customerId", params.customerId);
+  if (params.channel) query.set("channel", params.channel);
+  return `/app/support/communications?${query}`;
 }

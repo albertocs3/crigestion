@@ -42,13 +42,21 @@ type Current = {
 export function SupportCommunicationForm({
   references,
   current,
+  defaultCustomerId,
 }: {
   references: References;
   current?: Current;
+  defaultCustomerId?: string;
 }) {
   const router = useRouter();
+  const initialCustomerId =
+    references.customers.find((customer) => customer.id === defaultCustomerId)
+      ?.id ??
+    (defaultCustomerId === undefined
+      ? references.customers[0]?.id ?? ""
+      : "");
   const [customerId, setCustomerId] = useState(
-    current?.customer.id ?? references.customers[0]?.id ?? "",
+    current?.customer.id ?? initialCustomerId,
   );
   const [channel, setChannel] = useState(current?.channel ?? "PHONE");
   const [contactId, setContactId] = useState(current?.contactId ?? "");
@@ -174,6 +182,9 @@ export function SupportCommunicationForm({
               }}
               required
             >
+              {!customerId ? (
+                <option value="">Selecciona un cliente</option>
+              ) : null}
               {references.customers.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.code} · {item.legalName}

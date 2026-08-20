@@ -13,6 +13,10 @@ import { listCustomerStores } from "@/modules/customers/application/stores";
 import { CustomerEditForm } from "@/modules/customers/presentation/CustomerEditForm";
 import { CustomerStatusButton } from "@/modules/customers/presentation/CustomerStatusButton";
 import { authorizePagePermission } from "@/modules/platform/presentation/pageAccess";
+import {
+  getCustomerSupportContext,
+  type CustomerSupportContextDto,
+} from "@/modules/support/application/customerContext";
 
 export const dynamic = "force-dynamic";
 
@@ -89,6 +93,13 @@ export default async function CustomerDetailPage({
       )
     : null;
   const canManage = authorization.user.permissions.includes("Customers.Manage");
+  const canViewSupport = authorization.user.permissions.includes("Support.View");
+  const supportContextResult =
+    customer && canViewSupport
+      ? await getCustomerSupportContext(customer.id, authorization.user)
+      : null;
+  const supportContext =
+    supportContextResult?.ok === true ? supportContextResult.value : null;
 
   return (
     <main className="shell">
@@ -193,6 +204,24 @@ export default async function CustomerDetailPage({
                 </div>
               </div>
             </div>
+
+            {canViewSupport ? (
+              <CustomerSupportSection
+                customerId={customer.id}
+                context={supportContext}
+                canCreateIncident={authorization.user.permissions.includes(
+                  "Support.Create",
+                )}
+                canManageCommunications={
+                  authorization.user.permissions.includes(
+                    "Support.ViewCommunications",
+                  ) &&
+                  authorization.user.permissions.includes(
+                    "Support.ManageCommunications",
+                  )
+                }
+              />
+            ) : null}
 
             <div className="panel stack">
               <div className="split-header">
@@ -444,6 +473,253 @@ export default async function CustomerDetailPage({
       </section>
     </main>
   );
+}
+
+function CustomerSupportSection({
+  customerId,
+  context,
+  canCreateIncident,
+  canManageCommunications,
+}: {
+  customerId: string;
+  context: CustomerSupportContextDto | null;
+  canCreateIncident: boolean;
+  canManageCommunications: boolean;
+}) {
+  const customerQuery = new URLSearchParams({ customerId }).toString();
+  return (
+    <div className="panel stack">
+      <div className="split-header">
+        <div>
+          <h2>Atención al cliente</h2>
+          <p className="muted">
+            Incidencias y comunicaciones relacionadas con este cliente.
+          </p>
+        </div>
+        <div className="button-row">
+          {canCreateIncident ? (
+            <Link
+              className="button"
+              href={`/app/support?${customerQuery}#new-incident`}
+            >
+              Nueva incidencia
+            </Link>
+          ) : null}
+          {canManageCommunications ? (
+            <Link
+              className="button button-secondary"
+              href={`/app/support/communications?${customerQuery}#new-communication`}
+            >
+              Nueva comunicación
+            </Link>
+          ) : null}
+        </div>
+      </div>
+      {!context ? (
+        <p className="message error">
+          No se pudo cargar el contexto de soporte del cliente.
+        </p>
+      ) : (
+        <>
+          <p className="muted">
+            Foto a <time dateTime={context.asOf}>{formatMadrid(context.asOf)}</time>.
+          </p>
+          <CustomerIncidentTable
+            title="Incidencias abiertas"
+            label="Incidencias abiertas del cliente"
+            emptyMessage="No hay incidencias abiertas."
+            total={context.openIncidents.total}
+            incidents={context.openIncidents.items}
+          />
+          <CustomerIncidentTable
+            title="Incidencias resueltas y cerradas"
+            label="Incidencias finalizadas del cliente"
+            emptyMessage="No hay incidencias resueltas ni cerradas."
+            total={context.finalizedIncidents.total}
+            incidents={context.finalizedIncidents.items}
+          />
+          <Link
+            href={`/app/support?${customerQuery}`}
+            className="button button-secondary"
+          >
+            Ver todas las incidencias del cliente
+          </Link>
+          {context.communications ? (
+            <section className="stack" aria-labelledby="customer-communications">
+              <div className="split-header">
+                <h3 id="customer-communications">
+                  Historial de comunicaciones ({context.communications.total})
+                </h3>
+                <Link href={`/app/support/communications?${customerQuery}`}>
+                  Ver todo
+                </Link>
+              </div>
+              <div className="table-wrap">
+                <table aria-label="Comunicaciones del cliente">
+                  <thead>
+                    <tr>
+                      <th scope="col">Fecha</th>
+                      <th scope="col">Canal</th>
+                      <th scope="col">Dirección</th>
+                      <th scope="col">Resultado</th>
+                      <th scope="col">Incidencia</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {context.communications.items.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>No hay comunicaciones registradas.</td>
+                      </tr>
+                    ) : (
+                      context.communications.items.map((communication) => (
+                        <tr key={communication.id}>
+                          <td>
+                            <Link
+                              href={`/app/support/communications/${communication.id}`}
+                            >
+                              <time dateTime={communication.occurredAt}>
+                                {formatMadrid(communication.occurredAt)}
+                              </time>
+                            </Link>
+                          </td>
+                          <td>
+                            {communication.channel === "PHONE"
+                              ? "Teléfono"
+                              : "WhatsApp"}
+                          </td>
+                          <td>
+                            {communication.direction === "INBOUND"
+                              ? "Entrante"
+                              : "Saliente"}
+                          </td>
+                          <td>{communicationResultLabel(communication.result)}</td>
+                          <td>
+                            {communication.incident ? (
+                              <Link
+                                href={`/app/support/incidents/${communication.incident.id}`}
+                              >
+                                {communication.incident.number}
+                              </Link>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CustomerIncidentTable({
+  title,
+  label,
+  emptyMessage,
+  total,
+  incidents,
+}: {
+  title: string;
+  label: string;
+  emptyMessage: string;
+  total: number;
+  incidents: CustomerSupportContextDto["openIncidents"]["items"];
+}) {
+  return (
+    <section className="stack">
+      <h3>{title} ({total})</h3>
+      <div className="table-wrap">
+        <table aria-label={label}>
+          <thead>
+            <tr>
+              <th scope="col">Incidencia</th>
+              <th scope="col">Prioridad</th>
+              <th scope="col">Estado</th>
+              <th scope="col">Actualizada</th>
+            </tr>
+          </thead>
+          <tbody>
+            {incidents.length === 0 ? (
+              <tr>
+                <td colSpan={4}>{emptyMessage}</td>
+              </tr>
+            ) : (
+              incidents.map((incident) => (
+                <tr key={incident.id}>
+                  <td>
+                    <Link href={`/app/support/incidents/${incident.id}`}>
+                      <strong>{incident.number}</strong>
+                    </Link>
+                    <span className="cell-detail">{incident.title}</span>
+                    {incident.mergedInto ? (
+                      <span className="cell-detail">
+                        Fusionada en {incident.mergedInto.number}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td>{supportPriorityLabel(incident.priority)}</td>
+                  <td>{supportStatusLabel(incident.status)}</td>
+                  <td>
+                    <time dateTime={incident.updatedAt}>
+                      {formatMadrid(incident.updatedAt)}
+                    </time>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function supportPriorityLabel(value: string): string {
+  return (
+    ({ LOW: "Baja", MEDIUM: "Media", HIGH: "Alta", URGENT: "Urgente" } as Record<
+      string,
+      string
+    >)[value] ?? value
+  );
+}
+
+function supportStatusLabel(value: string): string {
+  return (
+    ({
+      NEW: "Nueva",
+      IN_PROGRESS: "En curso",
+      PENDING_CUSTOMER: "Pendiente del cliente",
+      PENDING_THIRD_PARTY: "Pendiente de tercero",
+      RESOLVED: "Resuelta",
+      CLOSED: "Cerrada",
+    } as Record<string, string>)[value] ?? value
+  );
+}
+
+function communicationResultLabel(value: string): string {
+  return (
+    ({
+      RESOLVED_NO_FOLLOW_UP: "Resuelta sin seguimiento",
+      REQUIRES_FOLLOW_UP: "Requiere seguimiento",
+      NO_ANSWER: "Sin respuesta",
+      INFORMATION_PROVIDED: "Información facilitada",
+      REFERRED_TO_INCIDENT: "Derivada a incidencia",
+    } as Record<string, string>)[value] ?? value
+  );
+}
+
+function formatMadrid(value: string): string {
+  return new Intl.DateTimeFormat("es-ES", {
+    dateStyle: "short",
+    timeStyle: "short",
+    timeZone: "Europe/Madrid",
+  }).format(new Date(value));
 }
 
 function renderStatus(status: CustomerListItem["status"]) {

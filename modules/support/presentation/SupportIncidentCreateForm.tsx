@@ -7,13 +7,27 @@ import type { SupportIncidentReferences } from "@/modules/support/application/in
 
 type State = { kind: "idle" | "submitting" | "error"; message?: string };
 
-export function SupportIncidentCreateForm({ references }: { references: SupportIncidentReferences }) {
+export function SupportIncidentCreateForm({
+  references,
+  defaultCustomerId,
+}: {
+  references: SupportIncidentReferences;
+  defaultCustomerId?: string;
+}) {
   const router = useRouter();
-  const [customerId, setCustomerId] = useState(references.customers[0]?.id ?? "");
+  const initialCustomerId =
+    references.customers.find((customer) => customer.id === defaultCustomerId)
+      ?.id ??
+    (defaultCustomerId === undefined
+      ? references.customers[0]?.id ?? ""
+      : "");
+  const [customerId, setCustomerId] = useState(
+    initialCustomerId,
+  );
   const [state, setState] = useState<State>({ kind: "idle" });
   const idempotencyKey = useRef<string | null>(null);
   const stores = useMemo(() => references.customers.find((customer) => customer.id === customerId)?.stores ?? [], [customerId, references.customers]);
-  const ready = references.customers.length > 0 && references.categories.length > 0 && references.responsibleUsers.length > 0;
+  const ready = references.customers.some((customer) => customer.id === customerId) && references.categories.length > 0 && references.responsibleUsers.length > 0;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -43,7 +57,7 @@ export function SupportIncidentCreateForm({ references }: { references: SupportI
       <legend>Nueva incidencia</legend>
       {!ready ? <p className="message error">Se necesita al menos un cliente, una categoría activa y un responsable autorizado.</p> : null}
       <div className="form-two-columns">
-        <label>Cliente<select name="customerId" required value={customerId} onChange={(event) => setCustomerId(event.target.value)}>{references.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.code} · {customer.legalName}{customer.status === "INACTIVE" ? " (inactivo)" : ""}</option>)}</select></label>
+        <label>Cliente<select name="customerId" required value={customerId} onChange={(event) => setCustomerId(event.target.value)}>{!customerId ? <option value="">Selecciona un cliente</option> : null}{references.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.code} · {customer.legalName}{customer.status === "INACTIVE" ? " (inactivo)" : ""}</option>)}</select></label>
         <label>Tienda (opcional)<select name="storeId" key={customerId}><option value="">Sin tienda</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.code} · {store.name}{store.status === "INACTIVE" ? " (inactiva)" : ""}</option>)}</select></label>
       </div>
       <div className="form-three-columns">

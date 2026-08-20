@@ -44,7 +44,14 @@ export const correctSupportCommunicationSchema = z
 export const listSupportCommunicationsSchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(25),
-    cursor: z.string().max(256).optional(),
+    cursor: z
+      .string()
+      .max(256)
+      .refine(
+        (value) => decodeCursor(value) !== null,
+        "El cursor no es válido.",
+      )
+      .optional(),
     customerId: z.string().uuid().optional(),
     incidentId: z.string().uuid().optional(),
     channel: channelSchema.optional(),
@@ -159,6 +166,11 @@ const detailSelect = {
     },
   },
 } satisfies Prisma.SupportCommunicationSelect;
+const customerReferenceSelect = {
+  id: true,
+  code: true,
+  legalName: true,
+} satisfies Prisma.CustomerSelect;
 type RecordDto = Prisma.SupportCommunicationGetPayload<{
   select: typeof detailSelect;
 }>;
@@ -307,14 +319,31 @@ export async function getSupportCommunication(
   });
   return mapDetail(row);
 }
-export async function listCommunicationReferences() {
+export async function listCommunicationReferences(preferredCustomerId?: string) {
   const companyId = await currentCompanyId(prisma);
   if (!companyId) return { customers: [], incidents: [], contacts: [] };
-  const customers = await prisma.customer.findMany({
-    orderBy: [{ legalName: "asc" }, { id: "asc" }],
-    take: 500,
-    select: { id: true, code: true, legalName: true },
-  });
+  const [listedCustomers, preferredCustomer] = await Promise.all([
+    prisma.customer.findMany({
+      orderBy: [{ legalName: "asc" }, { id: "asc" }],
+      take: 500,
+      select: customerReferenceSelect,
+    }),
+    preferredCustomerId
+      ? prisma.customer.findUnique({
+          where: { id: preferredCustomerId },
+          select: customerReferenceSelect,
+        })
+      : Promise.resolve(null),
+  ]);
+  const customers =
+    preferredCustomer &&
+    !listedCustomers.some((customer) => customer.id === preferredCustomer.id)
+      ? [...listedCustomers, preferredCustomer].sort(
+          (left, right) =>
+            left.legalName.localeCompare(right.legalName, "es") ||
+            left.id.localeCompare(right.id),
+        )
+      : listedCustomers;
   const [incidents, contacts] = await Promise.all([
     prisma.supportIncident.findMany({
       where: { companyId, mergedIntoIncidentId: null },

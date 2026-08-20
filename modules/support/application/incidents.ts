@@ -230,6 +230,17 @@ export type SupportIncidentReferences = {
   responsibleUsers: Array<{ id: string; displayName: string }>;
 };
 
+const customerReferenceSelect = {
+  id: true,
+  code: true,
+  legalName: true,
+  status: true,
+  stores: {
+    orderBy: [{ name: "asc" as const }, { id: "asc" as const }],
+    select: { id: true, code: true, name: true, status: true },
+  },
+} satisfies Prisma.CustomerSelect;
+
 type SupportErrorCode =
   | "PLATFORM_NOT_INITIALIZED"
   | "SUPPORT_CUSTOMER_NOT_FOUND"
@@ -671,25 +682,24 @@ export async function getSupportIncident(
   return mapIncidentDetail(row, actor.permissions.includes("Support.ViewCommunications"));
 }
 
-export async function listSupportReferences(): Promise<SupportIncidentReferences> {
+export async function listSupportReferences(
+  preferredCustomerId?: string,
+): Promise<SupportIncidentReferences> {
   const companyId = await currentCompanyId(prisma);
   if (!companyId)
     return { customers: [], categories: [], responsibleUsers: [] };
-  const [customers, categories, responsibleUsers] = await Promise.all([
+  const [listedCustomers, preferredCustomer, categories, responsibleUsers] = await Promise.all([
     prisma.customer.findMany({
       orderBy: [{ legalName: "asc" }, { id: "asc" }],
       take: 500,
-      select: {
-        id: true,
-        code: true,
-        legalName: true,
-        status: true,
-        stores: {
-          orderBy: [{ name: "asc" }, { id: "asc" }],
-          select: { id: true, code: true, name: true, status: true },
-        },
-      },
+      select: customerReferenceSelect,
     }),
+    preferredCustomerId
+      ? prisma.customer.findUnique({
+          where: { id: preferredCustomerId },
+          select: customerReferenceSelect,
+        })
+      : Promise.resolve(null),
     prisma.supportIncidentCategory.findMany({
       where: { companyId, isActive: true },
       orderBy: [{ name: "asc" }, { id: "asc" }],
@@ -723,6 +733,9 @@ export async function listSupportReferences(): Promise<SupportIncidentReferences
       select: { id: true, displayName: true },
     }),
   ]);
+  const customers = preferredCustomer && !listedCustomers.some((customer) => customer.id === preferredCustomer.id)
+    ? [...listedCustomers, preferredCustomer].sort((left, right) => left.legalName.localeCompare(right.legalName, "es") || left.id.localeCompare(right.id))
+    : listedCustomers;
   return { customers, categories, responsibleUsers };
 }
 
