@@ -718,6 +718,43 @@ visible para filtros historicos, pero fuera del catalogo activo de nuevas
 altas. El health siguio completo en `ok` y VeriFactu en TEST durante toda la
 prueba.
 
+### 8.5 Cambio administrativo de cliente de Soporte del 2026-08-20
+
+La release inmutable `staging-2026.08.20-rc8`, commit
+`c6590fd5e15e7dc155bda1d401bf5c6076968502`, se materializó desde el tag
+publicado mediante un archivo de 1.523.767 bytes y SHA-256
+`d85b423a86618cf643a5224f362baac04201b61ccdfb8f7ee1556c7c9054596b`.
+El build de staging produjo el identificador `_Z4bsvZCigAT8knQkuZlW`.
+
+Antes de migrar se creó el dump custom
+`crigestion_staging-auto-20260820T131052Z.dump`, de 1.540.326 bytes y SHA-256
+`e99e4153be6e42f4fb77b4167e48df53b55419ad7e21fccf90066f0fadd3fd4b`;
+su checksum y su catálogo `pg_restore --list` se verificaron correctamente. La
+unidad controlada
+`crigestion-staging-migrate@staging-2026.08.20-rc8.service` aplicó solo
+`20260820060000_add_support_incident_customer_changes`, terminó con
+`Result=success` y dejó 157 migraciones finalizadas y ninguna migración activa
+incompleta.
+
+Después de podar dependencias y normalizar permisos, `current` se conmutó
+atómicamente a `rc8`. La aplicación y el worker VeriFactu quedaron activos;
+los timers de reactivación, health, backup y recovery bundle quedaron en
+espera activa. VeriFactu se confirmó en `TEST`, no quedaron unidades fallidas,
+el health canónico terminó con `Result=success` y el health público devolvió
+HTTP 200 con aplicación, PostgreSQL, VeriFactu y worker en `ok`.
+
+La UAT Administrador cambió la incidencia sintética `INC-2026-00003` del
+cliente 3 al cliente de pruebas 2. La pantalla confirmó la operación y mostró
+la evidencia y el evento. PostgreSQL verificó la proyección en versión 5,
+exactamente una evidencia append-only, un evento `CUSTOMER_CHANGED` y una
+auditoría sin motivo, título ni descripción. El permiso
+`Support.ChangeIncidentCustomer` quedó asignado únicamente a Administrador. La
+FK de comunicaciones dejó de incluir `customerId`, pasó a referenciar solo la
+incidencia y empresa con `ON UPDATE RESTRICT`, y el trigger mantiene la
+igualdad de cliente en enlaces nuevos o modificados. Así no existe cascada
+sobre el cliente histórico. Producción no se consultó ni modificó y el acceso
+SSH temporal permanece activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

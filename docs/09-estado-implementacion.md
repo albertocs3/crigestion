@@ -611,17 +611,30 @@ inactiva continúa disponible en filtros históricos con etiqueta explícita. El
 health permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
 
-El siguiente corte local incorpora el cambio administrativo y versionado del
-cliente de una incidencia. El contrato separado exige rol Administrador y los
-permisos `Support.View`, `Support.ChangeIncidentCustomer` y `Customers.View`,
-además de Origin/CSRF, confirmación, cliente esperado, idempotencia, cuota y
-versión optimista. La operación queda bloqueada si existe tienda o si la
-incidencia participa en una fusión. PostgreSQL exige una evidencia append-only
-y un evento `CUSTOMER_CHANGED` por versión. La FK de comunicaciones deja de
-cascadear el cliente: cada comunicación histórica conserva cliente, contacto,
-número y correcciones, mientras los enlaces nuevos siguen exigiendo el cliente
-vigente de la incidencia. Esta rebanada todavía no se ha desplegado en staging;
-`rc7` continúa siendo la release activa y producción permanece fuera de alcance.
+La release `staging-2026.08.20-rc8`, commit
+`c6590fd5e15e7dc155bda1d401bf5c6076968502`, desplegó el cambio
+administrativo y versionado del cliente de una incidencia. El contrato separado
+exige rol Administrador y los permisos `Support.View`,
+`Support.ChangeIncidentCustomer` y `Customers.View`, además de Origin/CSRF,
+confirmación, cliente esperado, idempotencia, cuota y versión optimista. La
+operación queda bloqueada si existe tienda o si la incidencia participa en una
+fusión. PostgreSQL exige una evidencia append-only y un evento
+`CUSTOMER_CHANGED` por versión. La FK de comunicaciones dejó de cascadear el
+cliente: cada comunicación histórica conserva cliente, contacto, número y
+correcciones, mientras los enlaces nuevos siguen exigiendo el cliente vigente
+de la incidencia.
+
+La UAT Administrador de `rc8` cambió la incidencia sintética
+`INC-2026-00003` (`bd490c41-d61a-4886-8ba8-b77228f4c39c`) del cliente 3 al
+cliente de pruebas 2. La interfaz confirmó el cambio, mostró la evidencia y el
+evento en el historial y dejó la incidencia en versión 5, sin tienda y sin
+fusión. PostgreSQL confirmó exactamente una evidencia, un evento
+`CUSTOMER_CHANGED` y una auditoría `SUPPORT_INCIDENT_CUSTOMER_CHANGED`; el
+payload de auditoría no contiene motivo, título ni descripción. El permiso
+nuevo está asignado únicamente al rol Administrador y la FK de comunicaciones
+vigente usa `ON UPDATE RESTRICT`. El health público permaneció completo en
+`ok`, VeriFactu continuó en TEST, producción no se consultó ni modificó y el
+acceso SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 

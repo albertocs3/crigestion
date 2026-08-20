@@ -1165,3 +1165,44 @@ one-shot de reactivación terminó con cero cambios, no quedaron unidades
 fallidas y los health local y público respondieron HTTP 200 con todos los
 componentes en `ok`. Producción no se consultó ni modificó y el acceso SSH
 temporal permanece activo.
+
+## 31. Cambio administrativo de cliente de incidencias
+
+El 2026-08-20 se promovió la release inmutable
+`staging-2026.08.20-rc8`, commit
+`c6590fd5e15e7dc155bda1d401bf5c6076968502`, con build ID
+`_Z4bsvZCigAT8knQkuZlW`. La candidata había aplicado desde cero las 157
+migraciones, superado 59/59 pruebas dirigidas de Soporte, TypeScript, ESLint,
+Prisma y el build optimizado, y cerrado dos revisiones independientes sin
+P0/P1. La auditoría npm mantuvo cuatro vulnerabilidades altas transitivas ya
+conocidas de `deepmerge-ts`/Prisma y `nanoid`; esta rebanada no modificó
+dependencias.
+
+El dump predeploy
+`crigestion_staging-auto-20260820T131052Z.dump` quedó verificado por SHA-256 y
+`pg_restore --list`. La unidad migradora aplicó únicamente
+`20260820060000_add_support_incident_customer_changes`, terminó con
+`Result=success` y dejó 157 migraciones finalizadas. La conmutación de
+`current` a `rc8` fue atómica.
+
+Con la sesión Administrador iniciada, se utilizó la incidencia sintética
+`INC-2026-00003` (`bd490c41-d61a-4886-8ba8-b77228f4c39c`), sin tienda y sin
+participación en fusiones. La interfaz cambió su cliente desde el código 3 al
+cliente de pruebas con código 2 y confirmó la operación. La ficha mostró el
+nuevo cliente, la evidencia OLD→NEW y el evento `Cliente corregido` en el
+historial.
+
+PostgreSQL confirmó que la incidencia terminó en versión 5, con exactamente
+una evidencia en `support_incident_customer_changes`, un evento
+`CUSTOMER_CHANGED` y una auditoría
+`SUPPORT_INCIDENT_CUSTOMER_CHANGED`. El payload de auditoría no contiene
+motivo, título ni descripción. El permiso nuevo quedó asignado solo al rol
+Administrador. La FK de comunicaciones dejó de incluir `customerId`, pasó a
+referenciar incidencia y empresa con `ON UPDATE RESTRICT`, y el trigger exige
+el cliente vigente en enlaces nuevos o modificados; las comunicaciones ya
+existentes conservan así su cliente histórico.
+
+Aplicación y worker VeriFactu TEST quedaron activos; los timers operativos
+permanecieron activos, no hubo unidades fallidas y el health público devolvió
+todos los componentes en `ok`. Producción no se consultó ni modificó. El acceso
+SSH temporal continúa activo por indicación expresa del usuario.
