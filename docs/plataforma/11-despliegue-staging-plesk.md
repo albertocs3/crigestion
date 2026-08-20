@@ -677,6 +677,36 @@ VeriFactu TEST y worker en `ok`, y el monitor canonico registro
 `CRIGESTION_STAGING_HEALTH_OK`. Produccion no se modifico. La UAT funcional de
 las devoluciones parciales queda documentada por separado cuando finalice.
 
+### 8.4 Despliegue de categorias de Soporte del 2026-08-20
+
+La release inmutable `staging-2026.08.20-rc7`, commit
+`55f5399131443a8984858ab1d8e70e2ef0e77bc0`, se materializo desde el tag
+publicado mediante un archivo de 1.512.723 bytes y SHA-256
+`7a8637412a36b68cf7ec1f3359db3bd41869fbfb0cc2f1d353fdf8fe1d4c36c5`.
+El build de staging produjo el identificador `KJp61ASjsqvq5vwJwWE3o`.
+
+Antes de migrar se creo el dump custom
+`crigestion_staging-auto-20260820T121739Z.dump`, de 1.519.061 bytes y SHA-256
+`f6450b03e3be55954a1e25883b9b15031e750d504c8a84f2ae3af85d66bb8e7a`;
+su checksum y su catalogo `pg_restore --list` se verificaron correctamente. Se
+detuvieron web, worker VeriFactu y el timer de reactivacion. La unidad
+`crigestion-staging-migrate@staging-2026.08.20-rc7.service` aplico solo
+`20260820050000_add_support_category_changes` y termino con
+`Result=success`. PostgreSQL quedo con 156 migraciones completas, cero
+incompletas, `unaccent` instalado, cero colisiones de nombres canonicos y los
+cinco triggers esperados de integridad.
+
+Tras podar dependencias y normalizar permisos, `current` se conmutó
+atomicamente a `rc7`. Web y worker se arrancaron en ese orden; VeriFactu se
+confirmo en `TEST`, los timers operativos quedaron activos, no habia unidades
+fallidas, el health canonico termino con `Result=success` y los health local y
+publico devolvieron HTTP 200 con todos los componentes en `ok`. Un smoke
+autenticado con el rol Tecnico confirmo el `403` de administracion de
+categorias sin `Support.ManageCategories`; no se modificaron datos. La UAT
+funcional de cambio de datos y estado queda pendiente de una sesion
+Administrador. Produccion no se consulto ni modifico y el acceso SSH temporal
+permanece activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

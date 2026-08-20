@@ -572,6 +572,30 @@ timers quedaron activos; el one-shot de reactivación terminó sin cambios y los
 health local y público devolvieron todos los componentes en `ok`. Producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
 
+La release inmutable `staging-2026.08.20-rc7`, commit
+`55f5399131443a8984858ab1d8e70e2ef0e77bc0`, desplegó la administración
+versionada de categorías de Atención al cliente con build ID
+`KJp61ASjsqvq5vwJwWE3o`. El backup previo
+`crigestion_staging-auto-20260820T121739Z.dump`, de 1.519.061 bytes y SHA-256
+`f6450b03e3be55954a1e25883b9b15031e750d504c8a84f2ae3af85d66bb8e7a`,
+superó la verificación de checksum y su catálogo `pg_restore`. La unidad
+migradora aplicó únicamente
+`20260820050000_add_support_category_changes`, terminó con `Result=success` y
+dejó 156 migraciones completas y cero incompletas. El preflight transaccional
+instaló `unaccent`, detectó cero colisiones bajo la normalización canónica y
+quedaron presentes los cinco triggers de integridad de la categoría y su
+evidencia append-only.
+
+Tras la conmutación atómica, aplicación, worker VeriFactu TEST y timers de
+reactivación, backup, health y recovery bundle quedaron activos; no había
+unidades fallidas y los health local y público devolvieron todos los
+componentes en `ok`. El smoke autenticado con `TECNICO_SOPORTE` confirmó la
+denegación server-side de la administración de categorías, coherente con la
+ausencia de `Support.ManageCategories`. La UAT de edición, activación y
+desactivación queda pendiente de una sesión Administrador y no se alteraron
+datos durante este smoke. Producción no se consultó ni modificó y el acceso SSH
+temporal permanece activo.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:
