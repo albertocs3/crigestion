@@ -425,15 +425,25 @@ consultable, incluido el contenido histórico agregado de su duplicada, pero no
 mostró controles de mutación. Con estas comprobaciones queda cerrada la UAT
 autenticada de esta rebanada.
 
-Después de ese corte se completó localmente la primera rebanada de filtros
+La release inmutable `staging-2026.08.20-rc2`, commit
+`d8488eab4c9498c00d8908c1a9b7e85a52e76b47`, desplegó la primera rebanada de filtros
 avanzados de Soporte. Incidencias incorpora cliente, responsable, colaborador
 activo, categoría y rango de creación; comunicaciones incorpora contacto,
 incidencia, dirección, resultado y rango de ocurrencia. Los rangos son
 inclusivos en `Europe/Madrid`, las queries HTTP rechazan parámetros desconocidos
 o repetidos y la paginación usa cursores HMAC ligados a los filtros. Se añadieron
-índices compuestos para los nuevos patrones. La búsqueda en actuaciones sigue
-pendiente hasta contar con índice textual, cuota persistente y timeout; este
-trabajo local todavía no forma parte de una release desplegada.
+índices compuestos y trigram para los nuevos patrones, con cuota persistente de
+búsqueda. Antes de migrar se verificó el dump
+`crigestion_staging-auto-20260820T090708Z.dump`, de 1.463.188 bytes. La unidad
+controlada aplicó `20260820010000_add_support_list_filter_indexes`; el primer
+arranque no llegó a PostgreSQL porque la normalización prematura retiró el bit
+ejecutable de `esbuild`, y la repetición terminó correctamente después de
+restaurar `node_modules` desde el lockfile. La UAT autenticada comprobó filtros
+combinados y búsqueda de incidencias y comunicaciones. Health local y público
+quedaron íntegramente en `ok`, VeriFactu permaneció en `TEST` y una ejecución
+posterior del timer de reactivación terminó con
+`SUBSCRIPTION_REACTIVATION_AUTOMATION_OK` y cero cambios. La búsqueda en
+actuaciones sigue pendiente hasta contar con índice textual y timeout propios.
 
 ## 5. Riesgos y trabajo posterior
 

@@ -1047,3 +1047,36 @@ sesión disponible había expirado y la navegación redirigió correctamente a
 comprobar con una sesión autorizada los contadores, carga por técnico, últimas
 comunicaciones, avisos y enlaces del panel. No se modificó producción y se
 mantiene el acceso SSH temporal.
+
+## 28. Filtros avanzados de Atención al cliente en staging
+
+El 2026-08-20 se promovió la release inmutable
+`staging-2026.08.20-rc2`, commit
+`d8488eab4c9498c00d8908c1a9b7e85a52e76b47`, con build ID
+`ypgGmr40TfTtTzQCfVxxQ`. Antes de la ventana se creó y verificó por SHA-256 el
+dump `crigestion_staging-auto-20260820T090708Z.dump`, de 1.463.188 bytes.
+
+El primer arranque del migrador no llegó a Prisma Migrate ni alteró
+PostgreSQL: una normalización prematura había retirado ejecución al binario de
+`esbuild`. Se restauró `node_modules` exclusivamente desde `package-lock.json`,
+se preservaron los ejecutables y la misma unidad controlada aplicó
+`20260820010000_add_support_list_filter_indexes`. PostgreSQL confirmó la
+extensión `pg_trgm`, los tres índices trigram, los cinco índices compuestos y
+la migración en estado aplicado. Solo entonces se conmutó atómicamente
+`/opt/crigestion-staging/current` a `rc2`.
+
+La UAT autenticada verificó que la combinación cliente, responsable, categoría,
+estado, prioridad y rango de creación devolvía únicamente la incidencia
+principal esperada. La búsqueda por `DUPLICADA` devolvió solo la secundaria.
+En comunicaciones, cliente, canal, dirección, resultado y rango de ocurrencia
+devolvieron el único registro esperado. La UI expuso los nuevos controles con
+labels y mantuvo el banner `ENTORNO STAGING`, base `crigestion_staging` y
+`AEAT TEST`.
+
+Tras la promoción, aplicación, worker VeriFactu, timer de reactivaciones y
+timer de health quedaron activos. Health local y público devolvieron
+`status=ok`, `database=ok`, `verifactu=ok` y `worker=ok`. La primera ejecución
+programada de reactivación posterior al despliegue terminó con
+`SUBSCRIPTION_REACTIVATION_AUTOMATION_OK`, sin aplicaciones, bloqueos ni
+omisiones. Producción no se consultó ni modificó y el acceso SSH temporal se
+mantiene conforme a la indicación operativa vigente.
