@@ -1694,6 +1694,7 @@ model SupportIncidentAction {
   @@unique([id, companyId, incidentId])
   @@index([incidentId, performedAt, id])
   @@index([companyId, authorUserId, recordedAt, id])
+  @@index([text(ops: raw("gin_trgm_ops"))], type: Gin, map: "support_incident_actions_text_trgm_idx")
   @@map("support_incident_actions")
 }
 

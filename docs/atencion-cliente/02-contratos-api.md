@@ -140,9 +140,11 @@ usuarios que ya no sean seleccionables para no perder atribución pasada.
 Consulta autenticada con `Support.View`. Admite `limit` (1..100), `cursor`,
 `status`, `priority`, `responsibleUserId`, `customerId`, `categoryId`,
 `activeCollaboratorUserId`, `createdFrom`, `createdTo` y `search`. Todos los
-filtros se combinan con `AND`; la búsqueda, de 3 a 120 caracteres, aplica `OR`
-a número, título y descripción, pero el listado no devuelve estos últimos
-textos. El colaborador debe conservar una participación activa.
+filtros se combinan con `AND`; la búsqueda, de 3 a 120 caracteres y sin los
+comodines reservados `%`, `_` o `\`, aplica `OR`
+a número, título, descripción y contenido de actuaciones, pero el listado no
+devuelve los textos de descripción o actuación. El colaborador debe conservar
+una participación activa.
 
 `createdFrom` y `createdTo` son fechas locales inclusivas `YYYY-MM-DD` en
 `Europe/Madrid`, se informan juntas y admiten como máximo 366 días. El cursor
@@ -151,9 +153,18 @@ reutiliza con otra consulta devuelve `422 VALIDATION_ERROR`. Parámetros
 desconocidos o repetidos también devuelven `422`. La auditoría conserva IDs,
 fechas, presencia de búsqueda y conteos, nunca el término ni el cursor.
 La búsqueda consume una cuota persistente de 30 intentos por actor y empresa en
-15 minutos y usa índices trigram sobre número, título y descripción. Al superar
-la cuota devuelve `429 SUPPORT_INCIDENT_SEARCH_RATE_LIMITED` con
-`Retry-After: 900`.
+15 minutos, dispone de índices trigram sobre los cuatro campos y ejecuta su
+lectura con un timeout PostgreSQL local de 3 segundos. Las actuaciones se
+preseleccionan por su índice con un máximo de 10.000 incidencias antes de
+combinarse con el resto de campos; el límite nunca produce resultados parciales.
+Al superar la cuota devuelve `429
+SUPPORT_INCIDENT_SEARCH_RATE_LIMITED` con `Retry-After: 900`; si PostgreSQL
+cancela la consulta por timeout devuelve `503 SUPPORT_INCIDENT_SEARCH_BUSY` con
+`Retry-After: 3`. Una cancelación PostgreSQL recuperable usa el mismo `503`. Si
+la preselección supera el máximo seguro devuelve `422
+SUPPORT_INCIDENT_SEARCH_TOO_BROAD` sin `Retry-After`. Se audita un evento por
+actor y ventana al cruzar el límite de cuota, y cada cancelación recuperable,
+sin conservar el término.
 
 Respuesta `200`: `{ incidents, nextCursor }`. Incluye `Cache-Control: private, no-store, max-age=0`.
 

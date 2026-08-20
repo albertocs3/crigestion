@@ -288,6 +288,8 @@ describe("support incidents application", () => {
     expect(primaryDetail?.communications).toEqual(expect.arrayContaining([expect.objectContaining({ id: communication.value.id, sourceIncident: { id: duplicate.value.id, number: duplicate.value.number } })]));
     expect(await listSupportIncidentAttachments(primary.value.id, actor)).toEqual(expect.arrayContaining([expect.objectContaining({ id: attachment.value.attachment.id, sourceIncident: { id: duplicate.value.id, number: duplicate.value.number } })]));
     expect(duplicateDetail?.mergedInto).toEqual({ id: primary.value.id, number: primary.value.number });
+    const physicalSearch = await listSupportIncidents({ limit: 25, search: "conservar su incidencia" }, actor);
+    expect(physicalSearch.incidents.map((incident) => incident.id)).toEqual([duplicate.value.id]);
     const rejectedCommunication = { ...communicationCommand, contactNumber: "+34910000004", summary: "Intento posterior a la fusión." };
     expect(await createSupportCommunication(rejectedCommunication, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(rejectedCommunication), scope: "communication:create" })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_COMMUNICATION_INCIDENT_INVALID" } });
     await expect(prisma.$executeRaw`UPDATE "support_communications" SET "incidentId" = ${duplicate.value.id}::uuid WHERE "id" = ${unlinkedCommunication.value.id}::uuid`).rejects.toThrow();
@@ -1535,6 +1537,79 @@ describe("support incidents application", () => {
     expect(list.incidents).toHaveLength(1);
     expect(JSON.stringify(list)).not.toContain(command.description);
     expect(detail?.description).toBe(command.description);
+  });
+
+  it("finds incidents by action content without disclosing the matching text", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const refs = await listSupportReferences();
+    const command = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: refs.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Consulta operativa sin coincidencias",
+      description: "El listado no debe resolver este caso por la descripción.",
+      priority: "MEDIUM" as const,
+    };
+    const created = await createSupportIncident(command, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportRequest(command),
+      scope: "incident:create",
+    });
+    if (!created.ok) throw new Error(created.error.code);
+    const actionText = "Diagnóstico exclusivo sobre latencia cuántica Zafiro.";
+    const actionCommand = {
+      expectedVersion: created.value.version,
+      text: actionText,
+      performedAt: new Date().toISOString(),
+    };
+    const action = await createSupportAction(created.value.id, actionCommand, actor, {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...actionCommand }),
+      scope: `incident:${created.value.id}:action:create`,
+    });
+    if (!action.ok) throw new Error(action.error.code);
+
+    const list = await listSupportIncidents(
+      { limit: 25, search: "latencia cuántica" },
+      actor,
+      { correlationId: "action-search-correlation" },
+    );
+
+    expect(list).toMatchObject({ rateLimited: false, searchBusy: false });
+    expect(list.incidents.map((incident) => incident.id)).toEqual([created.value.id]);
+    expect(JSON.stringify(list)).not.toContain(actionText);
+    const audit = await prisma.auditEvent.findFirstOrThrow({
+      where: { eventType: "SUPPORT_INCIDENTS_VIEWED" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit.payload).toMatchObject({ hasSearch: true, correlationId: "action-search-correlation" });
+    expect(JSON.stringify(audit.payload)).not.toContain("latencia cuántica");
+    expect(JSON.stringify(audit.payload)).not.toContain(actionText);
+    const index = await prisma.$queryRaw<Array<{ indexdef: string }>>(Prisma.sql`
+      SELECT indexdef
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = 'support_incident_actions_text_trgm_idx'
+    `);
+    expect(index[0]?.indexdef).toContain("USING gin");
+    expect(index[0]?.indexdef).toContain("gin_trgm_ops");
+    const installationRow = await prisma.installation.findFirstOrThrow({ select: { companyId: true } });
+    const plan = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT set_config('enable_seqscan', ${"off"}, true)`);
+      return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>(Prisma.sql`
+        EXPLAIN (COSTS OFF)
+        SELECT DISTINCT "incidentId"
+        FROM "support_incident_actions"
+        WHERE "companyId" = ${installationRow.companyId}::uuid
+          AND "text" ILIKE ${"%latencia cuántica%"}
+        LIMIT 10001
+      `);
+    });
+    const planText = plan.map((row) => row["QUERY PLAN"]).join("\n");
+    expect(planText).toContain("Limit");
+    expect(planText).toContain("Unique");
   });
 
   it("creates normalized unique categories idempotently", async () => {

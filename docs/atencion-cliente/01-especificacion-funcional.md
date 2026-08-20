@@ -521,11 +521,14 @@ Listado de notificaciones pendientes y leídas, con acceso directo a la incidenc
 - Descripción.
 - Contenido de actuaciones.
 
-La primera rebanada implementa número, título y descripción, con términos de 3
-a 120 caracteres, índices trigram y una cuota persistente de 30 búsquedas por
-actor y empresa cada 15 minutos. La búsqueda sobre actuaciones queda pendiente
-de incorporar su propio índice de texto y timeout de consulta; no se habilitará
-con un `ILIKE` sin protección sobre todo el histórico.
+La búsqueda implementada cubre número, título, descripción y actuaciones, con
+términos de 3 a 120 caracteres (sin los comodines reservados `%`, `_` o `\`),
+índices trigram, una cuota persistente de 30
+búsquedas por actor y empresa cada 15 minutos y un timeout PostgreSQL de 3
+segundos por consulta. El listado nunca devuelve los textos de descripción o
+actuación que produjeron la coincidencia. Las coincidencias de actuaciones se
+resuelven primero mediante su índice y se acotan a 10.000 incidencias; superar
+ese umbral exige concretar el término, nunca devuelve una página incompleta.
 
 ## 15. Indicadores
 
@@ -628,7 +631,6 @@ Estas decisiones no alteran la funcionalidad acordada, pero deberán resolverse 
 - Convención horaria de integraciones futuras distintas de los indicadores,
   que ya usan `Europe/Madrid` conforme al apartado 16.
 - Estrategia de generación concurrente de números de incidencia.
-- Mecanismo de búsqueda sobre títulos, descripciones y actuaciones.
 - Modelo de permisos y relación con los usuarios existentes.
 - Diseño de las notificaciones en tiempo real o mediante actualización periódica.
 - Política de seguridad para archivos y datos personales.

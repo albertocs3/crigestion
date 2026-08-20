@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
 import { POST as loginPost } from "@/app/api/auth/login/route";
@@ -101,6 +102,7 @@ describe("support incidents HTTP contracts", () => {
       "/api/support/incidents?__proto__=x",
       "/api/support/incidents?status=NEW&status=CLOSED",
       "/api/support/incidents?search=ab",
+      "/api/support/incidents?search=error%25",
       "/api/support/incidents?createdFrom=2026-03-29",
       "/api/support/incidents?createdFrom=2025-01-01&createdTo=2026-01-02",
       "/api/support/communications?unexpected=true",
@@ -130,8 +132,40 @@ describe("support incidents HTTP contracts", () => {
     const limited = await incidentsGet(request("/api/support/incidents?search=incidencia"));
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toBe("900");
-    expect(await limited.json()).toMatchObject({ code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED" });
+    expect(JSON.stringify(await limited.json())).toBe(JSON.stringify({ code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED", message: "Se ha superado el límite temporal de búsquedas." }));
+    const rateLimitAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED" }, orderBy: { createdAt: "desc" } });
+    expect(rateLimitAudit.payload).toMatchObject({ actorUserId: installation.initialAdministratorId, companyId: installation.companyId });
+    expect(JSON.stringify(rateLimitAudit.payload)).not.toContain("incidencia");
   });
+
+  it("returns a stable retryable error when an incident search times out", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    expect((await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }))).status).toBe(201);
+    let markLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => { markLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const blocker = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(Prisma.sql`LOCK TABLE "support_incident_actions" IN ACCESS EXCLUSIVE MODE`);
+      markLocked();
+      await release;
+    }, { timeout: 10_000 });
+    await locked;
+
+    try {
+      const response = await incidentsGet(request("/api/support/incidents?search=latencia%20protegida"));
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("3");
+      expect(response.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+      expect(JSON.stringify(await response.json())).toBe(JSON.stringify({ code: "SUPPORT_INCIDENT_SEARCH_BUSY", message: "La búsqueda no pudo completarse a tiempo. Reinténtala en unos segundos." }));
+    } finally {
+      releaseLock();
+      await blocker;
+    }
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_SEARCH_BUSY" }, orderBy: { createdAt: "desc" } });
+    expect(JSON.stringify(audit.payload)).not.toContain("latencia protegida");
+  }, 10_000);
 
   it("protects indicator scope and validates its read-only contract", async () => {
     const unauthenticated = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12"));

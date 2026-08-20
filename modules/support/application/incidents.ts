@@ -48,7 +48,7 @@ export const listSupportIncidentsSchema = z
     activeCollaboratorUserId: z.string().uuid().optional(),
     createdFrom: supportDateOnlySchema.optional(),
     createdTo: supportDateOnlySchema.optional(),
-    search: z.string().trim().min(3).max(120).regex(/^[^\u0000-\u001F\u007F]*$/, "La búsqueda contiene caracteres no válidos.").refine((value) => /[\p{L}\p{N}]/u.test(value), "La búsqueda debe contener letras o números.").optional(),
+    search: z.string().trim().min(3).max(120).regex(/^[^\u0000-\u001F\u007F]*$/, "La búsqueda contiene caracteres no válidos.").refine((value) => /[\p{L}\p{N}]/u.test(value), "La búsqueda debe contener letras o números.").refine((value) => !/[%_\\]/.test(value), "La búsqueda contiene caracteres reservados.").optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -603,14 +603,16 @@ export async function listSupportIncidents(
       incidents: [] as SupportIncidentListItem[],
       nextCursor: null as string | null,
       rateLimited: false,
+      searchBusy: false,
+      searchTooBroad: false,
     };
   if (command.search && await consumeSupportSearchRateLimit(companyId, actor, context.correlationId)) {
-    return { incidents: [] as SupportIncidentListItem[], nextCursor: null as string | null, rateLimited: true };
+    return { incidents: [] as SupportIncidentListItem[], nextCursor: null as string | null, rateLimited: true, searchBusy: false, searchTooBroad: false };
   }
   const filterHash = incidentFilterHash(command);
   const cursor = command.cursor ? decodeCursor(command.cursor, filterHash) : null;
   const createdAt = command.createdFrom && command.createdTo ? madridDateRange(command.createdFrom, command.createdTo) : undefined;
-  const rows = await prisma.supportIncident.findMany({
+  const incidentQuery = (actionIncidentIds: string[]) => ({
     where: {
       companyId,
       ...(command.status ? { status: command.status } : {}),
@@ -630,6 +632,7 @@ export async function listSupportIncidents(
               {
                 description: { contains: command.search, mode: "insensitive" },
               },
+              ...(actionIncidentIds.length ? [{ id: { in: actionIncidentIds } }] : []),
             ],
           }
         : {}),
@@ -645,7 +648,53 @@ export async function listSupportIncidents(
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     take: command.limit + 1,
     select: incidentListSelect,
-  });
+  }) satisfies Prisma.SupportIncidentFindManyArgs;
+  let rows: IncidentListRecord[];
+  try {
+    rows = command.search
+      ? await prisma.$transaction(async (tx) => {
+          await tx.$queryRaw(Prisma.sql`SELECT set_config('statement_timeout', ${"3000ms"}, true)`);
+          const actionMatches = await tx.$queryRaw<Array<{ incidentId: string }>>(Prisma.sql`
+            SELECT DISTINCT "incidentId"
+            FROM "support_incident_actions"
+            WHERE "companyId" = ${companyId}::uuid
+              AND "text" ILIKE ${`%${command.search}%`}
+            LIMIT 10001
+          `);
+          if (actionMatches.length > 10_000) throw new SupportIncidentSearchCapacityError();
+          return tx.supportIncident.findMany(incidentQuery(actionMatches.map((match) => match.incidentId)));
+        }, { maxWait: 1_000, timeout: 4_500 })
+      : await prisma.supportIncident.findMany(incidentQuery([]));
+  } catch (error) {
+    if (error instanceof SupportIncidentSearchCapacityError) {
+      await prisma.auditEvent.create({
+        data: {
+          eventType: "SUPPORT_INCIDENT_SEARCH_REJECTED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            companyId,
+            reason: "TOO_BROAD",
+            ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+          },
+        },
+      });
+      return { incidents: [] as SupportIncidentListItem[], nextCursor: null as string | null, rateLimited: false, searchBusy: false, searchTooBroad: true };
+    }
+    if (!isStatementTimeout(error)) throw error;
+    await prisma.auditEvent.create({
+      data: {
+        eventType: "SUPPORT_INCIDENT_SEARCH_BUSY",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          companyId,
+          ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+        },
+      },
+    });
+    return { incidents: [] as SupportIncidentListItem[], nextCursor: null as string | null, rateLimited: false, searchBusy: true, searchTooBroad: false };
+  }
   const page = rows.slice(0, command.limit);
   await prisma.auditEvent.create({
     data: {
@@ -676,6 +725,8 @@ export async function listSupportIncidents(
         ? encodeCursor(page[page.length - 1]!, filterHash)
         : null,
     rateLimited: false,
+    searchBusy: false,
+    searchTooBroad: false,
   };
 }
 
@@ -1508,6 +1559,15 @@ async function consumeSupportSearchRateLimit(companyId: string, actor: SessionUs
     return count > 30;
   });
 }
+function isStatementTimeout(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    return error.code === "P2010" && error.meta?.code === "57014";
+  }
+  return error instanceof Prisma.PrismaClientUnknownRequestError
+    && error.message.includes('code: "57014"')
+    && error.message.includes("canceling statement due to statement timeout");
+}
+class SupportIncidentSearchCapacityError extends Error {}
 function failure(
   status: 404 | 409 | 422,
   code: SupportErrorCode,

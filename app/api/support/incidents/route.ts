@@ -15,9 +15,10 @@ export async function GET(request: Request) {
   const parsed = listSupportIncidentsSchema.safeParse(strictQuery(new URL(request.url).searchParams));
   if (!parsed.success) return response(request, validationError(parsed.error.flatten()), 422);
   const result = await listSupportIncidents(parsed.data, authorization.user, { correlationId });
-  return result.rateLimited
-    ? response(request, { code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED", message: "Se ha superado el límite temporal de búsquedas." }, 429)
-    : response(request, result, 200);
+  if (result.rateLimited) return response(request, { code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED", message: "Se ha superado el límite temporal de búsquedas." }, 429);
+  if (result.searchTooBroad) return response(request, { code: "SUPPORT_INCIDENT_SEARCH_TOO_BROAD", message: "La búsqueda coincide con demasiadas incidencias. Usa un término más específico." }, 422);
+  if (result.searchBusy) return response(request, { code: "SUPPORT_INCIDENT_SEARCH_BUSY", message: "La búsqueda no pudo completarse a tiempo. Reinténtala en unos segundos." }, 503);
+  return response(request, { incidents: result.incidents, nextCursor: result.nextCursor }, 200);
 }
 
 export async function POST(request: Request) {
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
   return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status);
 }
 
-function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...(status === 429 ? { "Retry-After": "900" } : {}) } }); }
+function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...(status === 429 ? { "Retry-After": "900" } : {}), ...(status === 503 ? { "Retry-After": "3" } : {}) } }); }
 function strictQuery(search: URLSearchParams): Record<string, string | string[]> {
   const result = Object.create(null) as Record<string, string | string[]>;
   for (const [key, value] of search) result[key] = Object.hasOwn(result, key) ? [...(Array.isArray(result[key]) ? result[key] : [result[key] as string]), value] : value;

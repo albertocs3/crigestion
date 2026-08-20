@@ -442,8 +442,15 @@ restaurar `node_modules` desde el lockfile. La UAT autenticada comprobó filtros
 combinados y búsqueda de incidencias y comunicaciones. Health local y público
 quedaron íntegramente en `ok`, VeriFactu permaneció en `TEST` y una ejecución
 posterior del timer de reactivación terminó con
-`SUBSCRIPTION_REACTIVATION_AUTOMATION_OK` y cero cambios. La búsqueda en
-actuaciones sigue pendiente hasta contar con índice textual y timeout propios.
+`SUBSCRIPTION_REACTIVATION_AUTOMATION_OK` y cero cambios. Sobre esa base local,
+la búsqueda de incidencias se amplió también al contenido de actuaciones con
+índice trigram propio, timeout PostgreSQL local de 3 segundos y error HTTP 503
+estable. Una medición desechable con 20.000 actuaciones confirmó que el
+predicado selectivo usa `Bitmap Index Scan` sobre el GIN (0,64 ms); el `EXISTS`
+correlacionado inicial no lo hacía, por lo que la implementación final separa
+una preselección SQL parametrizada `DISTINCT ... LIMIT 10001` y rechaza con 422
+los términos que superen 10.000 incidencias. Queda pendiente desplegar y validar
+esta ampliación en una RC posterior.
 
 ## 5. Riesgos y trabajo posterior
 
