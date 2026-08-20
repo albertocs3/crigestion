@@ -145,10 +145,22 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
   actions: Array<{
     id: string;
     text: string;
+    originalText: string;
+    version: number;
     performedAt: string;
     recordedAt: string;
     author: { id: string; displayName: string };
     sourceIncident: { id: string; number: string } | null;
+    correctionsHasMore: boolean;
+    corrections: Array<{
+      id: string;
+      previousText: string;
+      correctedText: string;
+      reason: string;
+      version: number;
+      correctedAt: string;
+      correctedBy: { id: string; displayName: string };
+    }>;
   }>;
   communications: Array<{
     id: string;
@@ -315,6 +327,11 @@ const incidentDetailSelect = {
       performedAt: true,
       recordedAt: true,
       authorUser: { select: { id: true, displayName: true } },
+      corrections: {
+        orderBy: [{ resultingActionVersion: "desc" as const }, { id: "desc" as const }],
+        take: 101,
+        select: { id: true, previousText: true, correctedText: true, reason: true, resultingActionVersion: true, correctedAt: true, correctedBy: { select: { id: true, displayName: true } } },
+      },
     },
   },
   communications: {
@@ -428,6 +445,11 @@ const incidentDetailSelect = {
           performedAt: true,
           recordedAt: true,
           authorUser: { select: { id: true, displayName: true } },
+          corrections: {
+            orderBy: [{ resultingActionVersion: "desc" as const }, { id: "desc" as const }],
+            take: 101,
+            select: { id: true, previousText: true, correctedText: true, reason: true, resultingActionVersion: true, correctedAt: true, correctedBy: { select: { id: true, displayName: true } } },
+          },
         },
       },
       communications: {
@@ -498,14 +520,27 @@ const incidentReplaySchema = z
         .object({
           id: z.string().uuid(),
           text: z.string(),
+          originalText: z.string().optional(),
+          version: z.number().int().positive().optional(),
           performedAt: z.string().datetime(),
           recordedAt: z.string().datetime(),
           author: z
             .object({ id: z.string().uuid(), displayName: z.string() })
             .strict(),
           sourceIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict().nullable().optional().transform((value) => value ?? null),
+          corrections: z.array(z.object({
+            id: z.string().uuid(),
+            previousText: z.string(),
+            correctedText: z.string(),
+            reason: z.string(),
+            version: z.number().int().positive(),
+            correctedAt: z.string().datetime(),
+            correctedBy: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+          }).strict()).optional(),
+          correctionsHasMore: z.boolean().optional(),
         })
-        .strict(),
+        .strict()
+        .transform((value) => ({ ...value, originalText: value.originalText ?? value.text, version: value.version ?? 1, corrections: value.corrections ?? [], correctionsHasMore: value.correctionsHasMore ?? false })),
     ),
     communications: z.array(z.object({
       id: z.string().uuid(),
@@ -709,10 +744,27 @@ export async function listSupportIncidents(
       ? await prisma.$transaction(async (tx) => {
           await tx.$queryRaw(Prisma.sql`SELECT set_config('statement_timeout', ${"3000ms"}, true)`);
           const actionMatches = await tx.$queryRaw<Array<{ incidentId: string }>>(Prisma.sql`
-            SELECT DISTINCT "incidentId"
-            FROM "support_incident_actions"
-            WHERE "companyId" = ${companyId}::uuid
-              AND "text" ILIKE ${`%${command.search}%`}
+            SELECT DISTINCT matches."incidentId"
+            FROM (
+              SELECT action."incidentId"
+              FROM "support_incident_actions" action
+              WHERE action."companyId" = ${companyId}::uuid
+                AND action."text" ILIKE ${`%${command.search}%`}
+                AND NOT EXISTS (
+                  SELECT 1 FROM "support_incident_action_corrections" correction
+                  WHERE correction."actionId" = action."id"
+                )
+              UNION ALL
+              SELECT correction."incidentId"
+              FROM "support_incident_action_corrections" correction
+              WHERE correction."companyId" = ${companyId}::uuid
+                AND correction."correctedText" ILIKE ${`%${command.search}%`}
+                AND NOT EXISTS (
+                  SELECT 1 FROM "support_incident_action_corrections" newer
+                  WHERE newer."actionId" = correction."actionId"
+                    AND newer."resultingActionVersion" > correction."resultingActionVersion"
+                )
+            ) matches
             LIMIT 10001
           `);
           if (actionMatches.length > 10_000) throw new SupportIncidentSearchCapacityError();
@@ -1473,11 +1525,23 @@ function mapIncidentDetail(row: IncidentDetailRecord, canViewCommunications: boo
     createdBy: row.createdBy,
     actions: actions.map(({ action, sourceIncident }) => ({
       id: action.id,
-      text: action.text,
+      text: action.corrections[0]?.correctedText ?? action.text,
+      originalText: action.text,
+      version: action.corrections[0]?.resultingActionVersion ?? 1,
       performedAt: action.performedAt.toISOString(),
       recordedAt: action.recordedAt.toISOString(),
       author: action.authorUser,
       sourceIncident,
+      correctionsHasMore: action.corrections.length > 100,
+      corrections: action.corrections.slice(0, 100).reverse().map((correction) => ({
+        id: correction.id,
+        previousText: correction.previousText,
+        correctedText: correction.correctedText,
+        reason: correction.reason,
+        version: correction.resultingActionVersion,
+        correctedAt: correction.correctedAt.toISOString(),
+        correctedBy: correction.correctedBy,
+      })),
     })),
     communications: communications.map(({ communication, sourceIncident }) => ({
       id: communication.id,

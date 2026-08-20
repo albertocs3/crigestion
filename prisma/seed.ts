@@ -16,6 +16,7 @@ async function main() {
     ["Support.View", "Consultar incidencias de atencion al cliente"],
     ["Support.Create", "Crear incidencias de atencion al cliente"],
     ["Support.AddActions", "Registrar actuaciones en incidencias asignadas"],
+    ["Support.CorrectActions", "Corregir actuaciones propias conservando evidencia"],
     ["Support.ManageAttachments", "Adjuntar archivos a incidencias autorizadas"],
     ["Support.DownloadAttachments", "Descargar adjuntos de incidencias autorizadas"],
     ["Support.ReceiveUrgentNotifications", "Recibir notificaciones de incidencias urgentes"],

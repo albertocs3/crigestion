@@ -2,13 +2,17 @@
 
 ## Alcance implementado
 
-La rebanada actual permite gestionar incidencias, participantes, comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos seguros, fusiones de duplicadas, notificaciones internas persistentes, un panel operativo de soporte y el contexto de soporte integrado en la ficha del cliente.
+La rebanada actual permite gestionar incidencias, participantes, actuaciones y
+comunicaciones telefónicas/WhatsApp con correcciones históricas, adjuntos
+seguros, fusiones de duplicadas, notificaciones internas persistentes, un panel
+operativo de soporte y el contexto de soporte integrado en la ficha del cliente.
 
 ## Permisos
 
 - `Support.View`: listado y detalle de incidencias y categorías.
 - `Support.Create` + `Support.View`: creación de incidencias.
 - `Support.AddActions` + `Support.View`: actuaciones del responsable o de un administrador.
+- `Support.CorrectActions` + `Support.View`: corrección de actuaciones propias por su autor todavía miembro del equipo; Administrador puede intervenir.
 - `Support.ManageAssigned` + `Support.View`: estados pendientes, reanudación, resolución, cierre y cambio posterior de prioridad por el responsable o un administrador.
 - `Support.MergeIncidents` + `Support.View`: fusión cuando el actor es responsable vigente de ambas incidencias; Administrador puede intervenir.
 - `Support.ViewIndicators` + `Support.View`: indicadores propios del técnico.
@@ -210,7 +214,58 @@ Requiere `Support.AddActions` y `Support.View`, además de ser el responsable vi
 
 La fecha real no puede preceder a la incidencia ni superar en más de cinco minutos el reloj del servidor. La primera actuación cambia automáticamente `NEW` a `IN_PROGRESS`, fija `firstActionAt` e incrementa la versión. Una incidencia `RESOLVED` o `CLOSED` debe reabrirse antes de admitir actuaciones.
 
-Respuesta `201`; replay idéntico `200`. Errores estables: `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_ACTION_FORBIDDEN`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_FINALIZED`, `SUPPORT_ACTION_DATE_INVALID`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`.
+Respuesta `201`; replay idéntico `200`. Antes de devolver incluso un replay se
+revalidan los permisos y la pertenencia vigente a la incidencia. Un replay
+inválido o una clave reutilizada consume cuota y queda auditado. Errores
+estables: `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_ACTION_FORBIDDEN`,
+`SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_FINALIZED`,
+`SUPPORT_ACTION_DATE_INVALID`, `IDEMPOTENCY_KEY_REUSED` e
+`IDEMPOTENCY_REPLAY_INVALID`.
+
+## `POST /api/support/incidents/{incidentId}/actions/{actionId}/corrections`
+
+Requiere `Support.CorrectActions` y `Support.View`. El actor debe ser el autor
+original y continuar como responsable o colaborador activo de la incidencia, o
+ser Administrador. La resolución de incidencia, actuación y empresa se realiza
+de forma conjunta y los registros ajenos responden con `404` opaco. Una
+duplicada fusionada es de solo lectura; una incidencia canónica `RESOLVED` o
+`CLOSED` admite esta corrección documental sin cambiar su ciclo.
+
+Aplica Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de 8 KiB,
+`Idempotency-Key`, bloqueo en orden incidencia→actuación y control optimista de
+ambas versiones:
+
+```json
+{
+  "expectedIncidentVersion": 3,
+  "expectedActionVersion": 1,
+  "text": "Se revisa la configuración correcta y se restablece el acceso.",
+  "reason": "Se corrige la descripción tras contrastarla con el técnico."
+}
+```
+
+La operación no admite `performedAt`, autor, incidencia ni campos adicionales.
+Conserva la actuación original inmutable, añade una evidencia append-only con
+la cadena OLD→NEW, incrementa una versión lógica de la actuación y una versión
+de la incidencia, y crea un evento `ACTION_CORRECTED`. El detalle muestra el
+texto vigente y hasta las 100 correcciones más recientes; la evidencia anterior
+permanece en PostgreSQL y su consulta paginada queda como ampliación posterior.
+La búsqueda usa únicamente el texto vigente, manteniendo un índice trigram
+separado para las correcciones. La
+auditoría contiene identificadores, versiones y booleanos, nunca texto ni
+motivo.
+
+Respuesta inicial `201`; replay idéntico `200` tras revalidar la autorización.
+La cuota persistente admite 20 intentos por actor y empresa en 15 minutos y
+devuelve `429` con `Retry-After`; tres conflictos serializables devuelven `503`
+con `Retry-After: 3`. Errores estables:
+`SUPPORT_ACTION_CORRECTION_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`,
+`SUPPORT_ACTION_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`,
+`SUPPORT_ACTION_VERSION_CONFLICT`, `SUPPORT_ACTION_CORRECTION_UNCHANGED`,
+`SUPPORT_INCIDENT_MERGED_READ_ONLY`,
+`SUPPORT_ACTION_CORRECTION_RATE_LIMITED`,
+`SUPPORT_ACTION_CORRECTION_BUSY`, `IDEMPOTENCY_KEY_REUSED` e
+`IDEMPOTENCY_REPLAY_INVALID`.
 
 ## `POST /api/support/incidents/{incidentId}/status-transitions`
 

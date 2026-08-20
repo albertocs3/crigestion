@@ -41,23 +41,41 @@ const replaySchema: z.ZodType<SupportActionResultDto> = z.object({
 type LockedIncident = { id: string; companyId: string; status: z.infer<typeof statusSchema>; version: number; responsibleUserId: string; createdAt: Date; firstActionAt: Date | null; number: string };
 
 export async function createSupportAction(incidentId: string, command: CreateSupportActionCommand, actor: SessionUser, context: SupportActionMutationContext): Promise<CreateSupportActionResult> {
+  if (!actor.permissions.includes("Support.View") || !actor.permissions.includes("Support.AddActions")) {
+    return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "No tienes permiso para registrar actuaciones.");
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       return await prisma.$transaction(async (tx) => {
         const key = scopedKey(actor, context);
         const replay = await tx.idempotencyRecord.findUnique({ where: { key } });
-        if (replay && replay.requestHash === context.requestHash) {
-          const validReplay = replaySchema.safeParse(replay.responseBody);
-          if (validReplay.success) return { ok: true, status: 200, value: validReplay.data };
-        }
         const companyId = await currentCompanyId(tx);
         if (!companyId) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
+        const parsedReplay = replay ? parseReplay(replay.requestHash, context.requestHash, replay.responseBody) : null;
+        if (parsedReplay?.ok) {
+          const replayIncident = await tx.supportIncident.findFirst({
+            where: { id: incidentId, companyId },
+            select: {
+              id: true,
+              responsibleUserId: true,
+              collaborators: { where: { userId: actor.id, removedAt: null }, take: 1, select: { id: true } },
+            },
+          });
+          if (!replayIncident) return failure(404, "SUPPORT_INCIDENT_NOT_FOUND", "La incidencia no existe.");
+          const mayAct = actor.id === replayIncident.responsibleUserId
+            || actor.role.code === "Administrador"
+            || replayIncident.collaborators.length > 0;
+          if (!mayAct) {
+            await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: replayIncident.id, reason: "NOT_RESPONSIBLE", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
+            return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "Solo el responsable, un colaborador o un administrador puede registrar actuaciones.");
+          }
+          return parsedReplay;
+        }
         const rateLimit = await consumeActionRateLimit(tx, actor.id, companyId);
         if (rateLimit.limited) {
           if (rateLimit.firstLimitedRequest) await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_RATE_LIMITED", actorType: "USER", payload: { actorUserId: actor.id, companyId, retryAfterSeconds: rateLimit.retryAfterSeconds, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
           return failure(429, "SUPPORT_ACTION_RATE_LIMITED", "Demasiadas actuaciones registradas. Espera antes de reintentar.", rateLimit.retryAfterSeconds);
         }
-        if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
         const rows = await tx.$queryRaw<LockedIncident[]>(Prisma.sql`
           SELECT "id", "companyId", "status", "version", "responsibleUserId", "createdAt", "firstActionAt", "number"
           FROM "support_incidents"
@@ -70,6 +88,10 @@ export async function createSupportAction(incidentId: string, command: CreateSup
         if (actor.id !== incident.responsibleUserId && actor.role.code !== "Administrador" && !isCollaborator) {
           await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: incident.id, reason: "NOT_RESPONSIBLE", ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
           return failure(403, "SUPPORT_INCIDENT_ACTION_FORBIDDEN", "Solo el responsable, un colaborador o un administrador puede registrar actuaciones.");
+        }
+        if (replay) {
+          await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_ACTION_DENIED", actorType: "USER", payload: { actorUserId: actor.id, companyId, incidentId: incident.id, reason: parsedReplay!.error.code, ...(context.correlationId ? { correlationId: context.correlationId } : {}) } } });
+          return parsedReplay!;
         }
         if (incident.version !== command.expectedVersion) return failure(409, "SUPPORT_INCIDENT_VERSION_CONFLICT", "La incidencia ha cambiado. Recarga antes de continuar.");
         if (incident.status === "RESOLVED" || incident.status === "CLOSED") return failure(409, "SUPPORT_INCIDENT_FINALIZED", "La incidencia debe reabrirse antes de registrar actuaciones.");
@@ -89,13 +111,13 @@ export async function createSupportAction(incidentId: string, command: CreateSup
         return { ok: true, status: 201, value };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+      if (isSerializationConflict(error)) {
         if (attempt < 2) continue;
         return failure(503, "SUPPORT_ACTION_BUSY", "La actuación no pudo confirmarse por concurrencia. Reintenta en unos segundos.", 3);
       }
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         const replay = await prisma.idempotencyRecord.findUnique({ where: { key: scopedKey(actor, context) } });
-        if (replay) return parseReplay(replay.requestHash, context.requestHash, replay.responseBody);
+        if (replay) return createSupportAction(incidentId, command, actor, context);
       }
       throw error;
     }
@@ -107,6 +129,7 @@ export function hashSupportActionRequest(value: unknown): string { return create
 function scopedKey(actor: SessionUser, context: SupportActionMutationContext): string { return `v1:support:${createHash("sha256").update(`${actor.id}:${context.scope}:${context.idempotencyKey}`).digest("hex")}`; }
 async function currentCompanyId(client: Pick<Prisma.TransactionClient, "installation">): Promise<string | null> { return (await client.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId ?? null; }
 function parseReplay(storedHash: string, requestHash: string, body: Prisma.JsonValue): CreateSupportActionResult { if (storedHash !== requestHash) return failure(409, "IDEMPOTENCY_KEY_REUSED", "La clave de idempotencia ya se uso con otra peticion."); const parsed = replaySchema.safeParse(body); return parsed.success ? { ok: true, status: 200, value: parsed.data } : failure(409, "IDEMPOTENCY_REPLAY_INVALID", "La respuesta idempotente almacenada no es valida."); }
+function isSerializationConflict(error: unknown): boolean { return error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2034" || (error.code === "P2010" && error.meta?.code === "40001")); }
 function failure(status: ActionFailure["status"], code: ActionFailure["error"]["code"], message: string, retryAfterSeconds?: number): ActionFailure { return { ok: false, status, error: { code, message, ...(retryAfterSeconds ? { retryAfterSeconds } : {}) } }; }
 
 async function consumeActionRateLimit(tx: Prisma.TransactionClient, actorId: string, companyId: string): Promise<{ limited: false } | { limited: true; firstLimitedRequest: boolean; retryAfterSeconds: number }> {

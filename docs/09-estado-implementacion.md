@@ -6,7 +6,7 @@ Este documento resume el estado verificable del producto y complementa el
 backlog historico de la primera rebanada vertical. No sustituye las
 especificaciones funcionales, los contratos HTTP ni los ADR vigentes.
 
-Fecha de corte: 2026-08-12.
+Fecha de corte: 2026-08-20.
 
 ## 2. Rebanadas disponibles
 
@@ -24,7 +24,7 @@ Fecha de corte: 2026-08-12.
 | Conciliacion bancaria | Operativa inicial | Cuentas y movimientos bancarios, Norma 43 AEB 2012, propuestas, conciliacion parcial o total y deshacer con auditoria. |
 | VeriFactu TEST | Operativa controlada | Instalacion SIF, custodia cifrada y versionada de PFX, prueba mTLS, envio TEST, outbox conservador, worker con heartbeat y panel operativo. PRODUCCION permanece bloqueada. |
 | Suscripciones | Operativa inicial local | Ciclo contractual, reactivacion inmediata, programada supervisada y automatizada con worker monitorizado, y runner manual: vista previa agrupada, exclusion explicita, pendientes all-or-none por bloqueos estables, ledger append-only de preparacion/confirmacion, reintento seleccionado, reserva, liberacion y confirmacion atomica con factura, asiento, VeriFactu/outbox, avance de periodos, RBAC, idempotencia, concurrencia, auditoria y defensas PostgreSQL. |
-| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros, notificaciones persistentes e indicadores propios/globales con tiempos activos. La entrega de avisos se refresca al navegar según ADR-0016. |
+| Atencion al cliente | Parcial | Incidencias con ciclo completo, cambio posterior de prioridad y fusión de duplicadas con evidencia append-only, actuaciones con corrección versionada de texto, participantes, comunicaciones teléfono/WhatsApp, contacto maestro, conversión atómica, adjuntos seguros, notificaciones persistentes e indicadores propios/globales con tiempos activos. La entrega de avisos se refresca al navegar según ADR-0016. |
 | Presupuestos | No implementada | El motor de facturacion no incluye todavia presupuesto ni conversion a factura. |
 
 `Operativa inicial` significa que existe una rebanada integrada y probada, no
@@ -534,6 +534,23 @@ descripción ni motivo. Tras la UAT, la release activa seguía siendo
 continuaba en `TEST: idle`, los cuatro timers estaban programados, no había
 unidades fallidas y el health público devolvía todos los componentes en `ok`.
 Producción no se consultó ni modificó y el acceso SSH temporal permanece activo.
+
+El siguiente corte local incorpora la corrección versionada del texto de las
+actuaciones y endurece el replay de su alta. El endpoint nuevo exige
+`Support.CorrectActions` y `Support.View`; solo el autor que continúe como
+responsable o colaborador activo puede corregir, con bypass explícito de
+Administrador. `performedAt` permanece inmutable. La actuación original no se
+reescribe: PostgreSQL conserva una cadena append-only OLD→NEW, exige un evento
+`ACTION_CORRECTED` y una única versión de incidencia por corrección, y rechaza
+evidencia incompleta. El detalle deriva el texto vigente de la última
+corrección, muestra el historial y la búsqueda deja de considerar textos
+superados. La auditoría omite texto y motivo. La regresión dirigida cubre
+replay tras reasignación, autoría y pertenencia, Administrador, incidencia
+resuelta, duplicada fusionada, carrera concurrente, búsqueda vigente y barreras
+SQL. La base desechable aplicó las 155 migraciones desde cero; la regresión de
+Soporte pasó 74/74, junto con `typecheck`, `lint` y el build de producción. Dos
+revisiones independientes cerraron sin P0/P1. Esta rebanada permanece local
+hasta su despliegue aislado posterior en staging.
 
 ## 5. Riesgos y trabajo posterior
 

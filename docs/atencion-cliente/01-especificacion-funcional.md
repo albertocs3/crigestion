@@ -330,7 +330,13 @@ Cada actuación tendrá:
 
 El responsable, los colaboradores y el administrador pueden añadir actuaciones.
 
-Las actuaciones no se eliminan. Se permiten correcciones conservando texto original, texto corregido, autor, fecha y motivo.
+Las actuaciones no se eliminan. Se permiten correcciones del texto conservando
+la cadena completa de valores anterior y corregido, el autor original, el actor
+que corrige, la fecha y el motivo. La fecha real `performedAt` permanece
+inmutable en esta primera rebanada para no reescribir indicadores históricos
+sin una decisión funcional específica. Solo el autor que continúe como
+responsable o colaborador activo puede corregir su actuación; el Administrador
+puede corregir cualquiera. Una duplicada fusionada sigue siendo de solo lectura.
 
 ## 8. Adjuntos
 

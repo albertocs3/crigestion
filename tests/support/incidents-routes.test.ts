@@ -8,6 +8,7 @@ import {
   POST as incidentsPost,
 } from "@/app/api/support/incidents/route";
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
+import { POST as actionCorrectionsPost } from "@/app/api/support/incidents/[incidentId]/actions/[actionId]/corrections/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
@@ -575,6 +576,46 @@ describe("support incidents HTTP contracts", () => {
     await loginAs("details-viewer", "Cambiar-details-viewer-2026");
     const viewerCsrf = await csrfToken();
     const forbidden = await detailsChangesPost(jsonRequest(`/api/support/incidents/${incident.id}/detail-changes`, { ...body, expectedVersion: 2, title: "Intento no autorizado" }, { csrf: viewerCsrf, key: randomUUID() }), context);
+    expect(forbidden.status).toBe(403);
+    expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("corrects an action once through the protected strict contract", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const createBody = await payload();
+    const created = await incidentsPost(jsonRequest("/api/support/incidents", createBody, { csrf, key: randomUUID() }));
+    const incident = (await created.json()) as { id: string; version: number };
+    const actionBody = { expectedVersion: incident.version, text: "Actuación original desde el contrato HTTP.", performedAt: new Date().toISOString() };
+    const actionResponse = await actionsPost(jsonRequest(`/api/support/incidents/${incident.id}/actions`, actionBody, { csrf, key: randomUUID() }), { params: Promise.resolve({ incidentId: incident.id }) });
+    expect(actionResponse.status).toBe(201);
+    const actionResult = (await actionResponse.json()) as { action: { id: string }; incident: { version: number } };
+    const body = { expectedIncidentVersion: actionResult.incident.version, expectedActionVersion: 1, text: "Actuación corregida desde el contrato HTTP.", reason: "Corrección contrastada durante la prueba de contrato." };
+    const context = { params: Promise.resolve({ incidentId: incident.id, actionId: actionResult.action.id }) };
+    const url = `/api/support/incidents/${incident.id}/actions/${actionResult.action.id}/corrections`;
+    const missingCsrf = await actionCorrectionsPost(jsonRequest(url, body, { key: randomUUID() }), context);
+    expect(missingCsrf.status).toBe(403);
+    expect(await missingCsrf.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const invalid = await actionCorrectionsPost(jsonRequest(url, { ...body, performedAt: new Date().toISOString() }, { csrf, key: randomUUID() }), context);
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    const key = randomUUID();
+    const first = await actionCorrectionsPost(jsonRequest(url, body, { csrf, key }), context);
+    const replay = await actionCorrectionsPost(jsonRequest(url, body, { csrf, key }), context);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const firstBody = (await first.json()) as { incident: { id: string; version: number }; action: { id: string; text: string; version: number }; correction: { id: string } };
+    const replayBody = (await replay.json()) as { correction: { id: string } };
+    expect(firstBody).toMatchObject({ incident: { id: incident.id, version: 3 }, action: { id: actionResult.action.id, text: body.text, version: 2 } });
+    expect(replayBody.correction.id).toBe(firstBody.correction.id);
+    expect(await prisma.supportIncidentActionCorrection.count({ where: { actionId: actionResult.action.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: incident.id, eventType: "ACTION_CORRECTED" } })).toBe(1);
+    const viewerRole = await prisma.role.create({ data: { code: "ActionCorrectionViewer", name: "Sin corrección de actuaciones", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
+    await prisma.user.create({ data: { displayName: "Sin corrección", userName: "action-correction-viewer", normalizedUserName: "action-correction-viewer", passwordHash: hashPassword("Cambiar-action-correction-viewer-2026"), roleId: viewerRole.id } });
+    await loginAs("action-correction-viewer", "Cambiar-action-correction-viewer-2026");
+    const viewerCsrf = await csrfToken();
+    const forbidden = await actionCorrectionsPost(jsonRequest(url, { ...body, expectedIncidentVersion: 3, expectedActionVersion: 2, text: "Intento sin permiso específico." }, { csrf: viewerCsrf, key: randomUUID() }), context);
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
   });
@@ -1168,6 +1209,9 @@ async function reset() {
       'ALTER TABLE "support_incident_details_changes" DISABLE TRIGGER "support_incident_details_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"',
     );
     await tx.$executeRawUnsafe(
@@ -1192,6 +1236,7 @@ async function reset() {
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
+    await tx.supportIncidentActionCorrection.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
@@ -1219,6 +1264,9 @@ async function reset() {
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" ENABLE TRIGGER "support_incident_details_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"',

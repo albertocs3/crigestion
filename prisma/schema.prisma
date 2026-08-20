@@ -772,6 +772,7 @@ model Company {
   supportIncidentPriorityChanges             SupportIncidentPriorityChange[]
   supportIncidentMerges                      SupportIncidentMerge[]
   supportIncidentActions                     SupportIncidentAction[]
+  supportIncidentActionCorrections           SupportIncidentActionCorrection[]
   supportIncidentAttachments                 SupportIncidentAttachment[]
   supportIncidentStatusTransitions           SupportIncidentStatusTransition[]
   supportIncidentCollaborators               SupportIncidentCollaborator[]
@@ -1408,6 +1409,7 @@ model SupportIncident {
   primaryMerges      SupportIncidentMerge[]             @relation("SupportIncidentMergePrimary")
   duplicateMerge     SupportIncidentMerge?              @relation("SupportIncidentMergeDuplicate")
   actions            SupportIncidentAction[]
+  actionCorrections  SupportIncidentActionCorrection[]
   transitions        SupportIncidentStatusTransition[]
   collaborators      SupportIncidentCollaborator[]
   participantChanges SupportIncidentParticipantChange[]
@@ -1445,6 +1447,7 @@ model SupportIncidentEvent {
   participantChangeId      String?                   @db.Uuid
   priorityChangeId         String?                   @db.Uuid
   detailsChangeId          String?                   @db.Uuid
+  actionCorrectionId       String?                   @db.Uuid
   mergeId                  String?                   @db.Uuid
   mergeRole                SupportIncidentMergeRole?
   resultingVersion         Int
@@ -1462,6 +1465,7 @@ model SupportIncidentEvent {
   participantChange      SupportIncidentParticipantChange? @relation(fields: [participantChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_participant_incident_fkey")
   priorityChange         SupportIncidentPriorityChange?    @relation(fields: [priorityChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_priority_incident_fkey")
   detailsChange          SupportIncidentDetailsChange?     @relation(fields: [detailsChangeId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_details_incident_fkey")
+  actionCorrection       SupportIncidentActionCorrection?  @relation(fields: [actionCorrectionId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict, map: "support_event_action_correction_incident_fkey")
   merge                  SupportIncidentMerge?             @relation(fields: [mergeId, companyId], references: [id, companyId], onDelete: Restrict, map: "support_event_merge_fkey")
   notifications          Notification[]
 
@@ -1471,6 +1475,7 @@ model SupportIncidentEvent {
   @@unique([participantChangeId, companyId, incidentId], map: "support_event_participant_incident_key")
   @@unique([priorityChangeId, companyId, incidentId], map: "support_event_priority_incident_key")
   @@unique([detailsChangeId, companyId, incidentId], map: "support_event_details_incident_key")
+  @@unique([actionCorrectionId, companyId, incidentId], map: "support_event_action_correction_incident_key")
   @@unique([mergeId, companyId, incidentId], map: "support_event_merge_incident_key")
   @@unique([mergeId, mergeRole], map: "support_event_merge_role_key")
   @@unique([incidentId, resultingVersion])
@@ -1734,10 +1739,11 @@ model SupportIncidentAction {
   performedAt  DateTime @db.Timestamptz(3)
   recordedAt   DateTime @default(now()) @db.Timestamptz(3)
 
-  company     Company                     @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  incident    SupportIncident             @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
-  authorUser  User                        @relation("SupportIncidentActionsAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
+  company     Company                           @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident    SupportIncident                   @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  authorUser  User                              @relation("SupportIncidentActionsAuthor", fields: [authorUserId], references: [id], onDelete: Restrict)
   event       SupportIncidentEvent?
+  corrections SupportIncidentActionCorrection[]
   attachments SupportIncidentAttachment[]
 
   @@unique([id, companyId])
@@ -1746,6 +1752,35 @@ model SupportIncidentAction {
   @@index([companyId, authorUserId, recordedAt, id])
   @@index([text(ops: raw("gin_trgm_ops"))], type: Gin, map: "support_incident_actions_text_trgm_idx")
   @@map("support_incident_actions")
+}
+
+model SupportIncidentActionCorrection {
+  id                       String   @id @default(uuid()) @db.Uuid
+  companyId                String   @db.Uuid
+  incidentId               String   @db.Uuid
+  actionId                 String   @db.Uuid
+  originalAuthorUserId     String   @db.Uuid
+  correctedByUserId        String   @db.Uuid
+  previousText             String   @db.VarChar(4000)
+  correctedText            String   @db.VarChar(4000)
+  reason                   String   @db.VarChar(500)
+  resultingActionVersion   Int
+  resultingIncidentVersion Int
+  correctedAt              DateTime @default(now()) @db.Timestamptz(3)
+
+  company        Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incident       SupportIncident       @relation(fields: [incidentId, companyId], references: [id, companyId], onDelete: Restrict)
+  action         SupportIncidentAction @relation(fields: [actionId, companyId, incidentId], references: [id, companyId, incidentId], onDelete: Restrict)
+  originalAuthor User                  @relation("SupportActionCorrectionsOriginalAuthor", fields: [originalAuthorUserId], references: [id], onDelete: Restrict)
+  correctedBy    User                  @relation("SupportActionCorrectionsBy", fields: [correctedByUserId], references: [id], onDelete: Restrict)
+  event          SupportIncidentEvent?
+
+  @@unique([id, companyId, incidentId], map: "support_action_correction_incident_key")
+  @@unique([actionId, resultingActionVersion])
+  @@unique([incidentId, resultingIncidentVersion])
+  @@index([actionId, correctedAt, id])
+  @@index([correctedText(ops: raw("gin_trgm_ops"))], type: Gin, map: "support_action_corrections_text_trgm_idx")
+  @@map("support_incident_action_corrections")
 }
 
 model SupportIncidentAttachment {
@@ -1906,6 +1941,8 @@ model User {
   supportIncidentEvents                   SupportIncidentEvent[]                       @relation("SupportIncidentEventsActor")
   incidentResponsibilitySnapshots         SupportIncidentEvent[]                       @relation("SupportIncidentEventsResponsibleSnapshot")
   supportIncidentActions                  SupportIncidentAction[]                      @relation("SupportIncidentActionsAuthor")
+  authoredSupportActionCorrections        SupportIncidentActionCorrection[]            @relation("SupportActionCorrectionsOriginalAuthor")
+  correctedSupportIncidentActions         SupportIncidentActionCorrection[]            @relation("SupportActionCorrectionsBy")
   supportIncidentStatusTransitions        SupportIncidentStatusTransition[]            @relation("SupportIncidentTransitionsActor")
   supportIncidentPriorityChanges          SupportIncidentPriorityChange[]              @relation("SupportIncidentPriorityChangesActor")
   supportIncidentDetailsChanges           SupportIncidentDetailsChange[]               @relation("SupportIncidentDetailsChangesActor")

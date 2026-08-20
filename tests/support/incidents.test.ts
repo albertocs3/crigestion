@@ -22,6 +22,7 @@ import {
   createSupportAction,
   hashSupportActionRequest,
 } from "@/modules/support/application/actions";
+import { correctSupportAction, hashSupportActionCorrectionRequest } from "@/modules/support/application/actionCorrections";
 import {
   createIncidentFromCommunication,
   createSupportCategory,
@@ -291,6 +292,156 @@ describe("support incidents application", () => {
     await expect(prisma.supportIncidentDetailsChange.create({ data: { companyId, incidentId: created.value.id, actorUserId: actor.id, customerId: customer.id, previousStoreId: store.id, correctedStoreId: store.id, previousStoreCode: null, previousStoreName: store.name, correctedStoreCode: store.code, correctedStoreName: store.name, previousCategoryId: secondCategory.id, correctedCategoryId: secondCategory.id, previousCategoryName: secondCategory.name, correctedCategoryName: secondCategory.name, previousTitle: finalizedChange.title, correctedTitle: "Cambio con snapshot nulo", previousDescription: command.description, correctedDescription: command.description, reason: "Intento de insertar un snapshot incompleto.", resultingVersion: 6 } })).rejects.toThrow();
   });
 
+  it("corrects an action once with append-only evidence and exposes only the effective text to search", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Corrección versionada de actuación", description: "Incidencia sintética para corregir una actuación.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const actionCommand = { expectedVersion: created.value.version, text: "TextoOriginalUnicoActuacion", performedAt: new Date().toISOString() };
+    const actionContext = { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...actionCommand }), scope: `incident:${created.value.id}:action:create` };
+    const action = await createSupportAction(created.value.id, actionCommand, actor, actionContext);
+    if (!action.ok) throw new Error(action.error.code);
+    const command = { expectedIncidentVersion: action.value.incident.version, expectedActionVersion: 1, text: "TextoCorregidoUnicoActuacion", reason: "Se corrige el texto después de contrastar el trabajo realizado." };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...command }), scope: `incident:${created.value.id}:action:${action.value.action.id}:correction`, correlationId: "action-correction-0001" };
+
+    const first = await correctSupportAction(created.value.id, action.value.action.id, command, actor, context);
+    const replay = await correctSupportAction(created.value.id, action.value.action.id, command, actor, context);
+    const reused = { ...command, text: "Misma clave con un texto diferente." };
+    expect(await correctSupportAction(created.value.id, action.value.action.id, reused, actor, { ...context, requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...reused }) })).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
+    expect(first).toMatchObject({ ok: true, status: 201, value: { incident: { id: created.value.id, version: 3 }, action: { id: action.value.action.id, text: command.text, version: 2 }, correction: { resultingIncidentVersion: 3, resultingActionVersion: 2 } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { correction: { id: first.ok ? first.value.correction.id : "" } } });
+    const unchanged = { ...command, expectedIncidentVersion: 3, expectedActionVersion: 2 };
+    expect(await correctSupportAction(created.value.id, action.value.action.id, unchanged, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...unchanged }), scope: context.scope })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_ACTION_CORRECTION_UNCHANGED" } });
+    expect(await prisma.supportIncidentActionCorrection.count({ where: { actionId: action.value.action.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: created.value.id, eventType: "ACTION_CORRECTED" } })).toBe(1);
+    const detail = await getSupportIncident(created.value.id, actor);
+    expect(detail?.actions[0]).toMatchObject({ text: command.text, originalText: actionCommand.text, version: 2, corrections: [{ previousText: actionCommand.text, correctedText: command.text, reason: command.reason, version: 2 }] });
+    expect((await listSupportIncidents({ limit: 25, search: actionCommand.text }, actor)).incidents.map((item) => item.id)).not.toContain(created.value.id);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_ACTION_CORRECTED" } });
+    expect(audit.payload).toMatchObject({ incidentId: created.value.id, actionId: action.value.action.id, previousIncidentVersion: 2, incidentVersion: 3, previousActionVersion: 1, actionVersion: 2, correlationId: "action-correction-0001" });
+    const auditJson = JSON.stringify(audit.payload);
+    expect(auditJson).not.toContain(actionCommand.text);
+    expect(auditJson).not.toContain(command.text);
+    expect(auditJson).not.toContain(command.reason);
+    const secondCommand = { expectedIncidentVersion: 3, expectedActionVersion: 2, text: "TextoVigenteSegundaCorreccion", reason: "Segunda corrección que sustituye por completo a la primera." };
+    const second = await correctSupportAction(created.value.id, action.value.action.id, secondCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...secondCommand }), scope: context.scope });
+    expect(second).toMatchObject({ ok: true, status: 201, value: { incident: { version: 4 }, action: { text: secondCommand.text, version: 3 } } });
+    expect((await listSupportIncidents({ limit: 25, search: secondCommand.text }, actor)).incidents.map((item) => item.id)).toContain(created.value.id);
+    expect((await listSupportIncidents({ limit: 25, search: command.text }, actor)).incidents.map((item) => item.id)).not.toContain(created.value.id);
+    const correctionIndex = await prisma.$queryRaw<Array<{ indexdef: string }>>(Prisma.sql`
+      SELECT indexdef FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname = 'support_action_corrections_text_trgm_idx'
+    `);
+    expect(correctionIndex[0]?.indexdef).toContain("USING gin");
+    expect(correctionIndex[0]?.indexdef).toContain("gin_trgm_ops");
+    const correctionPlan = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT set_config('enable_seqscan', ${"off"}, true)`);
+      return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>(Prisma.sql`
+        EXPLAIN (COSTS OFF)
+        SELECT "id"
+        FROM "support_incident_action_corrections"
+        WHERE "correctedText" ILIKE ${"%TextoVigenteSegundaCorreccion%"}
+      `);
+    });
+    expect(correctionPlan.map((row) => row["QUERY PLAN"]).join("\n")).toContain("support_action_corrections_text_trgm_idx");
+    await expect(prisma.supportIncidentActionCorrection.update({ where: { id: first.ok ? first.value.correction.id : randomUUID() }, data: { reason: "Intento de alterar la evidencia." } })).rejects.toThrow();
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.supportIncidentActionCorrection.create({ data: { companyId, incidentId: created.value.id, actionId: action.value.action.id, originalAuthorUserId: actor.id, correctedByUserId: actor.id, previousText: secondCommand.text, correctedText: "Corrección sin evento", reason: "Intento de evidencia incompleta.", resultingActionVersion: 4, resultingIncidentVersion: 5 } });
+      await tx.supportIncident.update({ where: { id: created.value.id }, data: { version: 5 } });
+    })).rejects.toThrow();
+
+    const invertedCreated = await createSupportIncident({ ...create, title: "Cadena invertida de correcciones" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...create, title: "Cadena invertida de correcciones" }), scope: "incident:create" });
+    if (!invertedCreated.ok) throw new Error(invertedCreated.error.code);
+    const invertedActionCommand = { expectedVersion: 1, text: "Texto original de cadena invertida", performedAt: new Date().toISOString() };
+    const invertedAction = await createSupportAction(invertedCreated.value.id, invertedActionCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: invertedCreated.value.id, ...invertedActionCommand }), scope: `incident:${invertedCreated.value.id}:action:create` });
+    if (!invertedAction.ok) throw new Error(invertedAction.error.code);
+    const later = new Date(Date.now() + 1_000);
+    const earlier = new Date(later.getTime() - 500);
+    await expect(prisma.$transaction(async (tx) => {
+      const correctionV2 = await tx.supportIncidentActionCorrection.create({ data: { companyId, incidentId: invertedCreated.value.id, actionId: invertedAction.value.action.id, originalAuthorUserId: actor.id, correctedByUserId: actor.id, previousText: invertedActionCommand.text, correctedText: "Segundo texto con versión de incidencia posterior", reason: "Cadena deliberadamente desordenada para probar la restricción.", resultingActionVersion: 2, resultingIncidentVersion: 4, correctedAt: later } });
+      const correctionV3 = await tx.supportIncidentActionCorrection.create({ data: { companyId, incidentId: invertedCreated.value.id, actionId: invertedAction.value.action.id, originalAuthorUserId: actor.id, correctedByUserId: actor.id, previousText: "Segundo texto con versión de incidencia posterior", correctedText: "Tercer texto con versión de incidencia anterior", reason: "Cadena deliberadamente desordenada para probar la restricción.", resultingActionVersion: 3, resultingIncidentVersion: 3, correctedAt: earlier } });
+      await tx.supportIncidentEvent.create({ data: { companyId, incidentId: invertedCreated.value.id, actorUserId: actor.id, responsibleUserIdAtEvent: actor.id, actionCorrectionId: correctionV3.id, eventType: "ACTION_CORRECTED", fromStatus: "IN_PROGRESS", toStatus: "IN_PROGRESS", resultingVersion: 3, createdAt: earlier } });
+      await tx.supportIncident.update({ where: { id: invertedCreated.value.id }, data: { version: 3 } });
+      await tx.supportIncidentEvent.create({ data: { companyId, incidentId: invertedCreated.value.id, actorUserId: actor.id, responsibleUserIdAtEvent: actor.id, actionCorrectionId: correctionV2.id, eventType: "ACTION_CORRECTED", fromStatus: "IN_PROGRESS", toStatus: "IN_PROGRESS", resultingVersion: 4, createdAt: later } });
+      await tx.supportIncident.update({ where: { id: invertedCreated.value.id }, data: { version: 4 } });
+    })).rejects.toThrow();
+  });
+
+  it("revalidates action membership before returning a create-action replay", async () => {
+    const administrator = await admin();
+    const customer = await createCustomerRecord(administrator);
+    const references = await listSupportReferences();
+    const role = await prisma.role.create({ data: { code: "ActionReplayOwner", name: "Autor de actuación", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const author = await prisma.user.create({ data: { displayName: "Autor inicial", userName: "action-owner", normalizedUserName: "action-owner", passwordHash: hashPassword("Cambiar-action-owner-2026"), roleId: role.id } });
+    const replacement = await prisma.user.create({ data: { displayName: "Responsable sustituto", userName: "action-next", normalizedUserName: "action-next", passwordHash: hashPassword("Cambiar-action-next-2026"), roleId: role.id } });
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: author.id, title: "Replay de actuación protegido", description: "La pertenencia se revalida antes de devolver el texto almacenado.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, administrator, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const logged = await login({ userName: "action-owner", password: "Cambiar-action-owner-2026" });
+    if (!logged.ok) throw new Error(logged.error.code);
+    const command = { expectedVersion: 1, text: "Actuación cuyo replay requiere pertenencia vigente.", performedAt: new Date().toISOString() };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...command }), scope: `incident:${created.value.id}:action:create` };
+    expect(await createSupportAction(created.value.id, command, logged.value.user, context)).toMatchObject({ ok: true, status: 201 });
+    const reassign = { action: "reassign" as const, expectedVersion: 2, responsibleUserId: replacement.id, reason: "Retirada del autor del equipo actual." };
+    expect(await changeSupportParticipants(created.value.id, reassign, administrator, participantContext(created.value.id, reassign))).toMatchObject({ ok: true, status: 201 });
+    expect(await createSupportAction(created.value.id, command, logged.value.user, context)).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_INCIDENT_ACTION_FORBIDDEN" } });
+  });
+
+  it("limits action correction to the original current member or an administrator and allows finalized documentation", async () => {
+    const administrator = await admin();
+    const customer = await createCustomerRecord(administrator);
+    const references = await listSupportReferences();
+    const role = await prisma.role.create({ data: { code: "ActionCorrectionTechnician", name: "Técnico corrector", permissions: { create: ["Support.View", "Support.AddActions", "Support.CorrectActions"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const author = await prisma.user.create({ data: { displayName: "Autor corrector", userName: "correction-author", normalizedUserName: "correction-author", passwordHash: hashPassword("Cambiar-correction-author-2026"), roleId: role.id } });
+    const replacement = await prisma.user.create({ data: { displayName: "Responsable no autor", userName: "correction-next", normalizedUserName: "correction-next", passwordHash: hashPassword("Cambiar-correction-next-2026"), roleId: role.id } });
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: author.id, title: "Autoridad de corrección", description: "Solo el autor vigente en el equipo o un administrador puede corregir.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, administrator, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const authorLogin = await login({ userName: "correction-author", password: "Cambiar-correction-author-2026" });
+    const replacementLogin = await login({ userName: "correction-next", password: "Cambiar-correction-next-2026" });
+    if (!authorLogin.ok || !replacementLogin.ok) throw new Error("ACTION_CORRECTION_LOGIN_FAILED");
+    const actionCommand = { expectedVersion: 1, text: "Texto documentado por el autor original.", performedAt: new Date().toISOString() };
+    const action = await createSupportAction(created.value.id, actionCommand, authorLogin.value.user, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...actionCommand }), scope: `incident:${created.value.id}:action:create` });
+    if (!action.ok) throw new Error(action.error.code);
+    const authorCommand = { expectedIncidentVersion: 2, expectedActionVersion: 1, text: "Primera corrección realizada por el autor.", reason: "Corrección inicial contrastada por el autor." };
+    const authorContext = { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...authorCommand }), scope: `incident:${created.value.id}:action:${action.value.action.id}:correction` };
+    expect(await correctSupportAction(created.value.id, action.value.action.id, authorCommand, authorLogin.value.user, authorContext)).toMatchObject({ ok: true, status: 201, value: { incident: { version: 3 }, action: { version: 2 } } });
+    const reassign = { action: "reassign" as const, expectedVersion: 3, responsibleUserId: replacement.id, reason: "Cambio de responsable para probar la autoría." };
+    expect(await changeSupportParticipants(created.value.id, reassign, administrator, participantContext(created.value.id, reassign))).toMatchObject({ ok: true, status: 201 });
+    expect(await correctSupportAction(created.value.id, action.value.action.id, authorCommand, authorLogin.value.user, authorContext)).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_ACTION_CORRECTION_FORBIDDEN" } });
+    const command = { expectedIncidentVersion: 4, expectedActionVersion: 2, text: "Texto corregido después de la reasignación.", reason: "Corrección administrativa contrastada." };
+    const makeContext = () => ({ idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...command }), scope: `incident:${created.value.id}:action:${action.value.action.id}:correction` });
+    expect(await correctSupportAction(created.value.id, action.value.action.id, command, authorLogin.value.user, makeContext())).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_ACTION_CORRECTION_FORBIDDEN" } });
+    expect(await correctSupportAction(created.value.id, action.value.action.id, command, replacementLogin.value.user, makeContext())).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_ACTION_CORRECTION_FORBIDDEN" } });
+    expect(await correctSupportAction(created.value.id, action.value.action.id, command, administrator, makeContext())).toMatchObject({ ok: true, status: 201, value: { incident: { version: 5 }, action: { version: 3 } } });
+    const resolve = { action: "resolve" as const, expectedVersion: 5, solution: "La incidencia se resuelve antes de una corrección documental posterior." };
+    expect(await transitionSupportIncident(created.value.id, resolve, administrator, transitionContext(created.value.id, resolve))).toMatchObject({ ok: true, status: 201, value: { incident: { status: "RESOLVED", version: 6 } } });
+    const finalizedCommand = { ...command, expectedIncidentVersion: 6, expectedActionVersion: 3, text: "Texto corregido con la incidencia ya resuelta." };
+    expect(await correctSupportAction(created.value.id, action.value.action.id, finalizedCommand, administrator, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...finalizedCommand }), scope: `incident:${created.value.id}:action:${action.value.action.id}:correction` })).toMatchObject({ ok: true, status: 201, value: { incident: { version: 7 }, action: { version: 4 } } });
+  });
+
+  it("serializes concurrent corrections of the same action", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Corrección concurrente", description: "Dos correcciones compiten por la misma versión de actuación.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const actionCommand = { expectedVersion: 1, text: "Texto inicial para la carrera de correcciones.", performedAt: new Date().toISOString() };
+    const action = await createSupportAction(created.value.id, actionCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...actionCommand }), scope: `incident:${created.value.id}:action:create` });
+    if (!action.ok) throw new Error(action.error.code);
+    const commands = ["Primera corrección concurrente.", "Segunda corrección concurrente."].map((text) => ({ expectedIncidentVersion: 2, expectedActionVersion: 1, text, reason: "Prueba de exclusión concurrente." }));
+    const results = await Promise.all(commands.map((command) => correctSupportAction(created.value.id, action.value.action.id, command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...command }), scope: `incident:${created.value.id}:action:${action.value.action.id}:correction` })));
+    expect(results.filter((result) => result.ok && result.status === 201)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok && result.status === 409)).toHaveLength(1);
+    expect(await prisma.supportIncidentActionCorrection.count({ where: { actionId: action.value.action.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: created.value.id, eventType: "ACTION_CORRECTED" } })).toBe(1);
+  });
+
   it("revalidates current responsibility before returning an idempotent replay", async () => {
     const administrator = await admin();
     const customer = await createCustomerRecord(administrator);
@@ -429,6 +580,8 @@ describe("support incidents application", () => {
     expect(await prisma.notification.count({ where: { kind: "SUPPORT_INCIDENT_MERGED" } })).toBe(1);
     const mergedDetails = { expectedVersion: 4, title: "Duplicada alterada", description: baseCommand.description, categoryId: baseCommand.categoryId, storeId: null, reason: "No debe admitirse sobre una duplicada." };
     expect(await changeSupportIncidentDetails(duplicate.value.id, mergedDetails, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: duplicate.value.id, ...mergedDetails }), scope: `incident:${duplicate.value.id}:details-change` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_MERGED_READ_ONLY" } });
+    const mergedCorrection = { expectedIncidentVersion: 4, expectedActionVersion: 1, text: "Intento de corregir una actuación fusionada.", reason: "La duplicada debe permanecer en solo lectura." };
+    expect(await correctSupportAction(duplicate.value.id, action.value.action.id, mergedCorrection, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: duplicate.value.id, actionId: action.value.action.id, ...mergedCorrection }), scope: `incident:${duplicate.value.id}:action:${action.value.action.id}:correction` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_MERGED_READ_ONLY" } });
     const storedAction = await prisma.supportIncidentAction.findUniqueOrThrow({ where: { id: action.value.action.id } });
     expect(storedAction.incidentId).toBe(duplicate.value.id);
     const primaryDetail = await getSupportIncident(primary.value.id, actor);
@@ -2005,6 +2158,9 @@ async function reset() {
       'ALTER TABLE "support_incident_details_changes" DISABLE TRIGGER "support_incident_details_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
+    );
+    await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
@@ -2026,6 +2182,7 @@ async function reset() {
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
+    await tx.supportIncidentActionCorrection.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
@@ -2050,6 +2207,9 @@ async function reset() {
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_details_changes" ENABLE TRIGGER "support_incident_details_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',
