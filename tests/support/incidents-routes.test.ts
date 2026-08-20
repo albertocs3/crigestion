@@ -94,6 +94,45 @@ describe("support incidents HTTP contracts", () => {
     expect(notifications.headers.get("cache-control")).toBe("private, no-store, max-age=0");
   });
 
+  it("validates support list filters strictly before querying", async () => {
+    await loginAs("admin", password);
+    for (const url of [
+      "/api/support/incidents?unexpected=true",
+      "/api/support/incidents?__proto__=x",
+      "/api/support/incidents?status=NEW&status=CLOSED",
+      "/api/support/incidents?search=ab",
+      "/api/support/incidents?createdFrom=2026-03-29",
+      "/api/support/incidents?createdFrom=2025-01-01&createdTo=2026-01-02",
+      "/api/support/communications?unexpected=true",
+      "/api/support/communications?__proto__=x",
+      "/api/support/communications?channel=PHONE&channel=WHATSAPP",
+      "/api/support/communications?occurredFrom=2026-10-25",
+      "/api/support/communications?occurredFrom=2025-01-01&occurredTo=2026-01-02",
+    ]) {
+      const response = url.includes("communications")
+        ? await communicationsGet(request(url))
+        : await incidentsGet(request(url));
+      expect(response.status, url).toBe(422);
+      expect(await response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+    expect((await incidentsGet(request("/api/support/incidents?createdFrom=2026-03-29&createdTo=2026-03-29"))).status).toBe(200);
+    expect((await communicationsGet(request("/api/support/communications?occurredFrom=2026-10-25&occurredTo=2026-10-25"))).status).toBe(200);
+    const csrf = await csrfToken();
+    await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    await incidentsPost(jsonRequest("/api/support/incidents", await payload(), { csrf, key: randomUUID() }));
+    const firstPage = await incidentsGet(request("/api/support/incidents?limit=1&priority=MEDIUM"));
+    const firstPageBody = await firstPage.json() as { nextCursor: string };
+    expect(firstPageBody.nextCursor).toEqual(expect.any(String));
+    expect((await incidentsGet(request(`/api/support/incidents?limit=1&priority=HIGH&cursor=${firstPageBody.nextCursor}`))).status).toBe(422);
+    expect((await incidentsGet(request(`/api/support/incidents?limit=1&priority=MEDIUM&cursor=${firstPageBody.nextCursor.slice(0, -1)}x`))).status).toBe(422);
+    const installation = await prisma.installation.findFirstOrThrow({ select: { companyId: true, initialAdministratorId: true } });
+    await prisma.rateLimitBucket.create({ data: { key: `support-incident-search:${installation.companyId}:${installation.initialAdministratorId}`, count: 30, windowStart: new Date() } });
+    const limited = await incidentsGet(request("/api/support/incidents?search=incidencia"));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("900");
+    expect(await limited.json()).toMatchObject({ code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED" });
+  });
+
   it("protects indicator scope and validates its read-only contract", async () => {
     const unauthenticated = await indicatorsGet(request("/api/support/indicators?from=2026-08-01&to=2026-08-12"));
     expect(unauthenticated.status).toBe(401);
@@ -565,6 +604,9 @@ describe("support incidents HTTP contracts", () => {
     expect(firstBody.change.type).toBe("COLLABORATOR_ADDED");
     expect(replayBody.change.id).toBe(firstBody.change.id);
     expect(await prisma.supportIncidentCollaborator.count()).toBe(1);
+    const filtered = await incidentsGet(request(`/api/support/incidents?activeCollaboratorUserId=${user.id}`));
+    expect(filtered.status).toBe(200);
+    expect(await filtered.json()).toMatchObject({ incidents: [{ id: incident.id }] });
     expect(await prisma.notification.findMany({ where: { incidentId: incident.id, kind: "SUPPORT_INCIDENT_COLLABORATOR_ADDED" }, select: { recipientUserId: true, messageCode: true } })).toEqual([{ recipientUserId: user.id, messageCode: "support.incident.collaborator-added" }]);
   });
 
@@ -659,6 +701,14 @@ describe("support incidents HTTP contracts", () => {
     expect(listBody.communications).toHaveLength(1);
     expect(listBody.communications[0]).toMatchObject({ id: firstBody.id });
     expect(listBody.nextCursor).toEqual(expect.any(String));
+    const madridDay = madridDateOnly(new Date(body.occurredAt));
+    const structured = await communicationsGet(request(`/api/support/communications?customerId=${body.customerId}&channel=${body.channel}&direction=${body.direction}&result=${body.result}&occurredFrom=${madridDay}&occurredTo=${madridDay}`));
+    expect(structured.status).toBe(200);
+    expect(await structured.json()).toMatchObject({ communications: [{ id: firstBody.id }, { id: secondBody.id }] });
+    const mismatchedCursor = await communicationsGet(
+      request(`/api/support/communications?limit=1&customerId=${body.customerId}&channel=WHATSAPP&cursor=${listBody.nextCursor}`),
+    );
+    expect(mismatchedCursor.status).toBe(422);
     const nextPage = await communicationsGet(
       request(
         `/api/support/communications?limit=1&customerId=${body.customerId}&cursor=${listBody.nextCursor}`,
@@ -683,7 +733,7 @@ describe("support incidents HTTP contracts", () => {
       },
       select: { payload: true },
     });
-    expect(readAudits).toHaveLength(3);
+    expect(readAudits).toHaveLength(4);
     expect(JSON.stringify(readAudits)).not.toContain(body.summary);
     expect(JSON.stringify(readAudits)).not.toContain(body.contactNumber);
   });
@@ -1020,6 +1070,12 @@ function responseId(value: unknown): string | undefined {
   return typeof value === "object" && value !== null && "id" in value
     ? String(value.id)
     : undefined;
+}
+
+function madridDateOnly(value: Date): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 async function reset() {
   await prisma.$transaction(async (tx) => {

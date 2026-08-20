@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -9,6 +9,8 @@ import type {
   SessionUser,
 } from "@/modules/platform/application/auth";
 import { createIncidentCreatedNotifications } from "@/modules/platform/application/notifications";
+import { getSessionSecret } from "@/modules/platform/application/environment";
+import { madridDateRange, supportDateOnlySchema, validateMadridDateRange } from "@/modules/support/application/listFilters";
 
 const prioritySchema = z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]);
 const statusSchema = z.enum([
@@ -37,21 +39,24 @@ const colorSchema = z
 export const listSupportIncidentsSchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(25),
-    cursor: z
-      .string()
-      .max(256)
-      .refine(
-        (value) => decodeCursor(value) !== null,
-        "El cursor no es valido.",
-      )
-      .optional(),
+    cursor: z.string().max(512).optional(),
     status: statusSchema.optional(),
     priority: prioritySchema.optional(),
     responsibleUserId: z.string().uuid().optional(),
     customerId: z.string().uuid().optional(),
-    search: z.string().trim().min(1).max(120).optional(),
+    categoryId: z.string().uuid().optional(),
+    activeCollaboratorUserId: z.string().uuid().optional(),
+    createdFrom: supportDateOnlySchema.optional(),
+    createdTo: supportDateOnlySchema.optional(),
+    search: z.string().trim().min(3).max(120).regex(/^[^\u0000-\u001F\u007F]*$/, "La búsqueda contiene caracteres no válidos.").refine((value) => /[\p{L}\p{N}]/u.test(value), "La búsqueda debe contener letras o números.").optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    validateMadridDateRange(value.createdFrom, value.createdTo, context, "createdFrom", "createdTo");
+    if (value.cursor && !decodeCursor(value.cursor, incidentFilterHash(value))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["cursor"], message: "El cursor no es válido para estos filtros." });
+    }
+  });
 
 export const createSupportIncidentSchema = z
   .object({
@@ -590,14 +595,21 @@ const categoryReplaySchema: z.ZodType<SupportCategoryDto> = z
 export async function listSupportIncidents(
   command: ListSupportIncidentsCommand,
   actor: SessionUser,
+  context: RequestContext = {},
 ) {
   const companyId = await currentCompanyId(prisma);
   if (!companyId)
     return {
       incidents: [] as SupportIncidentListItem[],
       nextCursor: null as string | null,
+      rateLimited: false,
     };
-  const cursor = command.cursor ? decodeCursor(command.cursor) : null;
+  if (command.search && await consumeSupportSearchRateLimit(companyId, actor, context.correlationId)) {
+    return { incidents: [] as SupportIncidentListItem[], nextCursor: null as string | null, rateLimited: true };
+  }
+  const filterHash = incidentFilterHash(command);
+  const cursor = command.cursor ? decodeCursor(command.cursor, filterHash) : null;
+  const createdAt = command.createdFrom && command.createdTo ? madridDateRange(command.createdFrom, command.createdTo) : undefined;
   const rows = await prisma.supportIncident.findMany({
     where: {
       companyId,
@@ -607,6 +619,9 @@ export async function listSupportIncidents(
         ? { responsibleUserId: command.responsibleUserId }
         : {}),
       ...(command.customerId ? { customerId: command.customerId } : {}),
+      ...(command.categoryId ? { categoryId: command.categoryId } : {}),
+      ...(command.activeCollaboratorUserId ? { collaborators: { some: { companyId, userId: command.activeCollaboratorUserId, removedAt: null } } } : {}),
+      ...(createdAt ? { createdAt } : {}),
       ...(command.search
         ? {
             OR: [
@@ -640,9 +655,17 @@ export async function listSupportIncidents(
         actorUserId: actor.id,
         companyId,
         hasSearch: Boolean(command.search),
+        hasCursor: Boolean(command.cursor),
         status: command.status ?? null,
         priority: command.priority ?? null,
+        customerId: command.customerId ?? null,
+        responsibleUserId: command.responsibleUserId ?? null,
+        categoryId: command.categoryId ?? null,
+        activeCollaboratorUserId: command.activeCollaboratorUserId ?? null,
+        createdFrom: command.createdFrom ?? null,
+        createdTo: command.createdTo ?? null,
         resultCount: page.length,
+        ...(context.correlationId ? { correlationId: context.correlationId } : {}),
       },
     },
   });
@@ -650,8 +673,9 @@ export async function listSupportIncidents(
     incidents: page.map(mapIncidentListItem),
     nextCursor:
       rows.length > command.limit && page.length
-        ? encodeCursor(page[page.length - 1]!)
+        ? encodeCursor(page[page.length - 1]!, filterHash)
         : null,
+    rateLimited: false,
   };
 }
 
@@ -737,6 +761,30 @@ export async function listSupportReferences(
     ? [...listedCustomers, preferredCustomer].sort((left, right) => left.legalName.localeCompare(right.legalName, "es") || left.id.localeCompare(right.id))
     : listedCustomers;
   return { customers, categories, responsibleUsers };
+}
+
+export async function listSupportIncidentFilterReferences(selectedCustomerId?: string) {
+  const companyId = await currentCompanyId(prisma);
+  if (!companyId) return { customers: [], categories: [], responsibleUsers: [], collaboratorUsers: [] };
+  const [listedCustomers, selectedCustomer, categories, responsibleUsers, collaboratorUsers] = await Promise.all([
+    prisma.customer.findMany({ where: { supportIncidents: { some: { companyId } } }, orderBy: [{ legalName: "asc" }, { id: "asc" }], take: 500, select: { id: true, code: true, legalName: true } }),
+    selectedCustomerId ? prisma.customer.findFirst({ where: { id: selectedCustomerId, supportIncidents: { some: { companyId } } }, select: { id: true, code: true, legalName: true } }) : Promise.resolve(null),
+    prisma.supportIncidentCategory.findMany({ where: { companyId }, orderBy: [{ name: "asc" }, { id: "asc" }], select: { id: true, name: true, isActive: true } }),
+    prisma.user.findMany({
+      where: { responsibleSupportIncidents: { some: { companyId } } },
+      orderBy: [{ displayName: "asc" }, { id: "asc" }],
+      select: { id: true, displayName: true, status: true },
+    }),
+    prisma.user.findMany({
+      where: { supportIncidentCollaborations: { some: { companyId, removedAt: null } } },
+      orderBy: [{ displayName: "asc" }, { id: "asc" }],
+      select: { id: true, displayName: true, status: true },
+    }),
+  ]);
+  const customers = selectedCustomer && !listedCustomers.some((item) => item.id === selectedCustomer.id)
+    ? [...listedCustomers, selectedCustomer].sort((left, right) => left.legalName.localeCompare(right.legalName, "es") || left.id.localeCompare(right.id))
+    : listedCustomers;
+  return { customers, categories, responsibleUsers, collaboratorUsers };
 }
 
 export async function listSupportCategories(): Promise<SupportCategoryDto[]> {
@@ -1420,26 +1468,45 @@ function madridYear(value: Date): number {
 }
 function encodeCursor(
   row: Pick<IncidentListRecord, "updatedAt" | "id">,
+  filterHash: string,
 ): string {
-  return Buffer.from(
-    JSON.stringify([row.updatedAt.toISOString(), row.id]),
-    "utf8",
-  ).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ v: 1, updatedAt: row.updatedAt.toISOString(), id: row.id, filterHash }), "utf8").toString("base64url");
+  return `${payload}.${signCursor(payload)}`;
 }
-function decodeCursor(value: string): { updatedAt: Date; id: string } | null {
+function decodeCursor(value: string, filterHash: string): { updatedAt: Date; id: string } | null {
   try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length !== 2 ||
-      !z.string().datetime().safeParse(parsed[0]).success ||
-      !z.string().uuid().safeParse(parsed[1]).success
-    )
-      return null;
-    return { updatedAt: new Date(parsed[0]), id: parsed[1] };
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expected = signCursor(payload);
+    const submitted = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(expected, "base64url");
+    if (submitted.toString("base64url") !== signature || submitted.length !== expectedBytes.length || !timingSafeEqual(submitted, expectedBytes)) return null;
+    const parsed = z.object({ v: z.literal(1), updatedAt: z.string().datetime(), id: z.string().uuid(), filterHash: z.string().length(64) }).strict().safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    return parsed.success && parsed.data.filterHash === filterHash ? { updatedAt: new Date(parsed.data.updatedAt), id: parsed.data.id } : null;
   } catch {
     return null;
   }
+}
+function signCursor(payload: string): string { return createHmac("sha256", getSessionSecret()).update(`support-incident-list-cursor:v1:${payload}`).digest("base64url"); }
+function incidentFilterHash(command: Omit<ListSupportIncidentsCommand, "cursor" | "limit"> & { cursor?: string; limit?: number }): string {
+  return createHash("sha256").update(JSON.stringify({ status: command.status ?? null, priority: command.priority ?? null, responsibleUserId: command.responsibleUserId ?? null, customerId: command.customerId ?? null, categoryId: command.categoryId ?? null, activeCollaboratorUserId: command.activeCollaboratorUserId ?? null, createdFrom: command.createdFrom ?? null, createdTo: command.createdTo ?? null, search: command.search ?? null })).digest("hex");
+}
+async function consumeSupportSearchRateLimit(companyId: string, actor: SessionUser, correlationId?: string): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const key = `support-incident-search:${companyId}:${actor.id}`;
+    const rows = await tx.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+      VALUES (gen_random_uuid(), ${key}, clock_timestamp(), 1, clock_timestamp(), clock_timestamp())
+      ON CONFLICT ("key") DO UPDATE SET
+        "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN 1 ELSE LEAST("rate_limit_buckets"."count" + 1, 32) END,
+        "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= clock_timestamp() - INTERVAL '15 minutes' THEN clock_timestamp() ELSE "rate_limit_buckets"."windowStart" END,
+        "updatedAt" = clock_timestamp()
+      RETURNING "count"
+    `);
+    const count = rows[0]?.count ?? 0;
+    if (count === 31) await tx.auditEvent.create({ data: { eventType: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED", actorType: "USER", payload: { actorUserId: actor.id, companyId, ...(correlationId ? { correlationId } : {}) } } });
+    return count > 30;
+  });
 }
 function failure(
   status: 404 | 409 | 422,

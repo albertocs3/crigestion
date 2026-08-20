@@ -35,7 +35,7 @@ export async function GET(request: Request) {
   if (!auth.ok) return response(request, auth.error, auth.status);
   const url = new URL(request.url);
   const parsed = listSupportCommunicationsSchema.safeParse(
-    Object.fromEntries(url.searchParams),
+    strictQuery(url.searchParams),
   );
   return parsed.success
     ? response(
@@ -109,4 +109,9 @@ function response(request: Request, body: unknown, status: number) {
       ...(status === 503 ? { "Retry-After": "3" } : {}),
     },
   });
+}
+function strictQuery(search: URLSearchParams): Record<string, string | string[]> {
+  const result = Object.create(null) as Record<string, string | string[]>;
+  for (const [key, value] of search) result[key] = Object.hasOwn(result, key) ? [...(Array.isArray(result[key]) ? result[key] : [result[key] as string]), value] : value;
+  return result;
 }

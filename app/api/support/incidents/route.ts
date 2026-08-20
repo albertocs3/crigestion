@@ -9,12 +9,15 @@ export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const token = (await cookies()).get(sessionCookieName)?.value;
-  const authorization = await requirePermission(token, "Support.View", { correlationId: getCorrelationId(request) });
+  const correlationId = getCorrelationId(request);
+  const authorization = await requirePermission(token, "Support.View", { correlationId });
   if (!authorization.ok) return response(request, authorization.error, authorization.status);
-  const search = new URL(request.url).searchParams;
-  const parsed = listSupportIncidentsSchema.safeParse({ limit: search.get("limit") ?? undefined, cursor: search.get("cursor") ?? undefined, status: search.get("status") ?? undefined, priority: search.get("priority") ?? undefined, responsibleUserId: search.get("responsibleUserId") ?? undefined, customerId: search.get("customerId") ?? undefined, search: search.get("search") ?? undefined });
+  const parsed = listSupportIncidentsSchema.safeParse(strictQuery(new URL(request.url).searchParams));
   if (!parsed.success) return response(request, validationError(parsed.error.flatten()), 422);
-  return response(request, await listSupportIncidents(parsed.data, authorization.user), 200);
+  const result = await listSupportIncidents(parsed.data, authorization.user, { correlationId });
+  return result.rateLimited
+    ? response(request, { code: "SUPPORT_INCIDENT_SEARCH_RATE_LIMITED", message: "Se ha superado el límite temporal de búsquedas." }, 429)
+    : response(request, result, 200);
 }
 
 export async function POST(request: Request) {
@@ -42,4 +45,9 @@ export async function POST(request: Request) {
   return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status);
 }
 
-function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0" } }); }
+function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...(status === 429 ? { "Retry-After": "900" } : {}) } }); }
+function strictQuery(search: URLSearchParams): Record<string, string | string[]> {
+  const result = Object.create(null) as Record<string, string | string[]>;
+  for (const [key, value] of search) result[key] = Object.hasOwn(result, key) ? [...(Array.isArray(result[key]) ? result[key] : [result[key] as string]), value] : value;
+  return result;
+}

@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -8,6 +8,8 @@ import type {
   RequestContext,
   SessionUser,
 } from "@/modules/platform/application/auth";
+import { getSessionSecret } from "@/modules/platform/application/environment";
+import { madridDateRange, supportDateOnlySchema, validateMadridDateRange } from "@/modules/support/application/listFilters";
 
 const channelSchema = z.enum(["PHONE", "WHATSAPP"]);
 const directionSchema = z.enum(["INBOUND", "OUTBOUND"]);
@@ -44,19 +46,23 @@ export const correctSupportCommunicationSchema = z
 export const listSupportCommunicationsSchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(25),
-    cursor: z
-      .string()
-      .max(256)
-      .refine(
-        (value) => decodeCursor(value) !== null,
-        "El cursor no es válido.",
-      )
-      .optional(),
+    cursor: z.string().max(512).optional(),
     customerId: z.string().uuid().optional(),
     incidentId: z.string().uuid().optional(),
+    contactId: z.string().uuid().optional(),
     channel: channelSchema.optional(),
+    direction: directionSchema.optional(),
+    result: resultSchema.optional(),
+    occurredFrom: supportDateOnlySchema.optional(),
+    occurredTo: supportDateOnlySchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    validateMadridDateRange(value.occurredFrom, value.occurredTo, context, "occurredFrom", "occurredTo");
+    if (value.cursor && !decodeCursor(value.cursor, communicationFilterHash(value))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["cursor"], message: "El cursor no es válido para estos filtros." });
+    }
+  });
 export const supportCommunicationParamsSchema = z
   .object({ communicationId: z.string().uuid() })
   .strict();
@@ -243,13 +249,19 @@ export async function listSupportCommunications(
       communications: [] as SupportCommunicationDto[],
       nextCursor: null as string | null,
     };
-  const cursor = command.cursor ? decodeCursor(command.cursor) : null;
+  const filterHash = communicationFilterHash(command);
+  const cursor = command.cursor ? decodeCursor(command.cursor, filterHash) : null;
+  const occurredAt = command.occurredFrom && command.occurredTo ? madridDateRange(command.occurredFrom, command.occurredTo) : undefined;
   const rows = await prisma.supportCommunication.findMany({
     where: {
       companyId,
       ...(command.customerId ? { customerId: command.customerId } : {}),
       ...(command.incidentId ? { incidentId: command.incidentId } : {}),
+      ...(command.contactId ? { contactId: command.contactId } : {}),
       ...(command.channel ? { channel: command.channel } : {}),
+      ...(command.direction ? { direction: command.direction } : {}),
+      ...(command.result ? { result: command.result } : {}),
+      ...(occurredAt ? { occurredAt } : {}),
       ...(cursor
         ? {
             OR: [
@@ -273,7 +285,15 @@ export async function listSupportCommunications(
         companyId,
         filteredByCustomer: Boolean(command.customerId),
         filteredByIncident: Boolean(command.incidentId),
+        customerId: command.customerId ?? null,
+        incidentId: command.incidentId ?? null,
+        contactId: command.contactId ?? null,
         channel: command.channel ?? null,
+        direction: command.direction ?? null,
+        result: command.result ?? null,
+        occurredFrom: command.occurredFrom ?? null,
+        occurredTo: command.occurredTo ?? null,
+        hasCursor: Boolean(command.cursor),
         resultCount: page.length,
         ...(context.correlationId
           ? { correlationId: context.correlationId }
@@ -285,7 +305,7 @@ export async function listSupportCommunications(
     communications: page.map(mapDetail),
     nextCursor:
       rows.length > command.limit && page.length
-        ? encodeCursor(page[page.length - 1]!)
+        ? encodeCursor(page[page.length - 1]!, filterHash)
         : null,
   };
 }
@@ -376,6 +396,24 @@ export async function listCommunicationReferences(preferredCustomerId?: string) 
     }),
   ]);
   return { customers, incidents, contacts };
+}
+
+export async function listCommunicationFilterReferences(selected: { customerId?: string; contactId?: string } = {}) {
+  const companyId = await currentCompanyId(prisma);
+  if (!companyId) return { customers: [], contacts: [] };
+  const [listedCustomers, selectedCustomer] = await Promise.all([
+    prisma.customer.findMany({ where: { supportCommunications: { some: { companyId } } }, orderBy: [{ legalName: "asc" }, { id: "asc" }], take: 500, select: customerReferenceSelect }),
+    selected.customerId ? prisma.customer.findFirst({ where: { id: selected.customerId, supportCommunications: { some: { companyId } } }, select: customerReferenceSelect }) : Promise.resolve(null),
+  ]);
+  const customers = selectedCustomer && !listedCustomers.some((item) => item.id === selectedCustomer.id) ? [...listedCustomers, selectedCustomer] : listedCustomers;
+  const [listedContacts, selectedContact] = await Promise.all([prisma.customerContact.findMany({
+    where: { customerId: { in: customers.map((customer) => customer.id) }, communications: { some: { companyId } } },
+    orderBy: [{ customerId: "asc" }, { name: "asc" }, { id: "asc" }],
+    take: 1_000,
+    select: { id: true, customerId: true, name: true, role: true, status: true },
+  }), selected.contactId ? prisma.customerContact.findFirst({ where: { id: selected.contactId, communications: { some: { companyId } } }, select: { id: true, customerId: true, name: true, role: true, status: true } }) : Promise.resolve(null)]);
+  const contacts = selectedContact && !listedContacts.some((item) => item.id === selectedContact.id) ? [...listedContacts, selectedContact] : listedContacts;
+  return { customers, contacts };
 }
 
 export async function createSupportCommunication(
@@ -868,26 +906,27 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
     })),
   };
 }
-function encodeCursor(row: { occurredAt: Date; id: string }) {
-  return Buffer.from(
-    JSON.stringify({ occurredAt: row.occurredAt.toISOString(), id: row.id }),
-    "utf8",
-  ).toString("base64url");
+function encodeCursor(row: { occurredAt: Date; id: string }, filterHash: string) {
+  const payload = Buffer.from(JSON.stringify({ v: 1, occurredAt: row.occurredAt.toISOString(), id: row.id, filterHash }), "utf8").toString("base64url");
+  return `${payload}.${signCursor(payload)}`;
 }
-function decodeCursor(value: string): { occurredAt: Date; id: string } | null {
+function decodeCursor(value: string, filterHash: string): { occurredAt: Date; id: string } | null {
   try {
-    const parsed = JSON.parse(
-      Buffer.from(value, "base64url").toString("utf8"),
-    ) as { occurredAt?: string; id?: string };
-    const occurredAt = new Date(parsed.occurredAt ?? "");
-    return parsed.id &&
-      z.string().uuid().safeParse(parsed.id).success &&
-      !Number.isNaN(occurredAt.getTime())
-      ? { occurredAt, id: parsed.id }
-      : null;
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expected = signCursor(payload);
+    const submitted = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(expected, "base64url");
+    if (submitted.toString("base64url") !== signature || submitted.length !== expectedBytes.length || !timingSafeEqual(submitted, expectedBytes)) return null;
+    const parsed = z.object({ v: z.literal(1), occurredAt: z.string().datetime(), id: z.string().uuid(), filterHash: z.string().length(64) }).strict().safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    return parsed.success && parsed.data.filterHash === filterHash ? { occurredAt: new Date(parsed.data.occurredAt), id: parsed.data.id } : null;
   } catch {
     return null;
   }
+}
+function signCursor(payload: string): string { return createHmac("sha256", getSessionSecret()).update(`support-communication-list-cursor:v1:${payload}`).digest("base64url"); }
+function communicationFilterHash(command: z.infer<typeof listSupportCommunicationsSchema>): string {
+  return createHash("sha256").update(JSON.stringify({ customerId: command.customerId ?? null, incidentId: command.incidentId ?? null, contactId: command.contactId ?? null, channel: command.channel ?? null, direction: command.direction ?? null, result: command.result ?? null, occurredFrom: command.occurredFrom ?? null, occurredTo: command.occurredTo ?? null })).digest("hex");
 }
 async function currentCompanyId(
   client: Pick<Prisma.TransactionClient, "installation">,
