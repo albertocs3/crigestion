@@ -449,8 +449,37 @@ estable. Una medición desechable con 20.000 actuaciones confirmó que el
 predicado selectivo usa `Bitmap Index Scan` sobre el GIN (0,64 ms); el `EXISTS`
 correlacionado inicial no lo hacía, por lo que la implementación final separa
 una preselección SQL parametrizada `DISTINCT ... LIMIT 10001` y rechaza con 422
-los términos que superen 10.000 incidencias. Queda pendiente desplegar y validar
-esta ampliación en una RC posterior.
+los términos que superen 10.000 incidencias.
+
+La ampliación se desplegó primero como `staging-2026.08.20-rc3`, commit
+`92e08be9e49166b070330b7f44c852c1caa8386f`, build ID
+`GDuqrY9XKiCGwD8mu7aaK`. El artefacto, de 1.479.343 bytes y SHA-256
+`7DA016FFB90C8C2987E2ED325D917E924C449D7BD6881872E88AFCF7999C29DC`, se
+compiló de forma aislada. Antes de la migración se verificó por checksum y
+catálogo de `pg_restore` el dump
+`crigestion_staging-auto-20260820T094947Z.dump`, de 1.468.017 bytes. La unidad
+controlada aplicó `20260820020000_add_support_action_search_index` en 2.474 ms;
+PostgreSQL quedó con 153 migraciones y el índice GIN válido.
+
+La primera UAT de `rc3` detectó que el envío HTML incluía controles opcionales
+vacíos y una fecha vacía podía provocar `RangeError` durante la validación. No
+hubo mutación de datos. El hotfix normaliza únicamente controles conocidos,
+conserva parámetros desconocidos o repetidos para rechazo estricto y valida las
+fechas sin excepciones. Se publicó como `staging-2026.08.20-rc4`, commit
+`2802a62746463c62af6208e15cca084c511d740b`, build ID
+`HBkVfrR-0WDoYinMVz2sY`; su artefacto mide 1.479.728 bytes y tiene SHA-256
+`E858E074C6065E2C6A34C2A531C207A3FBF2D808D9F40D438F0A00884CB17B57`.
+Al no contener cambios de persistencia, no ejecutó una nueva migración y
+conservó el backup predeploy ya verificado.
+
+La UAT autenticada final buscó `Actuación sintética previa` mediante el envío
+real del formulario y devolvió únicamente `INC-2026-00002`, la incidencia donde
+la actuación permanece almacenada físicamente. El mismo envío con controles
+vacíos funcionó en comunicaciones. Health local y público respondieron HTTP 200
+con todos los componentes en `ok`; aplicación, worker VeriFactu TEST y timers de
+reactivación y health quedaron activos, y los dos one-shot informaron su último
+`Result=success`. Producción no se consultó ni modificó y el acceso SSH temporal
+permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 

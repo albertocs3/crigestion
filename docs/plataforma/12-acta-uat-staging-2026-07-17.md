@@ -1080,3 +1080,43 @@ programada de reactivación posterior al despliegue terminó con
 `SUBSCRIPTION_REACTIVATION_AUTOMATION_OK`, sin aplicaciones, bloqueos ni
 omisiones. Producción no se consultó ni modificó y el acceso SSH temporal se
 mantiene conforme a la indicación operativa vigente.
+
+## 29. Búsqueda de incidencias por actuaciones y hotfix de filtros
+
+El 2026-08-20 se desplegó primero `staging-2026.08.20-rc3`, commit
+`92e08be9e49166b070330b7f44c852c1caa8386f`, build ID
+`GDuqrY9XKiCGwD8mu7aaK`. El dump predeploy
+`crigestion_staging-auto-20260820T094947Z.dump`, de 1.468.017 bytes, superó
+checksum y catálogo de `pg_restore`. La unidad migradora aplicó únicamente
+`20260820020000_add_support_action_search_index` en 2.474 ms; PostgreSQL confirmó
+153 migraciones y el nuevo índice GIN válido. El health posterior quedó
+íntegramente en `ok`.
+
+La UAT autenticada inicial descubrió un `RangeError` antes de ejecutar la
+búsqueda: el formulario enviaba los selectores y fechas no elegidos como cadenas
+vacías. La incidencia quedó limitada a presentación y no produjo escrituras. Se
+añadió validación de fecha sin excepciones y compactación allowlist de controles
+HTML, manteniendo el rechazo de parámetros desconocidos o repetidos. Las 65
+pruebas de Soporte, typecheck, lint y build pasaron antes de publicar el hotfix.
+
+La release final es `staging-2026.08.20-rc4`, commit
+`2802a62746463c62af6208e15cca084c511d740b`, build ID
+`HBkVfrR-0WDoYinMVz2sY`. El artefacto tiene 1.479.728 bytes y SHA-256
+`E858E074C6065E2C6A34C2A531C207A3FBF2D808D9F40D438F0A00884CB17B57`.
+Fue una promoción solo de código: no alteró el esquema y reutilizó el backup
+predeploy verificado de la misma ventana.
+
+La repetición autenticada introdujo `Actuación sintética previa` y pulsó
+`Filtrar` con el resto de controles vacíos. El listado devolvió solo
+`INC-2026-00002`, confirmando la semántica de registro físico de la actuación y
+sin promover el resultado a la incidencia principal fusionada. El formulario de
+comunicaciones también se envió con filtros vacíos y conservó su único registro
+sin error. La UI mostró el placeholder actualizado, `ENTORNO STAGING`, base
+`crigestion_staging` y `AEAT TEST`.
+
+Tras la conmutación atómica, health local y público respondieron HTTP 200 con
+`status`, `database`, `verifactu` y `worker` en `ok`. Aplicación, worker
+VeriFactu TEST, timer de reactivaciones y timer de health quedaron activos; los
+dos servicios one-shot conservan `Result=success` y `ExecMainStatus=0`.
+Producción no se consultó ni modificó. El acceso SSH temporal se mantiene por
+indicación expresa del usuario.
