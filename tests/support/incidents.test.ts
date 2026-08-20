@@ -49,6 +49,10 @@ import {
   hashSupportPriorityChangeRequest,
 } from "@/modules/support/application/priorities";
 import {
+  changeSupportIncidentDetails,
+  hashSupportIncidentDetailsChangeRequest,
+} from "@/modules/support/application/detailsChanges";
+import {
   correctSupportCommunication,
   createSupportCommunication,
   createSupportCommunicationSchema,
@@ -202,6 +206,150 @@ describe("support incidents application", () => {
     await expect(prisma.supportIncident.update({ where: { id: created.value.id }, data: { priority: "HIGH", version: 3 } })).rejects.toThrow();
   });
 
+  it("changes incident details once with append-only evidence and rejects incomplete SQL mutations", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    const secondCategory = await prisma.supportIncidentCategory.create({
+      data: { companyId, name: "Datos revisados", normalizedName: "datos revisados", isActive: true },
+    });
+    const store = await prisma.customerStore.create({
+      data: { customerId: customer.id, code: "S001", name: "Tienda soporte", status: "ACTIVE", addressLine: "Calle Soporte 1", postalCode: "28001", city: "Madrid", country: "ES", createdById: actor.id },
+    });
+    const create = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Datos iniciales de soporte",
+      description: "Descripción inicial que debe quedar preservada como evidencia.",
+      priority: "MEDIUM" as const,
+    };
+    const created = await createSupportIncident(create, actor, {
+      idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create",
+    });
+    if (!created.ok) throw new Error(created.error.code);
+    const command = {
+      expectedVersion: created.value.version,
+      title: "Datos principales corregidos",
+      description: "Descripción corregida y visible en la proyección vigente.",
+      categoryId: secondCategory.id,
+      storeId: store.id,
+      reason: "Validación de la información aportada por el cliente.",
+    };
+    const context = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...command }),
+      scope: `incident:${created.value.id}:details-change`,
+      correlationId: "details-change-0001",
+    };
+
+    const first = await changeSupportIncidentDetails(created.value.id, command, actor, context);
+    const replay = await changeSupportIncidentDetails(created.value.id, command, actor, context);
+    const reusedCommand = { ...command, title: "Misma clave con otro cuerpo" };
+    expect(await changeSupportIncidentDetails(created.value.id, reusedCommand, actor, { ...context, requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...reusedCommand }) })).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_KEY_REUSED" } });
+
+    expect(first).toMatchObject({ ok: true, status: 201, value: { incident: { id: created.value.id, version: 2, categoryId: secondCategory.id, storeId: store.id }, change: { resultingVersion: 2, changedFields: ["title", "description", "categoryId", "storeId"] } } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { change: { id: first.ok ? first.value.change.id : "" } } });
+    expect(await prisma.supportIncidentDetailsChange.count({ where: { incidentId: created.value.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: created.value.id, eventType: "DETAILS_CHANGED" } })).toBe(1);
+    const audit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_DETAILS_CHANGED" } });
+    expect(audit.payload).toMatchObject({ incidentId: created.value.id, previousVersion: 1, version: 2, correlationId: "details-change-0001" });
+    const auditJson = JSON.stringify(audit.payload);
+    expect(auditJson).not.toContain(command.title);
+    expect(auditJson).not.toContain(command.description);
+    expect(auditJson).not.toContain(command.reason);
+    const replayRecord = await prisma.idempotencyRecord.findFirstOrThrow({ where: { requestHash: context.requestHash } });
+    await prisma.idempotencyRecord.update({ where: { key: replayRecord.key }, data: { responseBody: {} } });
+    expect(await changeSupportIncidentDetails(created.value.id, command, actor, context)).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID" } });
+    expect(await changeSupportIncidentDetails(created.value.id, { ...command, expectedVersion: 2 }, actor, { ...context, idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...command, expectedVersion: 2 }) })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_DETAILS_UNCHANGED" } });
+    await expect(prisma.supportIncidentDetailsChange.update({ where: { id: first.ok ? first.value.change.id : randomUUID() }, data: { reason: "Intento de alterar evidencia" } })).rejects.toThrow();
+    await expect(prisma.supportIncident.update({ where: { id: created.value.id }, data: { title: "Mutación sin evidencia", version: 3 } })).rejects.toThrow();
+    await expect(prisma.$transaction(async (tx) => {
+      const fake = await tx.supportIncidentDetailsChange.create({ data: { companyId, incidentId: created.value.id, actorUserId: actor.id, customerId: customer.id, previousStoreId: store.id, correctedStoreId: store.id, previousStoreCode: store.code, previousStoreName: store.name, correctedStoreCode: store.code, correctedStoreName: store.name, previousCategoryId: secondCategory.id, correctedCategoryId: secondCategory.id, previousCategoryName: secondCategory.name, correctedCategoryName: secondCategory.name, previousTitle: "Valor anterior ficticio", correctedTitle: command.title, previousDescription: command.description, correctedDescription: command.description, reason: "Intento de fabricar una evidencia sin cambio real.", resultingVersion: 3 } });
+      await tx.supportIncident.update({ where: { id: created.value.id }, data: { version: 3 } });
+      await tx.supportIncidentEvent.create({ data: { companyId, incidentId: created.value.id, actorUserId: actor.id, responsibleUserIdAtEvent: actor.id, detailsChangeId: fake.id, eventType: "DETAILS_CHANGED", fromStatus: "NEW", toStatus: "NEW", resultingVersion: 3 } });
+    })).rejects.toThrow();
+    const otherCustomer = await createCustomerRecord(actor, { taxId: "B12345675", email: "otro@example.test", sepaMandate: { reference: "SEPA-2", signedAt: "2026-07-01" } });
+    await expect(prisma.supportIncident.update({ where: { id: created.value.id }, data: { customerId: otherCustomer.id } })).rejects.toThrow();
+    const inactiveCategory = await prisma.supportIncidentCategory.create({ data: { companyId, name: "Categoría inactiva", normalizedName: "categoria inactiva", isActive: false } });
+    const inactiveStore = await prisma.customerStore.create({ data: { customerId: customer.id, code: "S002", name: "Tienda inactiva", status: "INACTIVE", addressLine: "Calle Soporte 2", postalCode: "28002", city: "Madrid", country: "ES", createdById: actor.id } });
+    const invalidCategory = { ...command, expectedVersion: 2, title: "Intento con categoría inactiva", categoryId: inactiveCategory.id };
+    expect(await changeSupportIncidentDetails(created.value.id, invalidCategory, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...invalidCategory }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_CATEGORY_NOT_AVAILABLE" } });
+    const invalidStore = { ...command, expectedVersion: 2, title: "Intento con tienda inactiva", storeId: inactiveStore.id };
+    expect(await changeSupportIncidentDetails(created.value.id, invalidStore, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...invalidStore }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_STORE_NOT_FOUND" } });
+    await prisma.supportIncidentCategory.update({ where: { id: secondCategory.id }, data: { isActive: false } });
+    await prisma.customerStore.update({ where: { id: store.id }, data: { status: "INACTIVE" } });
+    const preservedInactive = { ...command, expectedVersion: 2, title: "Conserva referencias históricas" };
+    expect(await changeSupportIncidentDetails(created.value.id, preservedInactive, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...preservedInactive }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: true, status: 201, value: { incident: { version: 3 } } });
+    const resolve = { action: "resolve" as const, expectedVersion: 3, solution: "La incidencia queda resuelta antes de una corrección documental." };
+    expect(await transitionSupportIncident(created.value.id, resolve, actor, transitionContext(created.value.id, resolve))).toMatchObject({ ok: true, status: 201, value: { incident: { status: "RESOLVED", version: 4 } } });
+    const finalizedChange = { ...preservedInactive, expectedVersion: 4, title: "Corrección documental final" };
+    expect(await changeSupportIncidentDetails(created.value.id, finalizedChange, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...finalizedChange }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: true, status: 201, value: { incident: { version: 5 } } });
+    await expect(prisma.supportIncidentDetailsChange.create({ data: { companyId, incidentId: created.value.id, actorUserId: actor.id, customerId: customer.id, previousStoreId: store.id, correctedStoreId: store.id, previousStoreCode: store.code, previousStoreName: store.name, correctedStoreCode: store.code, correctedStoreName: store.name, previousCategoryId: secondCategory.id, correctedCategoryId: secondCategory.id, previousCategoryName: "Etiqueta histórica falsificada", correctedCategoryName: secondCategory.name, previousTitle: finalizedChange.title, correctedTitle: "Cambio que no debe persistir", previousDescription: command.description, correctedDescription: command.description, reason: "Intento de insertar snapshots inconsistentes.", resultingVersion: 6 } })).rejects.toThrow();
+    await expect(prisma.supportIncidentDetailsChange.create({ data: { companyId, incidentId: created.value.id, actorUserId: actor.id, customerId: customer.id, previousStoreId: store.id, correctedStoreId: store.id, previousStoreCode: null, previousStoreName: store.name, correctedStoreCode: store.code, correctedStoreName: store.name, previousCategoryId: secondCategory.id, correctedCategoryId: secondCategory.id, previousCategoryName: secondCategory.name, correctedCategoryName: secondCategory.name, previousTitle: finalizedChange.title, correctedTitle: "Cambio con snapshot nulo", previousDescription: command.description, correctedDescription: command.description, reason: "Intento de insertar un snapshot incompleto.", resultingVersion: 6 } })).rejects.toThrow();
+  });
+
+  it("revalidates current responsibility before returning an idempotent replay", async () => {
+    const administrator = await admin();
+    const customer = await createCustomerRecord(administrator);
+    const references = await listSupportReferences();
+    const role = await prisma.role.create({ data: { code: "DetailsResponsible", name: "Responsable de datos", permissions: { create: ["Support.View", "Support.AddActions", "Support.ManageAssigned"].map((code) => ({ permission: { connect: { code } } })) } } });
+    const firstUser = await prisma.user.create({ data: { displayName: "Responsable inicial", userName: "details-owner", normalizedUserName: "details-owner", passwordHash: hashPassword("Cambiar-details-owner-2026"), roleId: role.id } });
+    const secondUser = await prisma.user.create({ data: { displayName: "Responsable nuevo", userName: "details-next", normalizedUserName: "details-next", passwordHash: hashPassword("Cambiar-details-next-2026"), roleId: role.id } });
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: firstUser.id, title: "Replay con reasignación", description: "La autorización debe comprobarse también al repetir la clave.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, administrator, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const logged = await login({ userName: "details-owner", password: "Cambiar-details-owner-2026" });
+    if (!logged.ok) throw new Error(logged.error.code);
+    const command = { expectedVersion: 1, title: "Replay corregido", description: create.description, categoryId: create.categoryId, storeId: null, reason: "Corrección previa a la reasignación." };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...command }), scope: `incident:${created.value.id}:details-change` };
+    expect(await changeSupportIncidentDetails(created.value.id, command, logged.value.user, context)).toMatchObject({ ok: true, status: 201 });
+    const reassign = { action: "reassign" as const, expectedVersion: 2, responsibleUserId: secondUser.id, reason: "Cambio de responsable para verificar el replay." };
+    expect(await changeSupportParticipants(created.value.id, reassign, administrator, participantContext(created.value.id, reassign))).toMatchObject({ ok: true, status: 201 });
+    expect(await changeSupportIncidentDetails(created.value.id, command, logged.value.user, context)).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_INCIDENT_DETAILS_FORBIDDEN" } });
+  });
+
+  it("serializes concurrent details changes and denies a non-responsible technician", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const create = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      title: "Edición concurrente",
+      description: "Incidencia preparada para dos correcciones simultáneas.",
+      priority: "MEDIUM" as const,
+    };
+    const created = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const role = await prisma.role.create({
+      data: { code: "DetailsTechnician", name: "Técnico de datos", permissions: { create: ["Support.View", "Support.ManageAssigned"].map((code) => ({ permission: { connect: { code } } })) } },
+    });
+    await prisma.user.create({ data: { displayName: "Técnico ajeno", userName: "details-tech", normalizedUserName: "details-tech", passwordHash: hashPassword("Cambiar-details-tech-2026"), roleId: role.id } });
+    const logged = await login({ userName: "details-tech", password: "Cambiar-details-tech-2026" });
+    if (!logged.ok) throw new Error(logged.error.code);
+    const deniedCommand = { expectedVersion: 1, title: "Intento ajeno", description: create.description, categoryId: create.categoryId, storeId: null, reason: "Intento sin responsabilidad vigente." };
+    expect(await changeSupportIncidentDetails(created.value.id, deniedCommand, logged.value.user, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...deniedCommand }), scope: `incident:${created.value.id}:details-change`, correlationId: "details-denied-0001" })).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_INCIDENT_DETAILS_FORBIDDEN" } });
+
+    const command = { expectedVersion: 1, title: "Corrección concurrente", description: create.description, categoryId: create.categoryId, storeId: null, reason: "Corrección simultánea controlada." };
+    const makeContext = () => ({ idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...command }), scope: `incident:${created.value.id}:details-change` });
+    const results = await Promise.all([
+      changeSupportIncidentDetails(created.value.id, command, actor, makeContext()),
+      changeSupportIncidentDetails(created.value.id, command, actor, makeContext()),
+    ]);
+    expect(results.filter((result) => result.ok && result.status === 201)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok && result.error.code === "SUPPORT_INCIDENT_VERSION_CONFLICT")).toHaveLength(1);
+    expect(await prisma.supportIncidentDetailsChange.count({ where: { incidentId: created.value.id } })).toBe(1);
+    expect(await prisma.supportIncidentEvent.count({ where: { incidentId: created.value.id, eventType: "DETAILS_CHANGED" } })).toBe(1);
+    const deniedAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_INCIDENT_DETAILS_CHANGE_DENIED", payload: { path: ["reason"], equals: "NOT_RESPONSIBLE" } } });
+    expect(deniedAudit.payload).toMatchObject({ correlationId: "details-denied-0001" });
+    expect(JSON.stringify(deniedAudit.payload)).not.toContain(created.value.id);
+  });
+
   it("merges two active incidents atomically without moving their history", async () => {
     const actor = await admin();
     const customer = await createCustomerRecord(actor);
@@ -279,6 +427,8 @@ describe("support incidents application", () => {
     expect(await prisma.supportIncidentMerge.count()).toBe(1);
     expect(await prisma.supportIncidentEvent.count({ where: { eventType: "INCIDENT_MERGED" } })).toBe(2);
     expect(await prisma.notification.count({ where: { kind: "SUPPORT_INCIDENT_MERGED" } })).toBe(1);
+    const mergedDetails = { expectedVersion: 4, title: "Duplicada alterada", description: baseCommand.description, categoryId: baseCommand.categoryId, storeId: null, reason: "No debe admitirse sobre una duplicada." };
+    expect(await changeSupportIncidentDetails(duplicate.value.id, mergedDetails, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: duplicate.value.id, ...mergedDetails }), scope: `incident:${duplicate.value.id}:details-change` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_INCIDENT_MERGED_READ_ONLY" } });
     const storedAction = await prisma.supportIncidentAction.findUniqueOrThrow({ where: { id: action.value.action.id } });
     expect(storedAction.incidentId).toBe(duplicate.value.id);
     const primaryDetail = await getSupportIncident(primary.value.id, actor);
@@ -1852,6 +2002,9 @@ async function reset() {
       'ALTER TABLE "support_incident_priority_changes" DISABLE TRIGGER "support_priority_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_details_changes" DISABLE TRIGGER "support_incident_details_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
@@ -1872,6 +2025,7 @@ async function reset() {
     await tx.supportCommunicationCorrection.deleteMany();
     await tx.supportCommunication.deleteMany();
     await tx.supportIncidentEvent.deleteMany();
+    await tx.supportIncidentDetailsChange.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
@@ -1893,6 +2047,9 @@ async function reset() {
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_priority_changes" ENABLE TRIGGER "support_priority_changes_append_only"',
+    );
+    await tx.$executeRawUnsafe(
+      'ALTER TABLE "support_incident_details_changes" ENABLE TRIGGER "support_incident_details_changes_append_only"',
     );
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',

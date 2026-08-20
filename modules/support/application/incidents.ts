@@ -206,6 +206,21 @@ export type SupportIncidentDetail = SupportIncidentListItem & {
     actor: { id: string; displayName: string };
     occurredAt: string;
   }>;
+  detailsChanges: Array<{
+    id: string;
+    previousTitle: string;
+    correctedTitle: string;
+    previousDescription: string;
+    correctedDescription: string;
+    previousCategory: { id: string; name: string };
+    correctedCategory: { id: string; name: string };
+    previousStore: { id: string; code: string; name: string } | null;
+    correctedStore: { id: string; code: string; name: string } | null;
+    reason: string;
+    actor: { id: string; displayName: string };
+    changedAt: string;
+  }>;
+  detailsChangesHasMore: boolean;
   mergedInto: { id: string; number: string } | null;
   mergedIncidents: Array<{ id: string; number: string; title: string }>;
 };
@@ -371,6 +386,30 @@ const incidentDetailSelect = {
       toPriority: true,
       reason: true,
       occurredAt: true,
+      actorUser: { select: { id: true, displayName: true } },
+    },
+  },
+  detailsChanges: {
+    orderBy: [{ changedAt: "desc" as const }, { id: "desc" as const }],
+    take: 101,
+    select: {
+      id: true,
+      previousTitle: true,
+      correctedTitle: true,
+      previousDescription: true,
+      correctedDescription: true,
+      previousCategoryId: true,
+      correctedCategoryId: true,
+      previousCategoryName: true,
+      correctedCategoryName: true,
+      previousStoreId: true,
+      correctedStoreId: true,
+      previousStoreCode: true,
+      previousStoreName: true,
+      correctedStoreCode: true,
+      correctedStoreName: true,
+      reason: true,
+      changedAt: true,
       actorUser: { select: { id: true, displayName: true } },
     },
   },
@@ -565,6 +604,21 @@ const incidentReplaySchema = z
         occurredAt: z.string().datetime(),
       }).strict(),
     ).optional().transform((value) => value ?? []),
+    detailsChanges: z.array(z.object({
+      id: z.string().uuid(),
+      previousTitle: z.string(),
+      correctedTitle: z.string(),
+      previousDescription: z.string(),
+      correctedDescription: z.string(),
+      previousCategory: z.object({ id: z.string().uuid(), name: z.string() }).strict(),
+      correctedCategory: z.object({ id: z.string().uuid(), name: z.string() }).strict(),
+      previousStore: z.object({ id: z.string().uuid(), code: z.string(), name: z.string() }).strict().nullable(),
+      correctedStore: z.object({ id: z.string().uuid(), code: z.string(), name: z.string() }).strict().nullable(),
+      reason: z.string(),
+      actor: z.object({ id: z.string().uuid(), displayName: z.string() }).strict(),
+      changedAt: z.string().datetime(),
+    }).strict()).optional().transform((value) => value ?? []),
+    detailsChangesHasMore: z.boolean().optional().transform((value) => value ?? false),
     mergedInto: z
       .object({ id: z.string().uuid(), number: z.string() })
       .strict()
@@ -812,6 +866,24 @@ export async function listSupportReferences(
     ? [...listedCustomers, preferredCustomer].sort((left, right) => left.legalName.localeCompare(right.legalName, "es") || left.id.localeCompare(right.id))
     : listedCustomers;
   return { customers, categories, responsibleUsers };
+}
+
+export async function listSupportIncidentDetailsReferences(customerId: string) {
+  const companyId = await currentCompanyId(prisma);
+  if (!companyId) return { categories: [], stores: [] };
+  const [categories, stores] = await Promise.all([
+    prisma.supportIncidentCategory.findMany({
+      where: { companyId, isActive: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      select: { id: true, name: true },
+    }),
+    prisma.customerStore.findMany({
+      where: { customerId, status: "ACTIVE" },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      select: { id: true, code: true, name: true },
+    }),
+  ]);
+  return { categories, stores };
 }
 
 export async function listSupportIncidentFilterReferences(selectedCustomerId?: string) {
@@ -1459,6 +1531,21 @@ function mapIncidentDetail(row: IncidentDetailRecord, canViewCommunications: boo
       actor: change.actorUser,
       occurredAt: change.occurredAt.toISOString(),
     })),
+    detailsChanges: row.detailsChanges.slice(0, 100).reverse().map((change) => ({
+      id: change.id,
+      previousTitle: change.previousTitle,
+      correctedTitle: change.correctedTitle,
+      previousDescription: change.previousDescription,
+      correctedDescription: change.correctedDescription,
+      previousCategory: { id: change.previousCategoryId, name: change.previousCategoryName },
+      correctedCategory: { id: change.correctedCategoryId, name: change.correctedCategoryName },
+      previousStore: change.previousStoreId && change.previousStoreCode && change.previousStoreName ? { id: change.previousStoreId, code: change.previousStoreCode, name: change.previousStoreName } : null,
+      correctedStore: change.correctedStoreId && change.correctedStoreCode && change.correctedStoreName ? { id: change.correctedStoreId, code: change.correctedStoreCode, name: change.correctedStoreName } : null,
+      reason: change.reason,
+      actor: change.actorUser,
+      changedAt: change.changedAt.toISOString(),
+    })),
+    detailsChangesHasMore: row.detailsChanges.length > 100,
     mergedInto: row.mergedIntoIncident,
     mergedIncidents: row.mergedDuplicates.map(({ id, number, title }) => ({ id, number, title })),
   };

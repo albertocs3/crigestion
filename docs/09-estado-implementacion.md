@@ -481,6 +481,25 @@ reactivación y health quedaron activos, y los dos one-shot informaron su últim
 `Result=success`. Producción no se consultó ni modificó y el acceso SSH temporal
 permanece activo.
 
+Sobre `rc4` se ha integrado localmente, todavía sin desplegar, la edición
+versionada de los datos principales de una incidencia. El responsable vigente
+o un Administrador con `Support.ManageAssigned` puede corregir título,
+descripción, categoría y tienda indicando un motivo. La operación usa bloqueo,
+control optimista, idempotencia, cuota persistente y transacción serializable;
+PostgreSQL exige una evidencia append-only y un evento `DETAILS_CHANGED` por
+versión y rechaza una proyección incompleta. La duplicada fusionada continúa en
+solo lectura y la auditoría omite los textos y el motivo. El cambio de cliente
+queda fuera de esta rebanada porque la relación vigente con comunicaciones usa
+cascada y modificarla sin un flujo específico alteraría historia ya registrada.
+La migración local `20260820030000_add_support_incident_details_changes` se ha
+aplicado desde cero en la base desechable; no se ha aplicado aún en staging.
+La regresión completa de Soporte superó 69 pruebas y la suite de aplicación,
+incluidos replay tras reasignación, carrera serializable, referencias inactivas,
+incidencia finalizada, duplicada fusionada y bypasses SQL, superó 26 pruebas.
+Prisma Validate, TypeScript, ESLint y el build optimizado quedaron verdes. La
+auditoría npm conserva las cuatro vulnerabilidades altas transitivas ya
+documentadas de `deepmerge-ts`/Prisma y `nanoid`; no se modificaron dependencias.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

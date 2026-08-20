@@ -263,6 +263,56 @@ El paso de cualquier prioridad no urgente a `URGENT` crea, dentro de la misma tr
 
 La cuota persistente admite 20 intentos por actor y empresa en 15 minutos; un replay válido no consume cuota. Errores estables: `SUPPORT_INCIDENT_PRIORITY_FORBIDDEN`, `SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`, `SUPPORT_INCIDENT_PRIORITY_UNCHANGED`, `SUPPORT_INCIDENT_PRIORITY_FINALIZED`, `SUPPORT_INCIDENT_PRIORITY_RATE_LIMITED`, `SUPPORT_INCIDENT_PRIORITY_BUSY`, `IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`, además de los errores HTTP comunes de validación, autenticación, CSRF, formato y mantenimiento. La cuota devuelve `429` con `Retry-After`; el agotamiento de reintentos serializables devuelve `503` con `Retry-After: 3`.
 
+## `POST /api/support/incidents/{incidentId}/detail-changes`
+
+Requiere `Support.ManageAssigned` + `Support.View` y ser el responsable vigente
+o Administrador. Aplica Origin/CSRF, mantenimiento, `application/json`, cuerpo
+estricto máximo de 8 KiB, `Idempotency-Key` y control optimista de versión. El
+comando reemplaza la proyección editable completa para evitar ambigüedad entre
+campos omitidos y valores nulos:
+
+```json
+{
+  "expectedVersion": 3,
+  "title": "Fallo de conectividad confirmado",
+  "description": "La conexión se interrumpe en la tienda indicada.",
+  "categoryId": "uuid",
+  "storeId": "uuid-o-null",
+  "reason": "Información contrastada con el cliente."
+}
+```
+
+Título y descripción conservan los límites de la incidencia; el motivo contiene
+entre 3 y 500 caracteres. Una categoría distinta debe estar activa y pertenecer
+a la empresa. Una tienda distinta debe estar activa y pertenecer al cliente de
+la incidencia. Se permite conservar una categoría o tienda histórica que haya
+quedado inactiva. La operación no admite `customerId`: cambiar de cliente exige
+un flujo administrativo posterior que preserve las comunicaciones históricas y
+no active la cascada relacional actual.
+
+La incidencia duplicada fusionada es de solo lectura. Una incidencia canónica
+`RESOLVED` o `CLOSED` sí puede corregir estos datos sin alterar su ciclo. El
+cambio incrementa exactamente una versión, crea evidencia append-only OLD→NEW,
+un evento `DETAILS_CHANGED` y auditoría opaca. El historial funcional conserva
+los textos, el motivo y snapshots de las etiquetas de categoría y tienda; un
+renombrado posterior del maestro no reescribe la presentación histórica. El
+detalle carga como máximo los 100 cambios más recientes y avisa si existe
+evidencia anterior, que permanece íntegra en PostgreSQL; una consulta paginada
+del histórico completo queda como ampliación posterior. La auditoría solo
+registra identificadores, campos cambiados y versiones, nunca título,
+descripción ni motivo.
+
+Respuesta inicial `201`; replay idéntico `200` sin repetir versión, evidencia,
+evento ni auditoría. Errores estables: `SUPPORT_INCIDENT_DETAILS_FORBIDDEN`,
+`SUPPORT_INCIDENT_NOT_FOUND`, `SUPPORT_INCIDENT_VERSION_CONFLICT`,
+`SUPPORT_INCIDENT_MERGED_READ_ONLY`, `SUPPORT_INCIDENT_DETAILS_UNCHANGED`,
+`SUPPORT_CATEGORY_NOT_AVAILABLE`, `SUPPORT_STORE_NOT_FOUND`,
+`SUPPORT_INCIDENT_DETAILS_RATE_LIMITED`, `SUPPORT_INCIDENT_DETAILS_BUSY`,
+`IDEMPOTENCY_KEY_REUSED` e `IDEMPOTENCY_REPLAY_INVALID`, además de los comunes.
+La cuota persistente admite 20 intentos por actor y empresa en 15 minutos y
+devuelve `429` con el tiempo restante en `Retry-After`; el agotamiento de tres
+intentos serializables devuelve `503` con `Retry-After: 3`.
+
 ## `POST /api/support/incidents/{incidentId}/participant-changes`
 
 Requiere `Support.ManageParticipants` + `Support.View` y ser el responsable vigente o Administrador. Usa Origin/CSRF, mantenimiento, JSON estricto, máximo de 4 KiB, `expectedVersion` e idempotencia.

@@ -284,7 +284,13 @@ El motivo `Duplicada` se aplica exclusivamente mediante la fusión con una incid
 ### 5.8 Reglas
 
 - Toda incidencia debe crearse con un responsable.
-- Solo el responsable o el administrador pueden modificar sus datos principales.
+- Solo el responsable o el administrador pueden modificar título, descripción,
+  categoría y tienda. Cada cambio exige motivo, control de versión y evidencia
+  permanente de los valores anterior y corregido.
+- Los datos principales pueden corregirse mientras la incidencia sea canónica,
+  incluso si está resuelta o cerrada; la corrección no altera estado, solución,
+  prioridad, responsable ni fechas del ciclo. Una duplicada fusionada permanece
+  terminal y no admite esta operación.
 - Solo el responsable puede reasignarla, salvo intervención del administrador.
 - La primera actuación escrita por un técnico cambia automáticamente el estado de `Nueva` a `En curso`.
 - Pasar a `Pendiente del cliente` o `Pendiente de tercero` exige indicar el motivo.
@@ -293,7 +299,9 @@ El motivo `Duplicada` se aplica exclusivamente mediante la fusión con una incid
 - El responsable o el administrador pueden resolver o cerrar.
 - Cualquier técnico puede reabrir una incidencia.
 - La reapertura exige motivo, conserva al responsable y cambia el estado a `En curso`.
-- Solo el administrador puede cambiar el cliente de una incidencia, dejando auditoría.
+- El cambio de cliente queda reservado a un flujo administrativo específico aún
+  no habilitado. No se incluye en la edición ordinaria porque debe preservar sin
+  cascadas el cliente y el contacto de las comunicaciones históricas vinculadas.
 
 ## 6. Categorías
 
