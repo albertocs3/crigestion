@@ -596,6 +596,21 @@ desactivación queda pendiente de una sesión Administrador y no se alteraron
 datos durante este smoke. Producción no se consultó ni modificó y el acceso SSH
 temporal permanece activo.
 
+La UAT Administrador de categorías de `rc7` quedó cerrada sobre la categoría
+sintética `UAT Categorias RC7 20260820 VALIDADA`
+(`cce2c110-c0ca-4f69-9667-17e4baa3e34e`). Desde la interfaz autenticada se
+creó la categoría, se editaron sus datos, se desactivó, se reactivó y se dejó
+finalmente inactiva para excluirla de nuevas altas sin borrar su historia. La
+pantalla confirmó cada transición y mostró la progresión de versión 1→5.
+PostgreSQL confirmó exactamente cuatro evidencias append-only para las
+versiones 2, 3, 4 y 5, sin rupturas OLD→NEW, y cuatro auditorías
+`SUPPORT_INCIDENT_CATEGORY_CHANGED`. Sus payloads contienen solo
+identificadores, versiones, tipo, campos cambiados y estados; no contienen
+nombre, descripción, color ni ninguno de los motivos UAT. La categoría
+inactiva continúa disponible en filtros históricos con etiqueta explícita. El
+health permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
+se consultó ni modificó y el acceso SSH temporal permanece activo.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

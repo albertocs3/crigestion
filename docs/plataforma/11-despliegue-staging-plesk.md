@@ -707,6 +707,17 @@ funcional de cambio de datos y estado queda pendiente de una sesion
 Administrador. Produccion no se consulto ni modifico y el acceso SSH temporal
 permanece activo.
 
+La UAT Administrador posterior cerro ese pendiente con la categoria sintetica
+`UAT Categorias RC7 20260820 VALIDADA`
+(`cce2c110-c0ca-4f69-9667-17e4baa3e34e`). La interfaz creo la categoria,
+edito sus datos, la desactivo, la reactivo y la dejo finalmente inactiva. La
+proyeccion termino en version 5 y PostgreSQL verifico cuatro evidencias
+append-only, versiones 2 a 5, cadena OLD→NEW continua y cuatro auditorias de
+cambio sin nombre, descripcion, color ni motivos. La fila inactiva permanece
+visible para filtros historicos, pero fuera del catalogo activo de nuevas
+altas. El health siguio completo en `ok` y VeriFactu en TEST durante toda la
+prueba.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release
