@@ -25,6 +25,9 @@ describe("staging recovery bundle deployment", () => {
     expect(script).toContain("REFERENCED_UPLOAD_ENTRIES");
     expect(script).toContain("MAX_LOGO_BYTES");
     expect(script).toContain("MAX_INCIDENT_ATTACHMENT_BYTES");
+    expect(script).toContain(
+      "support-incident(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}){0,2}"
+    );
     expect(script).toContain("MAX_UPLOAD_BYTES");
     expect(script).toContain("MAX_PAYLOAD_BYTES");
     expect(script).toContain("ulimit -f");
@@ -61,6 +64,37 @@ describe("staging recovery bundle deployment", () => {
       "recovery-bundle.env"
     ]) {
       expect(script).toContain(file);
+    }
+  });
+
+  it("allows only the supported incident attachment directory hierarchy", async () => {
+    const script = await read("deploy/plesk/staging/scripts/crigestion-staging-recovery-bundle");
+    const condition = script
+      .split(/\r?\n/u)
+      .find((line) => line.includes('"$relative_directory" =~'));
+    const pattern = condition?.match(/=~ (\^.*\$) \]\]/u)?.[1];
+
+    expect(pattern).toBeDefined();
+    expect(pattern).not.toContain("{1,2}");
+    const directoryAllowlist = new RegExp(pattern ?? "a^");
+    const companyId = "7d1f1d8a-fc70-44ee-ba17-b70f72b1c81b";
+    const incidentId = "f605e132-1852-4308-8c2f-4eb6187f2f3b";
+
+    for (const relativePath of [
+      "support-incident",
+      `support-incident/${companyId}`,
+      `support-incident/${companyId}/${incidentId}`
+    ]) {
+      expect(directoryAllowlist.test(relativePath), relativePath).toBe(true);
+    }
+
+    for (const relativePath of [
+      "support-incident/arbitrary",
+      `support-incident/${companyId}/${incidentId}/${companyId}`,
+      `support-incident/${companyId}/../company-logo`,
+      `support-incident/${companyId}/${incidentId}.pdf`
+    ]) {
+      expect(directoryAllowlist.test(relativePath), relativePath).toBe(false);
     }
   });
 

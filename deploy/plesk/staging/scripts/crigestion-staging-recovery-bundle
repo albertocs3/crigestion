@@ -348,7 +348,7 @@ UPLOAD_BYTES=0
 UPLOAD_ENTRIES=0
 while IFS= read -r -d '' upload_directory; do
   relative_directory="${upload_directory#"$ATTACHMENT_DIR"/}"
-  if ! [[ "$relative_directory" =~ ^(company-logo(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?|support-incident(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}){1,2})$ ]]; then
+  if ! [[ "$relative_directory" =~ ^(company-logo(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?|support-incident(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}){0,2})$ ]]; then
     echo 'RECOVERY_ATTACHMENT_DIRECTORY_REJECTED' >&2
     exit 1
   fi
