@@ -519,8 +519,21 @@ activo.
 La comprobación autenticada con `TECNICO_SOPORTE` confirmó que una incidencia
 ajena no muestra la edición de datos y que la duplicada fusionada continúa
 identificando su principal sin exponer controles de mutación. Este usuario no
-tiene incidencias propias en staging; la UAT de una corrección persistente desde
-el formulario queda pendiente de crear o asignarle un registro sintético.
+tenía incidencias propias en staging, por lo que se creó expresamente la
+incidencia sintética `INC-2026-00003` (`bd490c41-d61a-4886-8ba8-b77228f4c39c`),
+asignada a `TECNICO_SOPORTE`, sin modificar las dos incidencias históricas de la
+UAT de fusión. Desde el formulario autenticado se corrigieron título y
+descripción con motivo y confirmación explícitos. La pantalla mostró el estado
+`Datos principales actualizados`, el cambio OLD→NEW y el evento homónimo en el
+historial. PostgreSQL confirmó la proyección en versión 2, exactamente una fila
+append-only en `support_incident_details_changes`, un evento `DETAILS_CHANGED`
+y una auditoría `SUPPORT_INCIDENT_DETAILS_CHANGED`; evidencia y evento comparten
+actor y versión, el actor era el responsable y la auditoría no contiene título,
+descripción ni motivo. Tras la UAT, la release activa seguía siendo
+`staging-2026.08.20-rc5`, aplicación y worker estaban activos, VeriFactu
+continuaba en `TEST: idle`, los cuatro timers estaban programados, no había
+unidades fallidas y el health público devolvía todos los componentes en `ok`.
+Producción no se consultó ni modificó y el acceso SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 
