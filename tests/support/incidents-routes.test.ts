@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GET as csrfGet } from "@/app/api/auth/csrf/route";
@@ -27,6 +27,7 @@ import {
   POST as communicationsPost,
 } from "@/app/api/support/communications/route";
 import { GET as communicationGet } from "@/app/api/support/communications/[communicationId]/route";
+import { POST as communicationCorrectionsPost } from "@/app/api/support/communications/[communicationId]/corrections/route";
 import { POST as communicationIncidentPost } from "@/app/api/support/communications/[communicationId]/incident/route";
 import {
   GET as contactsGet,
@@ -37,6 +38,7 @@ import { prisma } from "@/lib/prisma";
 import { sessionCookieName } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import { idempotencyStorageKey } from "@/modules/platform/application/http";
+import { getSessionSecret } from "@/modules/platform/application/environment";
 import {
   hashRequestBody,
   initializePlatform,
@@ -783,6 +785,10 @@ describe("support incidents HTTP contracts", () => {
     await loginAs("admin", password);
     const csrf = await csrfToken();
     const incidentPayload = await payload();
+    const firstIncidentResponse = await incidentsPost(jsonRequest("/api/support/incidents", { ...incidentPayload, title: "Primera incidencia de comunicación" }, { csrf, key: randomUUID() }));
+    const secondIncidentResponse = await incidentsPost(jsonRequest("/api/support/incidents", { ...incidentPayload, title: "Segunda incidencia de comunicación" }, { csrf, key: randomUUID() }));
+    const firstIncident = (await firstIncidentResponse.json()) as { id: string; number: string };
+    const secondIncident = (await secondIncidentResponse.json()) as { id: string; number: string };
     const body = {
       customerId: incidentPayload.customerId,
       channel: "WHATSAPP",
@@ -791,8 +797,8 @@ describe("support incidents HTTP contracts", () => {
       contactNumber: "+34910000003",
       durationSeconds: null,
       summary: "Se facilita al cliente la información solicitada.",
-      result: "INFORMATION_PROVIDED",
-      incidentId: null,
+      result: "REFERRED_TO_INCIDENT",
+      incidentId: firstIncident.id,
     };
     const key = randomUUID();
     const first = await communicationsPost(
@@ -809,6 +815,27 @@ describe("support incidents HTTP contracts", () => {
     const firstBody = (await first.json()) as { id: string };
     const replayBody = (await replay.json()) as { id: string };
     expect(replayBody.id).toBe(firstBody.id);
+    const correction = {
+      expectedVersion: 1,
+      channel: body.channel,
+      direction: body.direction,
+      occurredAt: body.occurredAt,
+      contactId: null,
+      contactNumber: body.contactNumber,
+      durationSeconds: body.durationSeconds,
+      summary: body.summary,
+      result: body.result,
+      incidentId: secondIncident.id,
+      reason: "Se corrige la incidencia vinculada desde el contrato HTTP.",
+    };
+    const correctionKey = randomUUID();
+    const correctionContext = { params: Promise.resolve({ communicationId: firstBody.id }) };
+    const corrected = await communicationCorrectionsPost(jsonRequest(`/api/support/communications/${firstBody.id}/corrections`, correction, { csrf, key: correctionKey }), correctionContext);
+    const correctedReplay = await communicationCorrectionsPost(jsonRequest(`/api/support/communications/${firstBody.id}/corrections`, correction, { csrf, key: correctionKey }), correctionContext);
+    expect(corrected.status).toBe(201);
+    expect(correctedReplay.status).toBe(200);
+    expect(await corrected.json()).toMatchObject({ correctionsHasMore: false, corrections: [{ resultingVersion: 2, previous: { incidentId: firstIncident.id }, corrected: { incidentId: secondIncident.id }, previousIncident: { id: firstIncident.id, number: firstIncident.number }, correctedIncident: { id: secondIncident.id, number: secondIncident.number } }] });
+    expect(await correctedReplay.json()).toMatchObject({ corrections: [{ resultingVersion: 2, previousIncident: { id: firstIncident.id }, correctedIncident: { id: secondIncident.id } }] });
     const second = await communicationsPost(
       jsonRequest(
         "/api/support/communications",
@@ -869,6 +896,9 @@ describe("support incidents HTTP contracts", () => {
     };
     expect(listBody.communications).toHaveLength(1);
     expect(listBody.communications[0]).toMatchObject({ id: firstBody.id });
+    expect(listBody.communications[0]).not.toHaveProperty("corrections");
+    expect(listBody.communications[0]).not.toHaveProperty("correctionsHasMore");
+    expect(listBody.communications[0]).not.toHaveProperty("correctionsNextCursor");
     expect(listBody.nextCursor).toEqual(expect.any(String));
     const madridDay = madridDateOnly(new Date(body.occurredAt));
     const structured = await communicationsGet(request(`/api/support/communications?customerId=${body.customerId}&channel=${body.channel}&direction=${body.direction}&result=${body.result}&occurredFrom=${madridDay}&occurredTo=${madridDay}`));
@@ -894,6 +924,30 @@ describe("support incidents HTTP contracts", () => {
     );
     expect(list.status).toBe(200);
     expect(detail.status).toBe(200);
+    expect(await detail.json()).toMatchObject({ id: firstBody.id, correctionsHasMore: false, corrections: [{ resultingVersion: 2, previousIncident: { id: firstIncident.id, number: firstIncident.number }, correctedIncident: { id: secondIncident.id, number: secondIncident.number } }] });
+    expect((await communicationGet(
+      request(`/api/support/communications/${firstBody.id}?correctionsCursor=invalid`),
+      { params: Promise.resolve({ communicationId: firstBody.id }) },
+    )).status).toBe(422);
+    expect((await communicationGet(
+      request(`/api/support/communications/${firstBody.id}?unknown=value`),
+      { params: Promise.resolve({ communicationId: firstBody.id }) },
+    )).status).toBe(422);
+    expect((await communicationGet(
+      request(`/api/support/communications/${firstBody.id}?correctionsCursor=a&correctionsCursor=b`),
+      { params: Promise.resolve({ communicationId: firstBody.id }) },
+    )).status).toBe(422);
+    const cursorPayload = Buffer.from(JSON.stringify({ v: 1, communicationId: firstBody.id, resultingVersion: 2 }), "utf8").toString("base64url");
+    const cursorSignature = createHmac("sha256", getSessionSecret()).update(`support-communication-corrections-cursor:v1:${cursorPayload}`).digest("base64url");
+    const validCorrectionsCursor = `${cursorPayload}.${cursorSignature}`;
+    expect((await communicationGet(
+      request(`/api/support/communications/${firstBody.id}?correctionsCursor=${validCorrectionsCursor}`),
+      { params: Promise.resolve({ communicationId: firstBody.id }) },
+    )).status).toBe(200);
+    expect((await communicationGet(
+      request(`/api/support/communications/${secondBody.id}?correctionsCursor=${validCorrectionsCursor}`),
+      { params: Promise.resolve({ communicationId: secondBody.id }) },
+    )).status).toBe(422);
     const readAudits = await prisma.auditEvent.findMany({
       where: {
         eventType: {
@@ -902,7 +956,8 @@ describe("support incidents HTTP contracts", () => {
       },
       select: { payload: true },
     });
-    expect(readAudits).toHaveLength(4);
+    expect(readAudits).toHaveLength(5);
+    expect(readAudits.some((audit) => JSON.stringify(audit.payload).includes('"hasCorrectionsCursor":true'))).toBe(true);
     expect(JSON.stringify(readAudits)).not.toContain(body.summary);
     expect(JSON.stringify(readAudits)).not.toContain(body.contactNumber);
   });

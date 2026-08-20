@@ -534,7 +534,24 @@ incompletos o un cursor reutilizado con otra consulta devuelven `422`. Un UUID
 válido inexistente o ajeno produce una colección vacía y no permite enumerar
 recursos. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada o hacia una incidencia cuyo cliente vigente sea distinto; una corrección puede conservar el enlace histórico que ya existía antes de la fusión o antes de un cambio administrativo de cliente.
 
-`GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. `contactId` es opcional para históricos, pero cuando se informa debe pertenecer al cliente, estar activo y contener exactamente el número utilizado para el canal seleccionado. `contactNumber` permanece como instantánea aunque el maestro cambie posteriormente.
+El listado devuelve una proyección resumida y no incluye `corrections`,
+`correctionsHasMore` ni `correctionsNextCursor`; esos campos pertenecen solo al
+detalle y a la respuesta acotada de una mutación.
+
+`GET /api/support/communications/{communicationId}` devuelve el detalle y las
+cien correcciones más recientes en orden de versión, además de
+`correctionsHasMore` y `correctionsNextCursor`. Cada corrección incluye su versión resultante, la
+proyección anterior y corregida y referencias mínimas `{id,number}` para las
+incidencias históricas que todavía pertenecen a la empresa. Una referencia
+histórica no encontrada permanece opaca y no permite enumerar otro tenant. El
+enlace a una incidencia vuelve a exigir `Support.View` en su destino.
+Cuando `correctionsHasMore=true`, una petición posterior puede enviar el
+`correctionsCursor` opaco devuelto como query param para recuperar el bloque
+anterior. El cursor está firmado y ligado a la comunicación; manipularlo,
+reutilizarlo con otra comunicación, repetir parámetros o enviar claves
+desconocidas devuelve `422 VALIDATION_ERROR`.
+
+`POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. `contactId` es opcional para históricos, pero cuando se informa debe pertenecer al cliente, estar activo y contener exactamente el número utilizado para el canal seleccionado. `contactNumber` permanece como instantánea aunque el maestro cambie posteriormente.
 
 Las lecturas de listado y detalle generan auditoría opaca sin resumen, número de contacto ni textos de corrección. Altas y correcciones comparten límites persistentes separados de 20 intentos por actor y empresa en 15 minutos. El replay válido se resuelve antes de consumir cuota. Al superar el límite se devuelve `429 SUPPORT_COMMUNICATION_RATE_LIMITED` con `Retry-After: 900`; tras tres conflictos serializables se devuelve `503 SUPPORT_COMMUNICATION_BUSY` con `Retry-After: 3`.
 

@@ -66,6 +66,9 @@ export const listSupportCommunicationsSchema = z
 export const supportCommunicationParamsSchema = z
   .object({ communicationId: z.string().uuid() })
   .strict();
+export const supportCommunicationDetailQuerySchema = z
+  .object({ correctionsCursor: z.string().max(512).optional() })
+  .strict();
 export type CreateCommunication = z.infer<
   typeof createSupportCommunicationSchema
 >;
@@ -88,7 +91,7 @@ type Content = {
   result: z.infer<typeof resultSchema>;
   incidentId: string | null;
 };
-export type SupportCommunicationDto = Content & {
+type SupportCommunicationBaseDto = Content & {
   id: string;
   customer: { id: string; code: string; legalName: string };
   incident: { id: string; number: string; title: string } | null;
@@ -96,11 +99,21 @@ export type SupportCommunicationDto = Content & {
   registeredBy: { id: string; displayName: string };
   version: number;
   recordedAt: string;
+};
+export type SupportCommunicationSummaryDto = SupportCommunicationBaseDto;
+export type SupportCommunicationDto = SupportCommunicationBaseDto & {
+  correctionsHasMore: boolean;
+  correctionsNextCursor: string | null;
   corrections: Array<{
     id: string;
+    resultingVersion: number;
     reason: string;
     previous: Content;
     corrected: Content;
+    previousIncident: { id: string; number: string } | null;
+    correctedIncident: { id: string; number: string } | null;
+    previousContact: { id: string; name: string | null; role: string | null } | null;
+    correctedContact: { id: string; name: string | null; role: string | null } | null;
     correctedBy: { id: string; displayName: string };
     correctedAt: string;
   }>;
@@ -127,7 +140,7 @@ type Failure = {
 type Result =
   { ok: true; status: 200 | 201; value: SupportCommunicationDto } | Failure;
 
-const detailSelect = {
+const communicationSelect = {
   id: true,
   channel: true,
   direction: true,
@@ -144,10 +157,21 @@ const detailSelect = {
   incident: { select: { id: true, number: true, title: true } },
   contact: { select: { id: true, name: true, role: true } },
   registeredBy: { select: { id: true, displayName: true } },
-  corrections: {
-    orderBy: [{ resultingVersion: "asc" as const }],
-    select: {
+} satisfies Prisma.SupportCommunicationSelect;
+function detailSelect(options: { beforeVersion?: number; exactVersion?: number } = {}) {
+  return {
+    ...communicationSelect,
+    corrections: {
+      ...(options.exactVersion
+        ? { where: { resultingVersion: options.exactVersion } }
+        : options.beforeVersion
+          ? { where: { resultingVersion: { lt: options.beforeVersion } } }
+          : {}),
+      orderBy: [{ resultingVersion: "desc" as const }],
+      take: 101,
+      select: {
       id: true,
+      resultingVersion: true,
       reason: true,
       previousChannel: true,
       correctedChannel: true,
@@ -169,16 +193,20 @@ const detailSelect = {
       correctedIncidentId: true,
       correctedAt: true,
       correctedByUser: { select: { id: true, displayName: true } },
+      },
     },
-  },
-} satisfies Prisma.SupportCommunicationSelect;
+  } satisfies Prisma.SupportCommunicationSelect;
+}
 const customerReferenceSelect = {
   id: true,
   code: true,
   legalName: true,
 } satisfies Prisma.CustomerSelect;
 type RecordDto = Prisma.SupportCommunicationGetPayload<{
-  select: typeof detailSelect;
+  select: ReturnType<typeof detailSelect>;
+}>;
+type SummaryRecordDto = Prisma.SupportCommunicationGetPayload<{
+  select: typeof communicationSelect;
 }>;
 const replayContentSchema = z
   .object({
@@ -220,13 +248,20 @@ const replaySchema = z
       .strict(),
     version: z.number().int().positive(),
     recordedAt: z.string().datetime({ offset: true }),
+    correctionsHasMore: z.boolean().default(false),
+    correctionsNextCursor: z.string().nullable().default(null),
     corrections: z.array(
       z
         .object({
           id: z.string().uuid(),
+          resultingVersion: z.number().int().positive().optional(),
           reason: z.string(),
           previous: replayContentSchema,
           corrected: replayContentSchema,
+          previousIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict().nullable().default(null),
+          correctedIncident: z.object({ id: z.string().uuid(), number: z.string() }).strict().nullable().default(null),
+          previousContact: z.object({ id: z.string().uuid(), name: z.string().nullable(), role: z.string().nullable() }).strict().nullable().default(null),
+          correctedContact: z.object({ id: z.string().uuid(), name: z.string().nullable(), role: z.string().nullable() }).strict().nullable().default(null),
           correctedBy: z
             .object({ id: z.string().uuid(), displayName: z.string() })
             .strict(),
@@ -246,7 +281,7 @@ export async function listSupportCommunications(
   const companyId = await currentCompanyId(prisma);
   if (!companyId)
     return {
-      communications: [] as SupportCommunicationDto[],
+      communications: [] as SupportCommunicationSummaryDto[],
       nextCursor: null as string | null,
     };
   const filterHash = communicationFilterHash(command);
@@ -273,7 +308,7 @@ export async function listSupportCommunications(
     },
     orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
     take: command.limit + 1,
-    select: detailSelect,
+    select: communicationSelect,
   });
   const page = rows.slice(0, command.limit);
   await prisma.auditEvent.create({
@@ -302,7 +337,7 @@ export async function listSupportCommunications(
     },
   });
   return {
-    communications: page.map(mapDetail),
+    communications: page.map(mapSummary),
     nextCursor:
       rows.length > command.limit && page.length
         ? encodeCursor(page[page.length - 1]!, filterHash)
@@ -313,15 +348,24 @@ export async function getSupportCommunication(
   id: string,
   actor: SessionUser,
   context: RequestContext = {},
+  correctionsCursor?: string,
 ) {
   const companyId = await currentCompanyId(prisma);
+  const decodedCursor = correctionsCursor
+    ? decodeCorrectionCursor(correctionsCursor, id)
+    : null;
+  if (correctionsCursor && !decodedCursor) return null;
   const row = companyId
     ? await prisma.supportCommunication.findFirst({
         where: { id, companyId },
-        select: detailSelect,
+        select: detailSelect({ beforeVersion: decodedCursor?.resultingVersion }),
       })
     : null;
-  if (!row) return null;
+  if (!companyId || !row) return null;
+  const [incidentReferences, contactReferences] = await Promise.all([
+    loadHistoricalIncidentReferences(prisma, companyId, [row]),
+    loadHistoricalContactReferences(prisma, [row]),
+  ]);
   await prisma.auditEvent.create({
     data: {
       eventType: "SUPPORT_COMMUNICATION_VIEWED",
@@ -331,13 +375,14 @@ export async function getSupportCommunication(
         companyId,
         communicationId: row.id,
         customerId: row.customer.id,
+        hasCorrectionsCursor: Boolean(correctionsCursor),
         ...(context.correlationId
           ? { correlationId: context.correlationId }
           : {}),
       },
     },
   });
-  return mapDetail(row);
+  return mapDetail(row, incidentReferences, contactReferences);
 }
 export async function listCommunicationReferences(preferredCustomerId?: string) {
   const companyId = await currentCompanyId(prisma);
@@ -473,9 +518,9 @@ export async function createSupportCommunication(
         result: command.result,
         incidentId: command.incidentId,
       },
-      select: detailSelect,
+      select: communicationSelect,
     });
-    const value = mapDetail(row);
+    const value = mapDetail({ ...row, corrections: [] });
     await tx.auditEvent.create({
       data: {
         eventType: "SUPPORT_COMMUNICATION_CREATED",
@@ -620,9 +665,13 @@ export async function correctSupportCommunication(
     });
     const row = await tx.supportCommunication.findUniqueOrThrow({
       where: { id },
-      select: detailSelect,
+      select: detailSelect({ exactVersion: command.expectedVersion + 1 }),
     });
-    const value = mapDetail(row);
+    const [incidentReferences, contactReferences] = await Promise.all([
+      loadHistoricalIncidentReferences(tx, companyId, [row]),
+      loadHistoricalContactReferences(tx, [row]),
+    ]);
+    const value = mapDetail(row, incidentReferences, contactReferences);
     await tx.auditEvent.create({
       data: {
         eventType: "SUPPORT_COMMUNICATION_CORRECTED",
@@ -676,7 +725,7 @@ async function mutate(
               );
             const parsed = replaySchema.safeParse(replay.responseBody);
             return parsed.success
-              ? { ok: true, status: 200, value: parsed.data }
+              ? { ok: true, status: 200, value: normalizeReplay(parsed.data) }
               : fail(
                   409,
                   "IDEMPOTENCY_REPLAY_INVALID",
@@ -857,29 +906,37 @@ function validateContent(
       message: "El resultado requiere una incidencia vinculada.",
     });
 }
-function mapDetail(row: RecordDto): SupportCommunicationDto {
-  const current: Content = {
-    channel: row.channel,
-    direction: row.direction,
-    occurredAt: row.occurredAt.toISOString(),
-    contactNumber: row.contactNumber,
-    contactId: row.contactId,
-    durationSeconds: row.durationSeconds,
-    summary: row.summary,
-    result: row.result,
-    incidentId: row.incidentId,
-  };
+function mapSummary(row: SummaryRecordDto): SupportCommunicationSummaryDto {
+  return mapBase(row);
+}
+
+function normalizeReplay(value: z.infer<typeof replaySchema>): SupportCommunicationDto {
   return {
-    id: row.id,
-    ...current,
-    customer: row.customer,
-    incident: row.incident,
-    contact: row.contact,
-    registeredBy: row.registeredBy,
-    version: row.version,
-    recordedAt: row.recordedAt.toISOString(),
-    corrections: row.corrections.map((item) => ({
+    ...value,
+    corrections: value.corrections.map((correction, index) => ({
+      ...correction,
+      resultingVersion: correction.resultingVersion ?? index + 2,
+    })),
+  };
+}
+
+function mapDetail(
+  row: RecordDto,
+  incidentReferences: ReadonlyMap<string, { id: string; number: string }> = new Map(),
+  contactReferences: ReadonlyMap<string, { id: string; name: string | null; role: string | null }> = new Map(),
+): SupportCommunicationDto {
+  const base = mapBase(row);
+  const selectedCorrections = row.corrections.slice(0, 100).reverse();
+  return {
+    ...base,
+    correctionsHasMore: row.corrections.length > 100,
+    correctionsNextCursor:
+      row.corrections.length > 100 && selectedCorrections.length
+        ? encodeCorrectionCursor(row.id, selectedCorrections[0]!.resultingVersion)
+        : null,
+    corrections: selectedCorrections.map((item) => ({
       id: item.id,
+      resultingVersion: item.resultingVersion,
       reason: item.reason,
       previous: {
         channel: item.previousChannel,
@@ -903,10 +960,85 @@ function mapDetail(row: RecordDto): SupportCommunicationDto {
         result: item.correctedResult,
         incidentId: item.correctedIncidentId,
       },
+      previousIncident: item.previousIncidentId
+        ? incidentReferences.get(item.previousIncidentId) ?? null
+        : null,
+      correctedIncident: item.correctedIncidentId
+        ? incidentReferences.get(item.correctedIncidentId) ?? null
+        : null,
+      previousContact: item.previousContactId
+        ? contactReferences.get(item.previousContactId) ?? null
+        : null,
+      correctedContact: item.correctedContactId
+        ? contactReferences.get(item.correctedContactId) ?? null
+        : null,
       correctedBy: item.correctedByUser,
       correctedAt: item.correctedAt.toISOString(),
     })),
   };
+}
+
+function mapBase(row: SummaryRecordDto): SupportCommunicationBaseDto {
+  return {
+    id: row.id,
+    channel: row.channel,
+    direction: row.direction,
+    occurredAt: row.occurredAt.toISOString(),
+    contactNumber: row.contactNumber,
+    contactId: row.contactId,
+    durationSeconds: row.durationSeconds,
+    summary: row.summary,
+    result: row.result,
+    incidentId: row.incidentId,
+    customer: row.customer,
+    incident: row.incident,
+    contact: row.contact,
+    registeredBy: row.registeredBy,
+    version: row.version,
+    recordedAt: row.recordedAt.toISOString(),
+  };
+}
+
+async function loadHistoricalIncidentReferences(
+  client: Pick<Prisma.TransactionClient, "supportIncident">,
+  companyId: string,
+  rows: readonly RecordDto[],
+): Promise<Map<string, { id: string; number: string }>> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.incidentId) ids.add(row.incidentId);
+    for (const correction of row.corrections.slice(0, 100)) {
+      if (correction.previousIncidentId) ids.add(correction.previousIncidentId);
+      if (correction.correctedIncidentId) ids.add(correction.correctedIncidentId);
+    }
+  }
+  if (ids.size === 0) return new Map();
+  const incidents = await client.supportIncident.findMany({
+    where: { companyId, id: { in: [...ids] } },
+    select: { id: true, number: true },
+  });
+  return new Map(incidents.map((incident) => [incident.id, incident]));
+}
+
+async function loadHistoricalContactReferences(
+  client: Pick<Prisma.TransactionClient, "customerContact">,
+  rows: readonly RecordDto[],
+): Promise<Map<string, { id: string; name: string | null; role: string | null }>> {
+  const ids = new Set<string>();
+  const customerIds = new Set<string>();
+  for (const row of rows) {
+    customerIds.add(row.customer.id);
+    for (const correction of row.corrections.slice(0, 100)) {
+      if (correction.previousContactId) ids.add(correction.previousContactId);
+      if (correction.correctedContactId) ids.add(correction.correctedContactId);
+    }
+  }
+  if (ids.size === 0) return new Map();
+  const contacts = await client.customerContact.findMany({
+    where: { id: { in: [...ids] }, customerId: { in: [...customerIds] } },
+    select: { id: true, name: true, role: true },
+  });
+  return new Map(contacts.map((contact) => [contact.id, contact]));
 }
 function encodeCursor(row: { occurredAt: Date; id: string }, filterHash: string) {
   const payload = Buffer.from(JSON.stringify({ v: 1, occurredAt: row.occurredAt.toISOString(), id: row.id, filterHash }), "utf8").toString("base64url");
@@ -927,6 +1059,32 @@ function decodeCursor(value: string, filterHash: string): { occurredAt: Date; id
   }
 }
 function signCursor(payload: string): string { return createHmac("sha256", getSessionSecret()).update(`support-communication-list-cursor:v1:${payload}`).digest("base64url"); }
+function encodeCorrectionCursor(communicationId: string, resultingVersion: number): string {
+  const payload = Buffer.from(JSON.stringify({ v: 1, communicationId, resultingVersion }), "utf8").toString("base64url");
+  return `${payload}.${signCorrectionCursor(payload)}`;
+}
+function decodeCorrectionCursor(value: string, communicationId: string): { resultingVersion: number } | null {
+  try {
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expected = signCorrectionCursor(payload);
+    const submitted = Buffer.from(signature, "base64url");
+    const expectedBytes = Buffer.from(expected, "base64url");
+    if (submitted.toString("base64url") !== signature || submitted.length !== expectedBytes.length || !timingSafeEqual(submitted, expectedBytes)) return null;
+    const parsed = z.object({ v: z.literal(1), communicationId: z.string().uuid(), resultingVersion: z.number().int().min(2) }).strict().safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    return parsed.success && parsed.data.communicationId === communicationId
+      ? { resultingVersion: parsed.data.resultingVersion }
+      : null;
+  } catch {
+    return null;
+  }
+}
+function signCorrectionCursor(payload: string): string {
+  return createHmac("sha256", getSessionSecret()).update(`support-communication-corrections-cursor:v1:${payload}`).digest("base64url");
+}
+export function isSupportCommunicationCorrectionsCursor(value: string, communicationId: string): boolean {
+  return Boolean(decodeCorrectionCursor(value, communicationId));
+}
 function communicationFilterHash(command: z.infer<typeof listSupportCommunicationsSchema>): string {
   return createHash("sha256").update(JSON.stringify({ customerId: command.customerId ?? null, incidentId: command.incidentId ?? null, contactId: command.contactId ?? null, channel: command.channel ?? null, direction: command.direction ?? null, result: command.result ?? null, occurredFrom: command.occurredFrom ?? null, occurredTo: command.occurredTo ?? null })).digest("hex");
 }

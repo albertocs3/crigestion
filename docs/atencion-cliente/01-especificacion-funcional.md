@@ -186,6 +186,14 @@ Se permiten correcciones, conservando:
 - Fecha y hora.
 - Motivo de la corrección.
 
+La ficha muestra únicamente los campos que cambiaron, con sus valores anterior
+y corregido. Los cambios de vinculación identifican la incidencia histórica
+por su número aunque después cambie el cliente vigente o la incidencia quede
+fusionada. La carga inicial queda acotada a las cien correcciones más recientes
+por página y permite continuar hacia las versiones anteriores mediante un cursor
+opaco ligado a la comunicación,
+y avisa cuando existe historia anterior conservada.
+
 ## 5. Incidencias
 
 ### 5.1 Datos principales

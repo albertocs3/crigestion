@@ -1656,6 +1656,164 @@ describe("support incidents application", () => {
     ).rejects.toThrow();
   });
 
+  it("resolves historical incident links in the communication correction ledger", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const targetCustomer = await createCustomerRecord(actor, {
+      legalName: "Cliente Destino Historial SL",
+      tradeName: "Cliente Destino Historial",
+      taxId: "B12345666",
+      email: "destino-historial@example.test",
+      bankIban: "ES7620770024003102575766",
+      sepaMandate: { reference: "SEPA-HISTORIAL-2", signedAt: "2026-07-01" },
+    });
+    const references = await listSupportReferences();
+    const baseIncident = {
+      customerId: customer.id,
+      storeId: null,
+      categoryId: references.categories[0]!.id,
+      responsibleUserId: actor.id,
+      description: "Incidencia sintética para validar el historial de vínculos.",
+      priority: "MEDIUM" as const,
+    };
+    const first = await createSupportIncident({ ...baseIncident, title: "Primer vínculo histórico" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...baseIncident, title: "Primer vínculo histórico" }), scope: "incident:create" });
+    const second = await createSupportIncident({ ...baseIncident, title: "Segundo vínculo histórico" }, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest({ ...baseIncident, title: "Segundo vínculo histórico" }), scope: "incident:create" });
+    if (!first.ok || !second.ok) throw new Error("INCIDENTS_NOT_CREATED");
+    const occurredAt = new Date().toISOString();
+    const command = {
+      customerId: customer.id,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt,
+      contactId: null,
+      contactNumber: "+34910000011",
+      durationSeconds: 120,
+      summary: "Comunicación vinculada inicialmente a la primera incidencia.",
+      result: "REFERRED_TO_INCIDENT" as const,
+      incidentId: first.value.id,
+    };
+    const communication = await createSupportCommunication(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(command), scope: "communication:create" });
+    if (!communication.ok) throw new Error(communication.error.code);
+    const correction = {
+      expectedVersion: 1,
+      channel: command.channel,
+      direction: command.direction,
+      occurredAt,
+      contactId: null,
+      contactNumber: command.contactNumber,
+      durationSeconds: command.durationSeconds,
+      summary: command.summary,
+      result: command.result,
+      incidentId: second.value.id,
+      reason: "Se corrige la incidencia vinculada tras revisar el expediente.",
+    };
+    const correctionContext = { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: communication.value.id, ...correction }), scope: `communication:${communication.value.id}:correct` };
+    const corrected = await correctSupportCommunication(communication.value.id, correction, actor, correctionContext);
+    const replay = await correctSupportCommunication(communication.value.id, correction, actor, correctionContext);
+    expect(corrected).toMatchObject({ ok: true, status: 201, value: { version: 2, incidentId: second.value.id, corrections: [{ resultingVersion: 2, previousIncident: { id: first.value.id, number: first.value.number }, correctedIncident: { id: second.value.id, number: second.value.number } }] } });
+    expect(replay).toMatchObject({ ok: true, status: 200, value: { corrections: [{ resultingVersion: 2, previousIncident: { id: first.value.id }, correctedIncident: { id: second.value.id } }] } });
+
+    const customerChange = {
+      expectedVersion: second.value.version,
+      expectedCustomerId: customer.id,
+      customerId: targetCustomer.id,
+      reason: "Se valida que el vínculo histórico no dependa del cliente vigente.",
+      confirmation: "CHANGE_INCIDENT_CUSTOMER" as const,
+    };
+    expect(await changeSupportIncidentCustomer(second.value.id, customerChange, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentCustomerChangeRequest({ incidentId: second.value.id, ...customerChange }), scope: `incident:${second.value.id}:customer-change` })).toMatchObject({ ok: true });
+
+    const detail = await getSupportCommunication(communication.value.id, actor);
+    expect(detail).toMatchObject({
+      incident: { id: second.value.id, number: second.value.number },
+      correctionsHasMore: false,
+      corrections: [{
+        resultingVersion: 2,
+        previous: { incidentId: first.value.id },
+        corrected: { incidentId: second.value.id },
+        previousIncident: { id: first.value.id, number: first.value.number },
+        correctedIncident: { id: second.value.id, number: second.value.number },
+      }],
+    });
+  });
+
+  it("paginates communication correction history without gaps or duplicates", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const occurredAt = new Date().toISOString();
+    const command = {
+      customerId: customer.id,
+      channel: "PHONE" as const,
+      direction: "INBOUND" as const,
+      occurredAt,
+      contactId: null,
+      contactNumber: "+34910000012",
+      durationSeconds: 60,
+      summary: "Resumen inicial para comprobar el límite del historial.",
+      result: "INFORMATION_PROVIDED" as const,
+      incidentId: null,
+    };
+    const communication = await createSupportCommunication(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest(command), scope: "communication:create" });
+    if (!communication.ok) throw new Error(communication.error.code);
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    for (let index = 1; index <= 201; index += 1) {
+      if (index > 1 && (index - 1) % 20 === 0) {
+        await prisma.rateLimitBucket.deleteMany({ where: { key: `support-communication-correct:${companyId}:${actor.id}` } });
+      }
+      const correction = {
+        expectedVersion: index,
+        channel: command.channel,
+        direction: command.direction,
+        occurredAt,
+        contactId: null,
+        contactNumber: command.contactNumber,
+        durationSeconds: command.durationSeconds,
+        summary: `Resumen corregido sintético ${index}.`,
+        result: command.result,
+        incidentId: null,
+        reason: `Corrección sintética ${index} para validar el límite del historial.`,
+      };
+      const result = await correctSupportCommunication(communication.value.id, correction, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCommunicationRequest({ communicationId: communication.value.id, ...correction }), scope: `communication:${communication.value.id}:correct` });
+      expect(result).toMatchObject({ ok: true, value: { version: index + 1 } });
+      if (index === 201 && result.ok) {
+        expect(result.value.corrections).toHaveLength(1);
+        expect(result.value.corrections[0]?.resultingVersion).toBe(202);
+        expect(result.value.correctionsHasMore).toBe(false);
+      }
+    }
+
+    const detail = await getSupportCommunication(communication.value.id, actor);
+    expect(detail?.correctionsHasMore).toBe(true);
+    expect(detail?.correctionsNextCursor).toEqual(expect.any(String));
+    expect(detail?.corrections).toHaveLength(100);
+    expect(detail?.corrections[0]?.resultingVersion).toBe(103);
+    expect(detail?.corrections.at(-1)?.resultingVersion).toBe(202);
+    const older = await getSupportCommunication(
+      communication.value.id,
+      actor,
+      {},
+      detail!.correctionsNextCursor!,
+    );
+    expect(older?.correctionsHasMore).toBe(true);
+    expect(older?.corrections).toHaveLength(100);
+    expect(older?.corrections[0]?.resultingVersion).toBe(3);
+    expect(older?.corrections.at(-1)?.resultingVersion).toBe(102);
+    const oldest = await getSupportCommunication(
+      communication.value.id,
+      actor,
+      {},
+      older!.correctionsNextCursor!,
+    );
+    expect(oldest).toMatchObject({
+      correctionsHasMore: false,
+      correctionsNextCursor: null,
+      corrections: [{ resultingVersion: 2 }],
+    });
+    const versions = [...oldest!.corrections, ...older!.corrections, ...detail!.corrections]
+      .map((correction) => correction.resultingVersion);
+    expect(versions).toEqual(Array.from({ length: 201 }, (_, index) => index + 2));
+    expect(await getSupportCommunication(randomUUID(), actor, {}, detail!.correctionsNextCursor!)).toBeNull();
+  }, 15_000);
+
   it("creates an incident from a communication atomically and replays it", async () => {
     const actor = await admin();
     const customer = await createCustomerRecord(actor);

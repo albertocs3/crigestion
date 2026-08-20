@@ -636,6 +636,16 @@ vigente usa `ON UPDATE RESTRICT`. El health público permaneció completo en
 `ok`, VeriFactu continuó en TEST, producción no se consultó ni modificó y el
 acceso SSH temporal permanece activo.
 
+El siguiente corte local completa la lectura del historial de correcciones de
+comunicaciones. El read model pagina el historial en bloques de hasta cien versiones,
+con cursor firmado y ligado a la comunicación para recuperar las anteriores; limita la carga inicial a las cien versiones más
+recientes, señala si existe historia anterior y resuelve las incidencias
+anterior y corregida únicamente por identificadores exactos dentro de la
+empresa. La ficha muestra solo los campos modificados y conserva la semántica
+OLD→NEW incluso después de un cambio administrativo de cliente. Esta rebanada
+todavía no se ha desplegado; `rc8` continúa activa en staging, producción sigue
+fuera de alcance y el acceso SSH temporal permanece activo.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

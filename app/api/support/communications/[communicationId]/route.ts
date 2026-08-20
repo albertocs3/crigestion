@@ -10,6 +10,8 @@ import {
 } from "@/modules/platform/application/http";
 import {
   getSupportCommunication,
+  isSupportCommunicationCorrectionsCursor,
+  supportCommunicationDetailQuerySchema,
   supportCommunicationParamsSchema,
 } from "@/modules/support/application/communications";
 export const dynamic = "force-dynamic";
@@ -29,10 +31,35 @@ export async function GET(
   );
   if (!params.success)
     return response(request, validationError(params.error.flatten()), 422);
+  const queryValues = [...new URL(request.url).searchParams.entries()];
+  const query = supportCommunicationDetailQuerySchema.safeParse(
+    queryValues.length === 0
+      ? {}
+      : queryValues.length === 1 && queryValues[0]![0] === "correctionsCursor"
+        ? { correctionsCursor: queryValues[0]![1] }
+        : { invalid: true },
+  );
+  if (
+    !query.success ||
+    (query.data.correctionsCursor &&
+      !isSupportCommunicationCorrectionsCursor(
+        query.data.correctionsCursor,
+        params.data.communicationId,
+      ))
+  )
+    return response(
+      request,
+      validationError({
+        fieldErrors: { correctionsCursor: ["El cursor no es válido."] },
+        formErrors: [],
+      }),
+      422,
+    );
   const value = await getSupportCommunication(
     params.data.communicationId,
     auth.user,
     { correlationId },
+    query.data.correctionsCursor,
   );
   return value
     ? response(request, value, 200)
