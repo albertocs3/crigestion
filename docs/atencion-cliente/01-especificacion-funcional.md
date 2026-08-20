@@ -501,15 +501,18 @@ Listado de notificaciones pendientes y leídas, con acceso directo a la incidenc
 
 ### Filtros
 
-- Cliente.
-- Contacto.
-- Técnico responsable.
-- Colaborador.
-- Estado.
-- Prioridad.
-- Categoría.
-- Canal.
-- Fecha desde y hasta.
+- El listado de incidencias combina con `AND` cliente, técnico responsable,
+  colaborador activo, estado, prioridad, categoría y fecha de creación.
+- El listado de comunicaciones combina con `AND` cliente, contacto vigente o
+  histórico, incidencia, canal, dirección, resultado y fecha real de la
+  comunicación.
+- Los rangos son fechas locales inclusivas de `Europe/Madrid`, requieren ambos
+  extremos y no pueden superar 366 días. El servidor los convierte a un rango
+  UTC semiabierto, incluidos los días de cambio horario.
+- Los filtros operan sobre el registro físico: una duplicada fusionada conserva
+  su historial y no se mezcla implícitamente con la principal en los listados.
+- Las referencias de filtrado son proyecciones mínimas y no exponen teléfonos,
+  resúmenes ni datos económicos.
 
 ### Búsqueda
 
@@ -517,6 +520,12 @@ Listado de notificaciones pendientes y leídas, con acceso directo a la incidenc
 - Título.
 - Descripción.
 - Contenido de actuaciones.
+
+La primera rebanada implementa número, título y descripción, con términos de 3
+a 120 caracteres, índices trigram y una cuota persistente de 30 búsquedas por
+actor y empresa cada 15 minutos. La búsqueda sobre actuaciones queda pendiente
+de incorporar su propio índice de texto y timeout de consulta; no se habilitará
+con un `ILIKE` sin protección sobre todo el histórico.
 
 ## 15. Indicadores
 

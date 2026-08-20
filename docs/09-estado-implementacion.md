@@ -425,6 +425,16 @@ consultable, incluido el contenido histórico agregado de su duplicada, pero no
 mostró controles de mutación. Con estas comprobaciones queda cerrada la UAT
 autenticada de esta rebanada.
 
+Después de ese corte se completó localmente la primera rebanada de filtros
+avanzados de Soporte. Incidencias incorpora cliente, responsable, colaborador
+activo, categoría y rango de creación; comunicaciones incorpora contacto,
+incidencia, dirección, resultado y rango de ocurrencia. Los rangos son
+inclusivos en `Europe/Madrid`, las queries HTTP rechazan parámetros desconocidos
+o repetidos y la paginación usa cursores HMAC ligados a los filtros. Se añadieron
+índices compuestos para los nuevos patrones. La búsqueda en actuaciones sigue
+pendiente hasta contar con índice textual, cuota persistente y timeout; este
+trabajo local todavía no forma parte de una release desplegada.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

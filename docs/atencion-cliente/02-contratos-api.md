@@ -137,7 +137,23 @@ usuarios que ya no sean seleccionables para no perder atribución pasada.
 
 ## `GET /api/support/incidents`
 
-Consulta autenticada con `Support.View`. Admite `limit` (1..100), `cursor`, `status`, `priority`, `responsibleUserId`, `customerId` y `search`. La búsqueda se aplica a número, título y descripción, pero el listado no devuelve la descripción.
+Consulta autenticada con `Support.View`. Admite `limit` (1..100), `cursor`,
+`status`, `priority`, `responsibleUserId`, `customerId`, `categoryId`,
+`activeCollaboratorUserId`, `createdFrom`, `createdTo` y `search`. Todos los
+filtros se combinan con `AND`; la búsqueda, de 3 a 120 caracteres, aplica `OR`
+a número, título y descripción, pero el listado no devuelve estos últimos
+textos. El colaborador debe conservar una participación activa.
+
+`createdFrom` y `createdTo` son fechas locales inclusivas `YYYY-MM-DD` en
+`Europe/Madrid`, se informan juntas y admiten como máximo 366 días. El cursor
+está firmado y ligado al conjunto normalizado de filtros: si se manipula o se
+reutiliza con otra consulta devuelve `422 VALIDATION_ERROR`. Parámetros
+desconocidos o repetidos también devuelven `422`. La auditoría conserva IDs,
+fechas, presencia de búsqueda y conteos, nunca el término ni el cursor.
+La búsqueda consume una cuota persistente de 30 intentos por actor y empresa en
+15 minutos y usa índices trigram sobre número, título y descripción. Al superar
+la cuota devuelve `429 SUPPORT_INCIDENT_SEARCH_RATE_LIMITED` con
+`Retry-After: 900`.
 
 Respuesta `200`: `{ incidents, nextCursor }`. Incluye `Cache-Control: private, no-store, max-age=0`.
 
@@ -290,7 +306,14 @@ Deuda operativa controlada: el semáforo de cuatro lecturas es por proceso y el 
 
 ## `/api/support/communications`
 
-`GET` requiere `Support.ViewCommunications` y admite cursor, cliente, incidencia y canal. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada; una corrección puede conservar el enlace histórico que ya existía antes de la fusión.
+`GET` requiere `Support.ViewCommunications` y admite `limit`, cursor,
+`customerId`, `contactId`, `incidentId`, `channel`, `direction`, `result`,
+`occurredFrom` y `occurredTo`. Todos se combinan con `AND`. Las fechas siguen
+la misma convención inclusiva de Madrid y el máximo de 366 días. El cursor está
+firmado y ligado a los filtros; parámetros desconocidos, repetidos, rangos
+incompletos o un cursor reutilizado con otra consulta devuelven `422`. Un UUID
+válido inexistente o ajeno produce una colección vacía y no permite enumerar
+recursos. `POST` requiere además `Support.ManageCommunications`, Origin/CSRF, mantenimiento, JSON estricto, 8 KiB e idempotencia. Registra cliente, canal `PHONE|WHATSAPP`, dirección, fecha real, número utilizado, duración telefónica, resumen, resultado e incidencia opcional del mismo cliente. `REQUIRES_FOLLOW_UP` y `REFERRED_TO_INCIDENT` exigen incidencia. No se admite crear ni relinkar una comunicación hacia una duplicada fusionada; una corrección puede conservar el enlace histórico que ya existía antes de la fusión.
 
 `GET /api/support/communications/{communicationId}` devuelve el detalle y correcciones. `POST .../corrections` exige todos los valores corregidos, `expectedVersion` y motivo. Cada corrección conserva la proyección anterior completa; ninguna comunicación se elimina. `contactId` es opcional para históricos, pero cuando se informa debe pertenecer al cliente, estar activo y contener exactamente el número utilizado para el canal seleccionado. `contactNumber` permanece como instantánea aunque el maestro cambie posteriormente.
 
