@@ -374,8 +374,8 @@ servidor redirigió correctamente a login; no se introdujeron credenciales.
 La release inmutable `staging-2026.08.20-rc1`, commit
 `723cf4a45770da75d1b5363ee3873fec476b4142`, integra Atención al cliente en la
 ficha del cliente sin modificar persistencia. Añade una proyección mínima y
-consistente
-de incidencias abiertas, finalizadas y comunicaciones condicionadas por RBAC,
+consistente de incidencias abiertas, finalizadas y comunicaciones condicionadas
+por RBAC,
 con auditoría única y contrato HTTP sin caché. Las duplicadas permanecen
 visibles en el histórico con enlace a su principal; no se recuperan ni exponen
 resúmenes, teléfonos, correcciones ni descripciones. Los enlaces de alta
@@ -403,6 +403,19 @@ eliminar clientes mientras otras conservaban contactos y fallaron por la FK
 quedaron verdes. `npm audit --audit-level=high` continúa señalando cuatro
 vulnerabilidades transitivas ya presentes en `deepmerge-ts`/Prisma y `nanoid`;
 no se alteraron dependencias dentro de esta rebanada.
+
+La UAT autenticada de Administrador del 20/08/2026 comprobó en la ficha del
+cliente la incidencia principal abierta, la duplicada cerrada con enlace a su
+principal y el historial mínimo de comunicaciones. Los accesos de alta
+preseleccionaron el cliente autorizado sin registrar datos; un `customerId`
+desconocido dejó el formulario deshabilitado y no seleccionó silenciosamente
+otro cliente. La vista móvil a 390 x 844 mantuvo la sección visible y sin
+desbordamiento horizontal de página. PostgreSQL registró
+`SUPPORT_CUSTOMER_CONTEXT_VIEWED` con identificadores, capacidades y conteos,
+sin título, descripción, resumen, teléfono, IBAN, NIF ni motivo. Queda pendiente
+la UAT específica con rol Técnico para verificar visualmente la omisión de datos
+económicos y de los bloques sin permiso; las pruebas automáticas de RBAC ya
+cubren ese contrato.
 
 ## 5. Riesgos y trabajo posterior
 
