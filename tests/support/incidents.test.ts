@@ -23,6 +23,7 @@ import {
   hashSupportActionRequest,
 } from "@/modules/support/application/actions";
 import { correctSupportAction, hashSupportActionCorrectionRequest } from "@/modules/support/application/actionCorrections";
+import { changeSupportCategory, hashSupportCategoryChangeRequest } from "@/modules/support/application/categoryChanges";
 import {
   createIncidentFromCommunication,
   createSupportCategory,
@@ -280,7 +281,8 @@ describe("support incidents application", () => {
     expect(await changeSupportIncidentDetails(created.value.id, invalidCategory, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...invalidCategory }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_CATEGORY_NOT_AVAILABLE" } });
     const invalidStore = { ...command, expectedVersion: 2, title: "Intento con tienda inactiva", storeId: inactiveStore.id };
     expect(await changeSupportIncidentDetails(created.value.id, invalidStore, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...invalidStore }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: false, status: 422, error: { code: "SUPPORT_STORE_NOT_FOUND" } });
-    await prisma.supportIncidentCategory.update({ where: { id: secondCategory.id }, data: { isActive: false } });
+    const deactivateCategory = { action: "set-status" as const, expectedVersion: 1, isActive: false, confirmation: "DEACTIVATE_SUPPORT_CATEGORY" as const, reason: "Prueba de conservación histórica" };
+    expect(await changeSupportCategory(secondCategory.id, deactivateCategory, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: secondCategory.id, ...deactivateCategory }), scope: `category:${secondCategory.id}:change` })).toMatchObject({ ok: true, status: 201 });
     await prisma.customerStore.update({ where: { id: store.id }, data: { status: "INACTIVE" } });
     const preservedInactive = { ...command, expectedVersion: 2, title: "Conserva referencias históricas" };
     expect(await changeSupportIncidentDetails(created.value.id, preservedInactive, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportIncidentDetailsChangeRequest({ incidentId: created.value.id, ...preservedInactive }), scope: `incident:${created.value.id}:details-change` })).toMatchObject({ ok: true, status: 201, value: { incident: { version: 3 } } });
@@ -1947,6 +1949,95 @@ describe("support incidents application", () => {
       status: 409,
       error: { code: "SUPPORT_CATEGORY_ALREADY_EXISTS" },
     });
+    const unicode = { ...command, name: "Straße" };
+    expect(await createSupportCategory(unicode, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(unicode), scope: "category:create" })).toMatchObject({ ok: true, status: 201, value: { name: "Straße" } });
+    const unicodeDuplicate = { ...command, name: "Strasse" };
+    expect(await createSupportCategory(unicodeDuplicate, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(unicodeDuplicate), scope: "category:create" })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_CATEGORY_ALREADY_EXISTS" } });
+    const expanded = { ...command, name: "ß".repeat(61) };
+    const expandedResult = await createSupportCategory(expanded, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(expanded), scope: "category:create" });
+    expect(expandedResult).toMatchObject({ ok: true, status: 201 });
+    expect((await prisma.supportIncidentCategory.findUniqueOrThrow({ where: { id: expandedResult.ok ? expandedResult.value.id : randomUUID() }, select: { normalizedName: true } })).normalizedName).toHaveLength(122);
+  });
+
+  it("versions category edits and status changes with append-only evidence", async () => {
+    const actor = await admin();
+    const create = { name: "Conectividad", description: "Red y comunicaciones", color: "#2563EB" };
+    const created = await createSupportCategory(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "category:create" });
+    if (!created.ok) throw new Error(created.error.code);
+
+    const update = { action: "update" as const, expectedVersion: 1, name: "Conectividad crítica", description: "Red, enlaces y comunicaciones", color: "#DC2626", reason: "Ajuste de clasificación operativa" };
+    const updateContext = { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: created.value.id, ...update }), scope: `category:${created.value.id}:change`, correlationId: randomUUID() };
+    const first = await changeSupportCategory(created.value.id, update, actor, updateContext);
+    const replay = await changeSupportCategory(created.value.id, update, actor, updateContext);
+    expect(first).toMatchObject({ ok: true, status: 201, value: { category: { name: update.name, color: update.color, version: 2 }, change: { type: "UPDATE", resultingVersion: 2, changedFields: ["name", "description", "color"] } } });
+    expect(replay).toMatchObject({ ok: true, status: 200 });
+
+    const deactivate = { action: "set-status" as const, expectedVersion: 2, isActive: false, confirmation: "DEACTIVATE_SUPPORT_CATEGORY" as const, reason: "Categoría sustituida por la clasificación general" };
+    const inactive = await changeSupportCategory(created.value.id, deactivate, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: created.value.id, ...deactivate }), scope: `category:${created.value.id}:change` });
+    expect(inactive).toMatchObject({ ok: true, status: 201, value: { category: { isActive: false, version: 3 }, change: { type: "STATUS", changedFields: ["isActive"] } } });
+    expect((await listSupportReferences()).categories.map((category) => category.id)).not.toContain(created.value.id);
+    const lastActive = await prisma.supportIncidentCategory.findFirstOrThrow({ where: { isActive: true } });
+    const deactivateLast = { action: "set-status" as const, expectedVersion: lastActive.version, isActive: false, confirmation: "DEACTIVATE_SUPPORT_CATEGORY" as const, reason: "Intento de dejar el maestro sin opciones" };
+    expect(await changeSupportCategory(lastActive.id, deactivateLast, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: lastActive.id, ...deactivateLast }), scope: `category:${lastActive.id}:change` })).toMatchObject({ ok: false, status: 409, error: { code: "SUPPORT_CATEGORY_LAST_ACTIVE" } });
+    expect(await prisma.supportIncidentCategoryChange.count({ where: { categoryId: created.value.id } })).toBe(2);
+    const audits = await prisma.auditEvent.findMany({ where: { eventType: "SUPPORT_INCIDENT_CATEGORY_CHANGED" }, select: { payload: true } });
+    expect(audits).toHaveLength(2);
+    const serialized = JSON.stringify(audits);
+    expect(serialized).not.toContain(update.name);
+    expect(serialized).not.toContain(update.description);
+    expect(serialized).not.toContain(update.reason);
+    expect(serialized).not.toContain(update.color);
+
+    const concurrentA = { action: "update" as const, expectedVersion: 3, name: "Conectividad histórica A", description: update.description, color: update.color, reason: "Primera edición concurrente" };
+    const concurrentB = { ...concurrentA, name: "Conectividad histórica B", reason: "Segunda edición concurrente" };
+    const concurrent = await Promise.all([
+      changeSupportCategory(created.value.id, concurrentA, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: created.value.id, ...concurrentA }), scope: `category:${created.value.id}:change` }),
+      changeSupportCategory(created.value.id, concurrentB, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportCategoryChangeRequest({ categoryId: created.value.id, ...concurrentB }), scope: `category:${created.value.id}:change` }),
+    ]);
+    expect(concurrent.map((result) => result.status).sort()).toEqual([201, 409]);
+    const current = await prisma.supportIncidentCategory.findUniqueOrThrow({ where: { id: created.value.id } });
+    expect(current.version).toBe(4);
+    expect(await prisma.supportIncidentCategoryChange.count({ where: { categoryId: created.value.id } })).toBe(3);
+
+    await expect(prisma.supportIncidentCategoryChange.create({ data: { companyId: current.companyId, categoryId: current.id, actorUserId: actor.id, previousName: current.name, correctedName: current.name, previousNormalizedName: current.normalizedName, correctedNormalizedName: current.normalizedName, previousDescription: current.description, correctedDescription: current.description, previousColor: current.color, correctedColor: "#000000", previousIsActive: current.isActive, correctedIsActive: current.isActive, reason: "Evidencia sin cambio de proyección", resultingVersion: 5 } })).rejects.toThrow();
+    await expect(prisma.supportIncidentCategory.update({ where: { id: current.id }, data: { updatedAt: new Date(current.updatedAt.getTime() + 1_000) } })).rejects.toThrow();
+
+    const directLastActive = await prisma.supportIncidentCategory.findFirstOrThrow({ where: { isActive: true } });
+    const directChangedAt = new Date();
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.supportIncidentCategoryChange.create({ data: { companyId: directLastActive.companyId, categoryId: directLastActive.id, actorUserId: actor.id, previousName: directLastActive.name, correctedName: directLastActive.name, previousNormalizedName: directLastActive.normalizedName, correctedNormalizedName: directLastActive.normalizedName, previousDescription: directLastActive.description, correctedDescription: directLastActive.description, previousColor: directLastActive.color, correctedColor: directLastActive.color, previousIsActive: true, correctedIsActive: false, reason: "Intento SQL de desactivar la última categoría", resultingVersion: directLastActive.version + 1, changedAt: directChangedAt } });
+      await tx.supportIncidentCategory.update({ where: { id: directLastActive.id }, data: { isActive: false, version: directLastActive.version + 1, updatedAt: directChangedAt } });
+    })).rejects.toThrow();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.supportIncidentCategory.update({ where: { id: created.value.id }, data: { color: "#000000", version: { increment: 1 } } });
+    })).rejects.toThrow();
+    await expect(prisma.supportIncidentCategoryChange.updateMany({ where: { categoryId: created.value.id }, data: { reason: "Manipulación no permitida" } })).rejects.toThrow();
+    await expect(prisma.supportIncidentCategory.delete({ where: { id: created.value.id } })).rejects.toThrow();
+  });
+
+  it("serializes direct concurrent deactivation so one category remains active", async () => {
+    const actor = await admin();
+    const companyId = (await prisma.installation.findFirstOrThrow()).companyId!;
+    const create = { name: "Segunda categoría activa", description: "Categoría para probar write-skew", color: "#2563EB" };
+    const created = await createSupportCategory(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "category:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const categories = await prisma.supportIncidentCategory.findMany({ where: { companyId, isActive: true }, orderBy: { id: "asc" } });
+    expect(categories).toHaveLength(2);
+
+    async function deactivateDirect(category: (typeof categories)[number]) {
+      const changedAt = new Date();
+      return prisma.$transaction(async (tx) => {
+        await tx.supportIncidentCategoryChange.create({ data: { companyId, categoryId: category.id, actorUserId: actor.id, previousName: category.name, correctedName: category.name, previousNormalizedName: category.normalizedName, correctedNormalizedName: category.normalizedName, previousDescription: category.description, correctedDescription: category.description, previousColor: category.color, correctedColor: category.color, previousIsActive: true, correctedIsActive: false, reason: "Desactivación SQL concurrente controlada", resultingVersion: category.version + 1, changedAt } });
+        await tx.supportIncidentCategory.update({ where: { id: category.id }, data: { isActive: false, version: category.version + 1, updatedAt: changedAt } });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    }
+
+    const outcomes = await Promise.allSettled(categories.map(deactivateDirect));
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(await prisma.supportIncidentCategory.count({ where: { companyId, isActive: true } })).toBe(1);
+    expect(await prisma.supportIncidentCategoryChange.count({ where: { companyId } })).toBe(1);
   });
 
   it("uploads an incident attachment once with opaque audit and replay", async () => {
@@ -2160,6 +2251,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_category_changes" DISABLE TRIGGER "support_incident_category_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_categories" DISABLE TRIGGER "support_incident_categories_guard"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_participant_changes" DISABLE TRIGGER "support_incident_participant_changes_append_only"',
     );
@@ -2183,6 +2276,7 @@ async function reset() {
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
     await tx.supportIncidentActionCorrection.deleteMany();
+    await tx.supportIncidentCategoryChange.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
@@ -2192,6 +2286,7 @@ async function reset() {
     await tx.supportIncidentAction.deleteMany();
     await tx.supportIncidentMerge.deleteMany();
     await tx.supportIncident.deleteMany();
+    await tx.supportIncidentCategory.deleteMany();
     await tx.customerContact.deleteMany();
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"',
@@ -2211,6 +2306,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_category_changes" ENABLE TRIGGER "support_incident_category_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_categories" ENABLE TRIGGER "support_incident_categories_guard"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" ENABLE TRIGGER "support_incident_actions_append_only"',
     );
@@ -2235,7 +2332,6 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" ENABLE TRIGGER "support_incidents_merged_duplicate_guard"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
-  await prisma.supportIncidentCategory.deleteMany();
   await prisma.idempotencyRecord.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.auditEvent.deleteMany();

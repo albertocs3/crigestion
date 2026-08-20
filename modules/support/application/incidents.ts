@@ -243,6 +243,7 @@ export type SupportCategoryDto = {
   description: string | null;
   color: string;
   isActive: boolean;
+  version: number;
 };
 
 export type SupportIncidentReferences = {
@@ -284,11 +285,13 @@ type SupportErrorCode =
   | "SUPPORT_COMMUNICATION_ALREADY_LINKED"
   | "SUPPORT_COMMUNICATION_VERSION_CONFLICT"
   | "SUPPORT_CATEGORY_ALREADY_EXISTS"
+  | "SUPPORT_CATEGORY_CHANGE_FORBIDDEN"
+  | "SUPPORT_TRANSACTION_BUSY"
   | "IDEMPOTENCY_KEY_REUSED"
   | "IDEMPOTENCY_REPLAY_INVALID";
 type SupportFailure = {
   ok: false;
-  status: 404 | 409 | 422;
+  status: 403 | 404 | 409 | 422 | 503;
   error: { code: SupportErrorCode; message: string };
 };
 export type CreateSupportIncidentResult =
@@ -678,6 +681,7 @@ const categoryReplaySchema: z.ZodType<SupportCategoryDto> = z
     description: z.string().nullable(),
     color: colorSchema,
     isActive: z.boolean(),
+    version: z.number().int().positive(),
   })
   .strict();
 
@@ -890,6 +894,7 @@ export async function listSupportReferences(
         description: true,
         color: true,
         isActive: true,
+        version: true,
       },
     }),
     prisma.user.findMany({
@@ -974,6 +979,7 @@ export async function listSupportCategories(): Promise<SupportCategoryDto[]> {
       description: true,
       color: true,
       isActive: true,
+      version: true,
     },
   });
 }
@@ -991,13 +997,14 @@ export async function createSupportIncident(
         "PLATFORM_NOT_INITIALIZED",
         "La plataforma no esta inicializada.",
       );
-    const [customer, category, responsible, store] = await Promise.all([
+    const category = (await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "support_incident_categories"
+      WHERE "id" = ${command.categoryId}::uuid AND "companyId" = ${companyId}::uuid AND "isActive" = true
+      FOR SHARE
+    `))[0];
+    const [customer, responsible, store] = await Promise.all([
       tx.customer.findUnique({
         where: { id: command.customerId },
-        select: { id: true },
-      }),
-      tx.supportIncidentCategory.findFirst({
-        where: { id: command.categoryId, companyId, isActive: true },
         select: { id: true },
       }),
       tx.user.findFirst({
@@ -1187,11 +1194,12 @@ export async function createIncidentFromCommunication(
         "SUPPORT_COMMUNICATION_VERSION_CONFLICT",
         "La comunicacion ha cambiado. Recarga antes de continuar.",
       );
-    const [category, responsible, store] = await Promise.all([
-      tx.supportIncidentCategory.findFirst({
-        where: { id: command.categoryId, companyId, isActive: true },
-        select: { id: true },
-      }),
+    const category = (await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "support_incident_categories"
+      WHERE "id" = ${command.categoryId}::uuid AND "companyId" = ${companyId}::uuid AND "isActive" = true
+      FOR SHARE
+    `))[0];
+    const [responsible, store] = await Promise.all([
       tx.user.findFirst({
         where: {
           id: command.responsibleUserId,
@@ -1345,6 +1353,9 @@ export async function createSupportCategory(
   actor: SessionUser,
   context: SupportMutationContext,
 ): Promise<CreateSupportCategoryResult> {
+  if (!actor.permissions.includes("Support.View") || !actor.permissions.includes("Support.ManageCategories")) {
+    return failure(403, "SUPPORT_CATEGORY_CHANGE_FORBIDDEN", "No tienes permiso para gestionar categorías.");
+  }
   return executeMutation(
     actor,
     context,
@@ -1361,7 +1372,7 @@ export async function createSupportCategory(
         data: {
           companyId,
           name: command.name,
-          normalizedName: normalizeName(command.name),
+          normalizedName: await normalizeSupportCategoryName(tx, command.name),
           description: command.description,
           color: command.color,
         },
@@ -1371,6 +1382,7 @@ export async function createSupportCategory(
           description: true,
           color: true,
           isActive: true,
+          version: true,
         },
       });
       await tx.auditEvent.create({
@@ -1381,7 +1393,6 @@ export async function createSupportCategory(
             actorUserId: actor.id,
             companyId,
             categoryId: category.id,
-            color: category.color,
             ...(context.correlationId
               ? { correlationId: context.correlationId }
               : {}),
@@ -1453,12 +1464,10 @@ async function executeMutation<T>(
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2034" &&
-        attempt < 2
-      )
-        continue;
+      if (error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2034" || (error.code === "P2010" && error.meta?.code === "40001"))) {
+        if (attempt < 2) continue;
+        return failure(503, "SUPPORT_TRANSACTION_BUSY", "No se pudo completar la operación por concurrencia. Inténtalo de nuevo.");
+      }
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
@@ -1651,12 +1660,10 @@ async function currentCompanyId(
     )?.companyId ?? null
   );
 }
-function normalizeName(value: string): string {
-  return value
-    .trim()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLocaleLowerCase("es-ES");
+async function normalizeSupportCategoryName(client: Prisma.TransactionClient, value: string): Promise<string> {
+  const [row] = await client.$queryRaw<Array<{ value: string }>>(Prisma.sql`SELECT lower(unaccent(btrim(${value}))) AS "value"`);
+  if (!row) throw new Error("SUPPORT_CATEGORY_NORMALIZATION_FAILED");
+  return row.value;
 }
 function madridYear(value: Date): number {
   const part = new Intl.DateTimeFormat("en-CA", {
@@ -1720,7 +1727,7 @@ function isStatementTimeout(error: unknown): boolean {
 }
 class SupportIncidentSearchCapacityError extends Error {}
 function failure(
-  status: 404 | 409 | 422,
+  status: 403 | 404 | 409 | 422 | 503,
   code: SupportErrorCode,
   message: string,
 ): SupportFailure {

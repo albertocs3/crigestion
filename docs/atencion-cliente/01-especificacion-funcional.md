@@ -316,6 +316,14 @@ Cada categoría tendrá:
 
 Una categoría inactiva no podrá seleccionarse en nuevas incidencias, pero continuará visible en el histórico.
 
+El administrador puede modificar nombre, descripción y color, y activar o
+desactivar una categoría indicando el motivo. Cada cambio incrementa una
+versión optimista y conserva evidencia append-only de los valores anterior y
+corregido. El nombre vigente se muestra en las incidencias que ya la usan; los
+snapshots históricos registrados por otros cambios no se reescriben. No se
+permite borrar categorías ni desactivar la última categoría activa de la
+empresa.
+
 ## 7. Actuaciones
 
 Las actuaciones documentan el trabajo realizado en una incidencia.

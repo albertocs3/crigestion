@@ -128,7 +128,11 @@ export async function changeSupportIncidentDetails(
         }
         let correctedCategoryName = incident.categoryName;
         if (command.categoryId !== incident.categoryId) {
-          const category = await tx.supportIncidentCategory.findFirst({ where: { id: command.categoryId, companyId, isActive: true }, select: { name: true } });
+          const category = (await tx.$queryRaw<Array<{ name: string }>>(Prisma.sql`
+            SELECT "name" FROM "support_incident_categories"
+            WHERE "id" = ${command.categoryId}::uuid AND "companyId" = ${companyId}::uuid AND "isActive" = true
+            FOR SHARE
+          `))[0];
           if (!category) {
             await auditDenied(tx, actor.id, companyId, incidentId, "CATEGORY_NOT_AVAILABLE", context.correlationId);
             return fail(422, "SUPPORT_CATEGORY_NOT_AVAILABLE", "La categoría no está disponible.");

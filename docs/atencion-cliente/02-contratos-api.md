@@ -21,7 +21,7 @@ operativo de soporte y el contexto de soporte integrado en la ficha del cliente.
 - `Support.ManageParticipants` + `Support.View`: colaboradores y reasignación por el responsable o un administrador.
 - `Support.ViewCommunications`: listado y detalle de comunicaciones.
 - `Support.ManageCommunications` + `Support.ViewCommunications`: alta y corrección de comunicaciones.
-- `Support.ManageCategories` + `Support.View`: pantalla y creación de categorías.
+- `Support.ManageCategories` + `Support.View`: pantalla, creación y cambios versionados de categorías.
 - `Support.ManageAttachments` + `Support.View`: carga de adjuntos por el responsable, un colaborador activo o Administrador.
 - `Support.DownloadAttachments` + `Support.View`: descarga de adjuntos de incidencias visibles.
 
@@ -395,6 +395,57 @@ Respuesta `201`; replay idéntico `200`. Errores: `SUPPORT_INCIDENT_PARTICIPANT_
 El nombre es único por empresa tras normalizar mayúsculas y acentos. No se registran nombre, descripción, título ni texto de incidencia en auditoría.
 
 La migración crea la categoría `General` para empresas ya existentes. En una instalación nueva, el administrador crea al menos una categoría antes de registrar la primera incidencia.
+
+### `POST /api/support/categories/{categoryId}/changes`
+
+Requiere `Support.View` + `Support.ManageCategories` tanto en la ruta como en
+la aplicación. Usa Origin/CSRF, mantenimiento, JSON estricto, cuerpo máximo de
+4 KiB, `Idempotency-Key`, cuota persistente de 20 intentos por 15 minutos y
+`Cache-Control: private, no-store`. El UUID se resuelve siempre dentro de la
+empresa instalada.
+
+La edición de datos reemplaza el conjunto editable completo:
+
+```json
+{
+  "action": "update",
+  "expectedVersion": 1,
+  "name": "Conectividad crítica",
+  "description": "Incidencias de red y enlaces",
+  "color": "#DC2626",
+  "reason": "Revisión de la clasificación operativa"
+}
+```
+
+El cambio de estado es una acción separada y exige confirmación ligada al
+destino:
+
+```json
+{
+  "action": "set-status",
+  "expectedVersion": 2,
+  "isActive": false,
+  "confirmation": "DEACTIVATE_SUPPORT_CATEGORY",
+  "reason": "Categoría sustituida"
+}
+```
+
+Para activar se usa `ACTIVATE_SUPPORT_CATEGORY`. La primera respuesta es
+`201`; un replay idéntico, `200`. PostgreSQL conserva la cadena OLD→NEW,
+impide modificar o borrar su evidencia, rechaza cambios directos de la
+proyección y mantiene la unicidad del nombre normalizado también entre
+categorías inactivas. La categoría inactiva desaparece de las referencias de
+alta o reclasificación, pero permanece en listados y detalles históricos. La
+última categoría activa no puede desactivarse.
+
+Errores funcionales: `SUPPORT_CATEGORY_CHANGE_FORBIDDEN`,
+`SUPPORT_CATEGORY_NOT_FOUND`, `SUPPORT_CATEGORY_VERSION_CONFLICT`,
+`SUPPORT_CATEGORY_UNCHANGED`, `SUPPORT_CATEGORY_ALREADY_EXISTS`,
+`SUPPORT_CATEGORY_LAST_ACTIVE`, `SUPPORT_CATEGORY_RATE_LIMITED`,
+`SUPPORT_CATEGORY_BUSY` y los comunes de idempotencia. `429` y `503` incluyen
+`Retry-After`. La auditoría registra identificadores, versiones, campos
+cambiados y estado anterior/nuevo, nunca nombre normalizado, nombre,
+descripción, color ni motivo.
 
 ## Adjuntos de incidencia
 

@@ -765,6 +765,7 @@ model Company {
   accountingWaiverReplacementEvents          AccountingWaiverEvidenceReplacementEvent[]
   subscriptionRenewalAttempts                SubscriptionRenewalAttempt[]
   supportIncidentCategories                  SupportIncidentCategory[]
+  supportIncidentCategoryChanges             SupportIncidentCategoryChange[]
   supportIncidentSequences                   SupportIncidentNumberSequence[]
   supportIncidents                           SupportIncident[]
   supportIncidentEvents                      SupportIncidentEvent[]
@@ -1340,22 +1341,54 @@ model SupportIncidentCategory {
   id             String   @id @default(uuid()) @db.Uuid
   companyId      String   @db.Uuid
   name           String   @db.VarChar(120)
-  normalizedName String   @db.VarChar(120)
+  normalizedName String   @db.VarChar(480)
   description    String?  @db.VarChar(500)
   color          String   @default("#475569") @db.VarChar(7)
   isActive       Boolean  @default(true)
+  version        Int      @default(1)
   createdAt      DateTime @default(now()) @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @db.Timestamptz(3)
 
-  company   Company           @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  incidents SupportIncident[]
-  previousDetailsChanges  SupportIncidentDetailsChange[] @relation("SupportIncidentDetailsPreviousCategory")
-  correctedDetailsChanges SupportIncidentDetailsChange[] @relation("SupportIncidentDetailsCorrectedCategory")
+  company                 Company                         @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  incidents               SupportIncident[]
+  previousDetailsChanges  SupportIncidentDetailsChange[]  @relation("SupportIncidentDetailsPreviousCategory")
+  correctedDetailsChanges SupportIncidentDetailsChange[]  @relation("SupportIncidentDetailsCorrectedCategory")
+  changes                 SupportIncidentCategoryChange[]
 
   @@unique([companyId, normalizedName])
   @@unique([id, companyId])
   @@index([companyId, isActive, name, id])
   @@map("support_incident_categories")
+}
+
+model SupportIncidentCategoryChange {
+  id                      String   @id @default(uuid()) @db.Uuid
+  companyId               String   @db.Uuid
+  categoryId              String   @db.Uuid
+  actorUserId             String   @db.Uuid
+  previousName            String   @db.VarChar(120)
+  correctedName           String   @db.VarChar(120)
+  previousNormalizedName  String   @db.VarChar(480)
+  correctedNormalizedName String   @db.VarChar(480)
+  previousDescription     String?  @db.VarChar(500)
+  correctedDescription    String?  @db.VarChar(500)
+  previousColor           String   @db.VarChar(7)
+  correctedColor          String   @db.VarChar(7)
+  previousIsActive        Boolean
+  correctedIsActive       Boolean
+  reason                  String   @db.VarChar(500)
+  resultingVersion        Int
+  changedAt               DateTime @default(now()) @db.Timestamptz(3)
+
+  company   Company                 @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  category  SupportIncidentCategory @relation(fields: [categoryId, companyId], references: [id, companyId], onDelete: Restrict)
+  actorUser User                    @relation("SupportIncidentCategoryChangesActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@unique([categoryId, resultingVersion])
+  @@unique([id, companyId, categoryId])
+  @@index([categoryId, changedAt, id])
+  @@index([companyId, actorUserId, changedAt, id])
+  @@map("support_incident_category_changes")
 }
 
 model SupportIncidentNumberSequence {
@@ -1946,6 +1979,7 @@ model User {
   supportIncidentStatusTransitions        SupportIncidentStatusTransition[]            @relation("SupportIncidentTransitionsActor")
   supportIncidentPriorityChanges          SupportIncidentPriorityChange[]              @relation("SupportIncidentPriorityChangesActor")
   supportIncidentDetailsChanges           SupportIncidentDetailsChange[]               @relation("SupportIncidentDetailsChangesActor")
+  supportIncidentCategoryChanges          SupportIncidentCategoryChange[]              @relation("SupportIncidentCategoryChangesActor")
   supportIncidentMerges                   SupportIncidentMerge[]                       @relation("SupportIncidentMergesActor")
   primaryResponsibleIncidentMerges        SupportIncidentMerge[]                       @relation("SupportIncidentMergesPrimaryResponsible")
   duplicateResponsibleIncidentMerges      SupportIncidentMerge[]                       @relation("SupportIncidentMergesDuplicateResponsible")

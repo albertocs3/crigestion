@@ -36,7 +36,7 @@ export async function POST(request: Request) {
   const parsed = createSupportCategorySchema.safeParse(body);
   if (!parsed.success) return response(request, validationError(parsed.error.flatten()), 422);
   const result = await createSupportCategory(parsed.data, authorization.user, { idempotencyKey: idempotency.key, requestHash: hashSupportRequest(parsed.data), scope: "category:create", correlationId });
-  return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status);
+  return result.ok ? response(request, result.value, result.status) : response(request, result.error, result.status, result.error.code === "SUPPORT_TRANSACTION_BUSY" ? { "Retry-After": "3" } : {});
 }
 
-function response(request: Request, body: unknown, status: number) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0" } }); }
+function response(request: Request, body: unknown, status: number, extraHeaders: Record<string, string> = {}) { return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...extraHeaders } }); }

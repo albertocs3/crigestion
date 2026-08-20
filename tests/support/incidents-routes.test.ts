@@ -13,6 +13,7 @@ import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
 import { POST as detailsChangesPost } from "@/app/api/support/incidents/[incidentId]/detail-changes/route";
+import { POST as categoryChangesPost } from "@/app/api/support/categories/[categoryId]/changes/route";
 import { POST as incidentMergesPost } from "@/app/api/support/incident-merges/route";
 import { GET as indicatorsGet } from "@/app/api/support/indicators/route";
 import { GET as dashboardGet } from "@/app/api/support/dashboard/route";
@@ -95,6 +96,26 @@ describe("support incidents HTTP contracts", () => {
     const notifications = await notificationsGet(request("/api/notifications"));
     expect(notifications.status).toBe(401);
     expect(notifications.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+  });
+
+  it("protects and replays versioned category changes", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    const category = await prisma.supportIncidentCategory.findFirstOrThrow();
+    const body = { action: "update", expectedVersion: category.version, name: "General revisada", description: "Clasificación administrativa revisada", color: "#334155", reason: "Adecuación del maestro de soporte" };
+    const key = randomUUID();
+    const context = { params: Promise.resolve({ categoryId: category.id }) };
+    const first = await categoryChangesPost(jsonRequest(`/api/support/categories/${category.id}/changes`, body, { csrf, key }), context);
+    const replay = await categoryChangesPost(jsonRequest(`/api/support/categories/${category.id}/changes`, body, { csrf, key }), context);
+    expect(first.status).toBe(201);
+    expect(replay.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(await first.json()).toMatchObject({ category: { id: category.id, version: 2 }, change: { type: "UPDATE", resultingVersion: 2 } });
+    expect(await prisma.supportIncidentCategoryChange.count({ where: { categoryId: category.id } })).toBe(1);
+
+    const invalid = await categoryChangesPost(jsonRequest(`/api/support/categories/${category.id}/changes`, { action: "set-status", expectedVersion: 2, isActive: false, confirmation: "ACTIVATE_SUPPORT_CATEGORY", reason: "Confirmación cruzada" }, { csrf, key: randomUUID() }), context);
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("validates support list filters strictly before querying", async () => {
@@ -1211,6 +1232,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER "support_action_corrections_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_category_changes" DISABLE TRIGGER "support_incident_category_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_categories" DISABLE TRIGGER "support_incident_categories_guard"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_actions" DISABLE TRIGGER "support_incident_actions_append_only"',
     );
@@ -1237,6 +1260,7 @@ async function reset() {
     await tx.supportIncidentEvent.deleteMany();
     await tx.supportIncidentDetailsChange.deleteMany();
     await tx.supportIncidentActionCorrection.deleteMany();
+    await tx.supportIncidentCategoryChange.deleteMany();
     await tx.supportIncidentParticipantChange.deleteMany();
     await tx.supportIncidentCollaborator.deleteMany();
     await tx.supportIncidentStatusTransition.deleteMany();
@@ -1246,6 +1270,7 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incident_priority_changes" ENABLE TRIGGER "support_priority_changes_append_only"');
     await tx.supportIncidentMerge.deleteMany();
     await tx.supportIncident.deleteMany();
+    await tx.supportIncidentCategory.deleteMany();
     await tx.customerContact.deleteMany();
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_collaborators" ENABLE TRIGGER "support_incident_collaborators_guard"',
@@ -1268,6 +1293,8 @@ async function reset() {
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER "support_action_corrections_append_only"',
     );
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_category_changes" ENABLE TRIGGER "support_incident_category_changes_append_only"');
+    await tx.$executeRawUnsafe('ALTER TABLE "support_incident_categories" ENABLE TRIGGER "support_incident_categories_guard"');
     await tx.$executeRawUnsafe(
       'ALTER TABLE "support_communication_corrections" ENABLE TRIGGER "support_communication_corrections_append_only"',
     );
@@ -1283,7 +1310,6 @@ async function reset() {
     await tx.$executeRawUnsafe('ALTER TABLE "support_incidents" ENABLE TRIGGER "support_incidents_merged_duplicate_guard"');
   });
   await prisma.supportIncidentNumberSequence.deleteMany();
-  await prisma.supportIncidentCategory.deleteMany();
   await prisma.idempotencyRecord.deleteMany();
   await prisma.rateLimitBucket.deleteMany();
   await prisma.auditEvent.deleteMany();
