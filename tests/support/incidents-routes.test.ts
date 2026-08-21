@@ -22,6 +22,7 @@ import { GET as customerSupportContextGet } from "@/app/api/customers/[customerI
 import { POST as attachmentsPost } from "@/app/api/support/incidents/[incidentId]/attachments/route";
 import { GET as notificationsGet } from "@/app/api/notifications/route";
 import { PUT as notificationStatePut } from "@/app/api/notifications/[notificationId]/state/route";
+import { POST as notificationBulkStatePost } from "@/app/api/notifications/bulk-state-changes/route";
 import {
   GET as communicationsGet,
   POST as communicationsPost,
@@ -412,6 +413,35 @@ describe("support incidents HTTP contracts", () => {
     expect(changed.status).toBe(200);
     expect(changed.headers.get("cache-control")).toBe("private, no-store, max-age=0");
     expect(await changed.json()).toMatchObject({ id: notification.id, status: "READ", version: 2 });
+  });
+
+  it("changes an explicit notification page atomically through the protected bulk route", async () => {
+    await loginAs("admin", password);
+    const csrf = await csrfToken();
+    for (const title of ["Primer aviso masivo", "Segundo aviso masivo"]) {
+      const body = await payload();
+      body.priority = "URGENT";
+      body.title = title;
+      expect((await incidentsPost(jsonRequest("/api/support/incidents", body, { csrf, key: randomUUID() }))).status).toBe(201);
+    }
+    const listing = await notificationsGet(request("/api/notifications?state=UNREAD"));
+    const inbox = await listing.json() as { items: Array<{ id: string; version: number }> };
+    expect(inbox.items).toHaveLength(2);
+    const body = { state: "READ", items: inbox.items.map(({ id, version }) => ({ id, expectedVersion: version })) };
+    const key = randomUUID();
+    const missingCsrf = await notificationBulkStatePost(jsonRequest("/api/notifications/bulk-state-changes", body, { key }));
+    expect(missingCsrf.status).toBe(403);
+    expect(await missingCsrf.json()).toMatchObject({ code: "CSRF_TOKEN_INVALID" });
+    const changed = await notificationBulkStatePost(jsonRequest("/api/notifications/bulk-state-changes", body, { csrf, key }));
+    const replay = await notificationBulkStatePost(jsonRequest("/api/notifications/bulk-state-changes", { ...body, items: [...body.items].reverse() }, { csrf, key }));
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    expect(await changed.json()).toMatchObject({ state: "READ", affectedCount: 2, items: [{ status: "READ", version: 2 }, { status: "READ", version: 2 }] });
+    expect(replay.status).toBe(200);
+    expect(await prisma.notificationStateChange.count()).toBe(2);
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_BULK_STATE_CHANGED" } })).toBe(1);
+    const duplicated = await notificationBulkStatePost(jsonRequest("/api/notifications/bulk-state-changes", { state: "UNREAD", items: [body.items[0], body.items[0]] }, { csrf, key: randomUUID() }));
+    expect(duplicated.status).toBe(422);
   });
 
   it("rate limits even an existing attachment key before reading the multipart body", async () => {

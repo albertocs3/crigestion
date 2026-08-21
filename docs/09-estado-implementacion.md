@@ -651,6 +651,21 @@ mantuvo `INC-2026-00002`, mostró OLD→NEW y dejó exactamente una evidencia y 
 auditoría opaca. El health completo quedó en `ok`; producción sigue fuera de
 alcance y el acceso SSH temporal permanece activo.
 
+El siguiente corte local incorpora cambios masivos y atómicos de estado en la
+bandeja de notificaciones. La selección se limita a las notificaciones visibles
+de una página, con un máximo de cien, versiones esperadas por elemento y un
+único destino `READ`, `UNREAD` o `ARCHIVED`. La operación comparte la cuota
+persistente de 120 transiciones por usuario y empresa cada quince minutos,
+ordena los bloqueos, reintenta conflictos serializables, conserva una evidencia
+append-only por fila y una única auditoría agregada opaca. PostgreSQL vincula
+además el instante de la proyección con el de la evidencia. Este corte sigue
+con 64 pruebas dirigidas de aplicación y contrato en verde, además de
+typecheck, lint, build y validación Prisma. La ejecución global queda bloqueada
+por fixtures antiguos que no eliminan `customer_contacts` antes de clientes y
+contaminan la base compartida; no se ha mezclado ese saneamiento ajeno en este
+corte. Quedan pendientes commit, despliegue aislado y UAT en staging;
+producción no forma parte de su alcance.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

@@ -110,7 +110,13 @@ No se enviarán notificaciones externas salvo que un módulo lo especifique expr
 - Archivar.
 - Consultar el elemento relacionado.
 
-La primera rebanada web implementa las operaciones individuales. El marcado múltiple atómico permanece pendiente. El título y mensaje se derivan de un código controlado y parámetros mínimos de la entidad; no se persiste HTML ni texto funcional libre en la notificación.
+La bandeja web implementa las operaciones individuales y el marcado múltiple
+atómico sobre una selección explícita de la página visible, con un máximo de
+cien notificaciones. El lote aplica un único estado de destino y se confirma o
+revierte por completo; no existe una operación implícita sobre todos los
+resultados del filtro. El título y mensaje se derivan de un código controlado y
+parámetros mínimos de la entidad; no se persiste HTML ni texto funcional libre
+en la notificación.
 
 ### Reglas
 

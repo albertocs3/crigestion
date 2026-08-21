@@ -12,7 +12,7 @@ import {
 } from "@/modules/customers/application/contacts";
 import { login } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
-import { changeNotificationState, hashNotificationStateRequest, listNotifications } from "@/modules/platform/application/notifications";
+import { changeNotificationState, changeNotificationStatesBulk, hashNotificationBulkStateRequest, hashNotificationStateRequest, listNotifications } from "@/modules/platform/application/notifications";
 import {
   hashRequestBody,
   initializePlatform,
@@ -157,7 +157,7 @@ describe("support incidents application", () => {
     const stateCommand = { state: "READ" as const, expectedVersion: inbox.items[0].version };
     const stateContext = { idempotencyKey: randomUUID(), requestHash: hashNotificationStateRequest(inbox.items[0].id, stateCommand), correlationId: "notification-state-0001" };
     const changed = await changeNotificationState(inbox.items[0].id, stateCommand, actor, stateContext);
-    await prisma.rateLimitBucket.update({ where: { key: `notification-state:${actor.id}` }, data: { count: 120, windowStart: new Date() } });
+    await prisma.rateLimitBucket.update({ where: { key: `notification-state:${companyId}:${actor.id}` }, data: { count: 120, windowStart: new Date() } });
     const replayed = await changeNotificationState(inbox.items[0].id, stateCommand, actor, stateContext);
     const limitedCommand = { state: "UNREAD" as const, expectedVersion: 2 };
     const limited = await changeNotificationState(inbox.items[0].id, limitedCommand, actor, { idempotencyKey: stateContext.idempotencyKey, requestHash: hashNotificationStateRequest(inbox.items[0].id, limitedCommand) });
@@ -183,6 +183,72 @@ describe("support incidents application", () => {
     });
     expect(JSON.stringify(audit.payload)).not.toContain(command.title);
     expect(JSON.stringify(audit.payload)).not.toContain(command.description);
+  });
+
+  it("changes a page of notifications atomically and replays without duplicate evidence", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    for (const suffix of ["uno", "dos"]) {
+      const command = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: `Aviso urgente ${suffix}`, description: `Incidencia urgente destinada a probar el lote ${suffix}.`, priority: "URGENT" as const };
+      const result = await createSupportIncident(command, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(command), scope: "incident:create" });
+      if (!result.ok) throw new Error(result.error.code);
+    }
+    const inbox = await listNotifications(actor, { state: "UNREAD", limit: 25 });
+    expect(inbox?.items).toHaveLength(2);
+    if (!inbox) throw new Error("NOTIFICATIONS_MISSING");
+    const command = { state: "READ" as const, items: inbox.items.map(({ id, version }) => ({ id, expectedVersion: version })).reverse() };
+    const context = { idempotencyKey: randomUUID(), requestHash: hashNotificationBulkStateRequest(command), correlationId: "notification-bulk-0001" };
+    const changed = await changeNotificationStatesBulk(command, actor, context);
+    const replayed = await changeNotificationStatesBulk({ ...command, items: [...command.items].reverse() }, actor, context);
+    expect(changed).toMatchObject({ ok: true, status: 200, value: { state: "READ", affectedCount: 2, items: [{ status: "READ", version: 2 }, { status: "READ", version: 2 }] } });
+    expect(replayed).toMatchObject({ ok: true, status: 200, value: { affectedCount: 2 } });
+    const evidence = await prisma.notificationStateChange.findMany({ orderBy: { notificationId: "asc" } });
+    const stored = await prisma.notification.findMany({ where: { id: { in: command.items.map((item) => item.id) } }, orderBy: { id: "asc" } });
+    expect(evidence).toHaveLength(2);
+    expect(stored.every((item, index) => item.status === "READ" && item.version === 2 && item.updatedAt.getTime() === evidence[index]?.occurredAt.getTime())).toBe(true);
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_BULK_STATE_CHANGED" } })).toBe(1);
+    const storedReplay = await prisma.idempotencyRecord.findFirstOrThrow({ where: { responseStatus: 200 }, orderBy: { createdAt: "desc" } });
+    await prisma.idempotencyRecord.update({ where: { key: storedReplay.key }, data: { responseBody: { state: "UNREAD", affectedCount: 2, items: changed.ok ? changed.value.items : [] } } });
+    expect(await changeNotificationStatesBulk(command, actor, context)).toMatchObject({ ok: false, status: 409, error: { code: "IDEMPOTENCY_REPLAY_INVALID" } });
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_BULK_STATE_DENIED" } })).toBe(1);
+    const inaccessible = { state: "UNREAD" as const, items: [{ id: command.items[0]!.id, expectedVersion: 2 }, { id: randomUUID(), expectedVersion: 1 }] };
+    expect(await changeNotificationStatesBulk(inaccessible, actor, { idempotencyKey: randomUUID(), requestHash: hashNotificationBulkStateRequest(inaccessible) })).toMatchObject({ ok: false, status: 404, error: { code: "NOTIFICATION_BULK_NOT_FOUND" } });
+    expect(await prisma.notification.count({ where: { id: { in: command.items.map((item) => item.id) }, status: "READ", version: 2 } })).toBe(2);
+    const stale = { state: "UNREAD" as const, items: command.items.map((item, index) => ({ id: item.id, expectedVersion: index === 0 ? 2 : 1 })) };
+    expect(await changeNotificationStatesBulk(stale, actor, { idempotencyKey: randomUUID(), requestHash: hashNotificationBulkStateRequest(stale) })).toMatchObject({ ok: false, status: 409, error: { code: "NOTIFICATION_BULK_VERSION_CONFLICT" } });
+    expect(await prisma.notification.count({ where: { id: { in: command.items.map((item) => item.id) }, status: "READ", version: 2 } })).toBe(2);
+    const companyId = stored[0]!.companyId;
+    await prisma.rateLimitBucket.update({ where: { key: `notification-state:${companyId}:${actor.id}` }, data: { count: 119, windowStart: new Date() } });
+    const limited = { state: "UNREAD" as const, items: command.items.map((item) => ({ id: item.id, expectedVersion: 2 })) };
+    expect(await changeNotificationStatesBulk(limited, actor, { idempotencyKey: randomUUID(), requestHash: hashNotificationBulkStateRequest(limited) })).toMatchObject({ ok: false, status: 429, error: { code: "NOTIFICATION_BULK_RATE_LIMITED", retryAfterSeconds: expect.any(Number) } });
+    expect(await prisma.notification.count({ where: { id: { in: command.items.map((item) => item.id) }, status: "READ", version: 2 } })).toBe(2);
+    const target = stored[0]!;
+    const occurredAt = new Date(target.updatedAt.getTime() + 1_000);
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.notification.update({ where: { id: target.id }, data: { status: "UNREAD", version: 3, updatedAt: new Date(occurredAt.getTime() + 1_000), readAt: null } });
+      await tx.notificationStateChange.create({ data: { companyId: target.companyId, notificationId: target.id, actorUserId: actor.id, fromStatus: "READ", toStatus: "UNREAD", resultingVersion: 3, occurredAt } });
+    })).rejects.toThrow(/matching evidence|does not match/i);
+    const backwardsAt = new Date(target.updatedAt.getTime() - 1_000);
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.notification.update({ where: { id: target.id }, data: { status: "UNREAD", version: 3, updatedAt: backwardsAt, readAt: null } });
+      await tx.notificationStateChange.create({ data: { companyId: target.companyId, notificationId: target.id, actorUserId: actor.id, fromStatus: "READ", toStatus: "UNREAD", resultingVersion: 3, occurredAt: backwardsAt } });
+    })).rejects.toThrow(/invalid notification mutation|matching evidence/i);
+  });
+
+  it("maps exhausted notification serialization conflicts to retryable busy results", async () => {
+    const actor = await admin();
+    const command = { state: "READ" as const, items: [{ id: randomUUID(), expectedVersion: 1 }] };
+    for (const error of [
+      new Prisma.PrismaClientKnownRequestError("conflict", { code: "P2034", clientVersion: "test" }),
+      new Prisma.PrismaClientKnownRequestError("conflict", { code: "P2010", clientVersion: "test", meta: { code: "40001" } }),
+    ]) {
+      const transaction = vi.spyOn(prisma, "$transaction").mockRejectedValue(error);
+      try {
+        expect(await changeNotificationStatesBulk(command, actor, { idempotencyKey: randomUUID(), requestHash: hashNotificationBulkStateRequest(command) })).toMatchObject({ ok: false, status: 503, error: { code: "NOTIFICATION_BULK_BUSY", retryAfterSeconds: 3 } });
+        expect(transaction).toHaveBeenCalledTimes(3);
+      } finally { transaction.mockRestore(); }
+    }
   });
 
   it("records and replays priority changes and notifies each urgent recipient once", async () => {

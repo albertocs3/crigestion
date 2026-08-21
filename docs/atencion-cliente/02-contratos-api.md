@@ -582,11 +582,36 @@ La transacción bloquea la comunicación, copia cliente y resumen, asigna el nú
 
 `PUT /api/notifications/{notificationId}/state` recibe JSON estricto `{ state, expectedVersion }`, exige Origin, CSRF, mantenimiento inactivo e `Idempotency-Key`, y limita el cuerpo a 2 KiB. Permite `UNREAD -> READ|ARCHIVED` y `READ -> UNREAD|ARCHIVED`; `ARCHIVED` es terminal. Una versión obsoleta devuelve `409 NOTIFICATION_VERSION_CONFLICT`, una transición inválida `409 NOTIFICATION_STATE_INVALID` y un identificador inexistente, ajeno o de otra empresa `404 NOTIFICATION_NOT_FOUND`. La cuota persistente admite 120 cambios por usuario y 15 minutos; el replay válido no consume cuota y el exceso devuelve `429 NOTIFICATION_STATE_RATE_LIMITED` con `Retry-After`.
 
+`POST /api/notifications/bulk-state-changes` aplica un cambio atómico a una
+selección explícita de la página visible. Recibe JSON estricto
+`{ state, items: [{ id, expectedVersion }] }`, con un único estado `READ`,
+`UNREAD` o `ARCHIVED`, entre uno y cien UUID únicos y cuerpo máximo de 16 KiB.
+Exige sesión, Origin, CSRF, mantenimiento inactivo e `Idempotency-Key`. El
+servidor bloquea las notificaciones en orden estable, exige que todas sean
+vigentes y pertenezcan al usuario y a la empresa actuales, valida todas las
+versiones y transiciones antes de escribir, y crea una evidencia individual
+por notificación más una auditoría agregada sin identificadores ni contenido.
+La respuesta mínima es
+`{ state, affectedCount, items: [{ id, status, version, readAt, archivedAt }] }`.
+Un elemento ausente, ajeno o expirado devuelve `404 NOTIFICATION_BULK_NOT_FOUND`;
+una versión obsoleta, `409 NOTIFICATION_BULK_VERSION_CONFLICT`; y una transición
+inválida, `409 NOTIFICATION_BULK_STATE_INVALID`. La cuota compartida con la
+operación individual cuenta cada elemento del lote dentro del límite de 120
+transiciones por usuario y empresa cada quince minutos; devuelve `429
+NOTIFICATION_BULK_RATE_LIMITED` con `Retry-After`. Tras agotar tres reintentos
+serializables devuelve `503 NOTIFICATION_BULK_BUSY` con `Retry-After: 3`.
+No existe selección implícita de todas las páginas ni respuesta parcial.
+
+PostgreSQL exige que cada cambio individual o masivo incremente exactamente una
+versión, conserve una evidencia append-only y use el mismo instante en
+`notification.updatedAt` y `NotificationStateChange.occurredAt`, no anterior al
+instante vigente. `ARCHIVED` continúa siendo terminal.
+
 El alta de incidencia notifica al responsable. Una incidencia creada como `URGENT`, o cambiada posteriormente desde una prioridad no urgente a `URGENT`, notifica a los usuarios activos con `Support.ReceiveUrgentNotifications`; si el responsable también posee ese permiso recibe una única notificación urgente por evento. Una reasignación notifica solo al nuevo responsable. La incorporación de un colaborador le notifica exclusivamente a él; una actuación registrada por un colaborador activo notifica al responsable vigente en ese evento; y una reapertura notifica al responsable vigente, incluso cuando él mismo la ejecuta. La creación ocurre en la misma transacción que el evento funcional, con unicidad por destinatario y evento fuente. Los cambios de estado y prioridad conservan evidencia append-only y control de versión en PostgreSQL.
 
 La fusión notifica a los responsables vigentes de la principal y la duplicada, deduplicados si coinciden. El aviso utiliza un código controlado, enlaza con la principal y no contiene motivo, títulos, cliente ni nombres de actores.
 
-La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. Las acciones masivas y purga privilegiada tras un año quedan pendientes de sus respectivos casos de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. El marcado múltiple queda limitado a la selección explícita de la página visible; la purga privilegiada tras un año permanece pendiente de su caso de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
 
 Las clases adicionales son `SUPPORT_INCIDENT_COLLABORATOR_ADDED`, `SUPPORT_INCIDENT_COLLABORATOR_ACTION` y `SUPPORT_INCIDENT_REOPENED`, todas de severidad `INFO`. Sus mensajes se derivan de códigos controlados y del número de incidencia; nunca contienen texto de actuación, motivo de reapertura, cliente ni nombre del actor. Las actuaciones están limitadas a 30 intentos por actor y empresa cada 15 minutos; el replay válido queda exento y el exceso devuelve `429 SUPPORT_ACTION_RATE_LIMITED` con `Retry-After`. Tras agotar tres reintentos serializables se devuelve `503 SUPPORT_ACTION_BUSY` con `Retry-After: 3`.
 
