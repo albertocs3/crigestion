@@ -5,6 +5,8 @@ APP_SERVICE='crigestion-staging-app.service'
 WORKER_SERVICE='crigestion-staging-verifactu-worker.service'
 REACTIVATION_SERVICE='crigestion-staging-subscription-reactivation-worker.service'
 REACTIVATION_TIMER='crigestion-staging-subscription-reactivation-worker.timer'
+NOTIFICATION_PURGE_TIMER='crigestion-staging-notification-purge.timer'
+NOTIFICATION_PURGE_SERVICE='crigestion-staging-notification-purge.service'
 BACKUP_TIMER='crigestion-staging-backup.timer'
 RECOVERY_TIMER='crigestion-staging-recovery-bundle.timer'
 CLAMAV_SERVICE='clamav-daemon.service'
@@ -18,6 +20,7 @@ NODE='/opt/plesk/node/22/bin/node'
 RESTORE_SENTINEL='/var/lib/crigestion-staging-restore/restore-required'
 PG_BIN_DIR='/usr/lib/postgresql/14/bin'
 REACTIVATION_MAX_AGE_USEC=900000000
+NOTIFICATION_PURGE_MAX_AGE_USEC=129600000000
 
 if [ -e "$RESTORE_SENTINEL" ]; then
   echo 'HEALTH_BLOCKED_BY_RESTORE' >&2
@@ -27,6 +30,14 @@ fi
 systemctl is-active --quiet "$APP_SERVICE"
 systemctl is-active --quiet "$WORKER_SERVICE"
 systemctl is-active --quiet "$REACTIVATION_TIMER"
+systemctl is-active --quiet "$NOTIFICATION_PURGE_TIMER"
+test "$(systemctl show "$NOTIFICATION_PURGE_SERVICE" -p Result --value)" = 'success'
+NOTIFICATION_PURGE_LAST_RUN_USEC="$(
+  systemctl show "$NOTIFICATION_PURGE_SERVICE" -p ExecMainExitTimestampMonotonic --value
+)"
+NOTIFICATION_PURGE_ACTIVE_STATE="$(
+  systemctl show "$NOTIFICATION_PURGE_SERVICE" -p ActiveState --value
+)"
 test "$(systemctl show "$REACTIVATION_SERVICE" -p Result --value)" = 'success'
 REACTIVATION_LAST_RUN_USEC="$(
   systemctl show "$REACTIVATION_SERVICE" -p ExecMainExitTimestampMonotonic --value
@@ -48,6 +59,21 @@ elif ((
   || SYSTEM_UPTIME_USEC - REACTIVATION_LAST_RUN_USEC > REACTIVATION_MAX_AGE_USEC
 )); then
   echo 'CRIGESTION_STAGING_SUBSCRIPTION_REACTIVATION_WORKER_STALE' >&2
+  exit 1
+fi
+[[ "$NOTIFICATION_PURGE_LAST_RUN_USEC" =~ ^[0-9]+$ ]]
+if (( NOTIFICATION_PURGE_LAST_RUN_USEC == 0 )); then
+  if [ "$NOTIFICATION_PURGE_ACTIVE_STATE" = 'activating' ]; then
+    : # The oneshot is running; systemd enforces TimeoutStartSec.
+  elif (( SYSTEM_UPTIME_USEC > 3600000000 )); then
+    echo 'CRIGESTION_STAGING_NOTIFICATION_PURGE_NEVER_RAN' >&2
+    exit 1
+  fi
+elif ((
+  SYSTEM_UPTIME_USEC < NOTIFICATION_PURGE_LAST_RUN_USEC
+  || SYSTEM_UPTIME_USEC - NOTIFICATION_PURGE_LAST_RUN_USEC > NOTIFICATION_PURGE_MAX_AGE_USEC
+)); then
+  echo 'CRIGESTION_STAGING_NOTIFICATION_PURGE_STALE' >&2
   exit 1
 fi
 systemctl is-active --quiet "$BACKUP_TIMER"

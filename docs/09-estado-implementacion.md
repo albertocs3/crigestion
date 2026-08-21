@@ -679,6 +679,24 @@ El payload agregado no contiene IDs de notificación ni textos. El health
 público permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
 
+El siguiente corte local, todavía no desplegado, completa la retención de la
+bandeja mediante un job diario `oneshot`, sin endpoint ni parámetros de usuario.
+Procesa lotes de 500 con límite total por ejecución, reloj PostgreSQL,
+aislamiento por empresa y `FOR UPDATE SKIP LOCKED`; borra en una transacción la
+evidencia de estado, la notificación vencida y las respuestas idempotentes de
+marcado que la referencien. Los eventos funcionales y auditorías existentes
+permanecen. Una nueva migración permite el borrado únicamente tras `expiresAt`
+y un año calendario completo, revoca `DELETE` del padre y la evidencia al
+runtime y encapsula ambos en una función privilegiada atómica. El timer se
+incluye en health, recuperación y bloqueo de restore. La validación dirigida
+PostgreSQL cubre borrado prematuro, limpieza idempotente y auditoría agregada
+opaca. Producción continúa fuera de alcance.
+El borrado directo queda revocado al runtime y la única capacidad concedida es
+la función `SECURITY DEFINER` con `search_path` fijo. Esta exige vencimiento y
+un año calendario completo, usa índices parciales para localizar replays
+individuales y masivos y hace fallar la unidad si persiste backlog tras diez
+lotes, de modo que health no pueda quedar verde con retención atrasada.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

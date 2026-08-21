@@ -13,6 +13,7 @@ import {
 import { login } from "@/modules/platform/application/auth";
 import { hashPassword } from "@/modules/platform/application/passwords";
 import { changeNotificationState, changeNotificationStatesBulk, hashNotificationBulkStateRequest, hashNotificationStateRequest, listNotifications } from "@/modules/platform/application/notifications";
+import { purgeExpiredNotificationBatch } from "@/modules/platform/application/notificationRetention";
 import {
   hashRequestBody,
   initializePlatform,
@@ -250,6 +251,159 @@ describe("support incidents application", () => {
       } finally { transaction.mockRestore(); }
     }
   });
+
+  it("purges only expired notifications with their state evidence and idempotent responses", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    for (const suffix of ["caducada", "vigente"]) {
+      const command = {
+        customerId: customer.id,
+        storeId: null,
+        categoryId: references.categories[0]!.id,
+        responsibleUserId: actor.id,
+        title: `Notificación ${suffix}`,
+        description: `Incidencia urgente con notificación ${suffix}.`,
+        priority: "URGENT" as const,
+      };
+      const created = await createSupportIncident(command, actor, {
+        idempotencyKey: randomUUID(),
+        requestHash: hashSupportRequest(command),
+        scope: "incident:create",
+      });
+      if (!created.ok) throw new Error(created.error.code);
+    }
+
+    const inbox = await listNotifications(actor, { state: "UNREAD", limit: 25 });
+    if (!inbox || inbox.items.length !== 2) throw new Error("NOTIFICATION_FIXTURE_INVALID");
+    const expired = inbox.items.find((item) => item.incident.number.endsWith("00001"))!;
+    const current = inbox.items.find((item) => item.id !== expired.id)!;
+    const stateCommand = { state: "READ" as const, expectedVersion: expired.version };
+    const stateContext = {
+      idempotencyKey: randomUUID(),
+      requestHash: hashNotificationStateRequest(expired.id, stateCommand),
+    };
+    expect(await changeNotificationState(expired.id, stateCommand, actor, stateContext)).toMatchObject({ ok: true });
+    const storedExpired = await prisma.notification.findUniqueOrThrow({ where: { id: expired.id } });
+    const sourceEventId = storedExpired.sourceIncidentEventId;
+    const sourceAuditCount = await prisma.auditEvent.count({ where: { eventType: "SUPPORT_NOTIFICATIONS_CREATED" } });
+
+    const createdAt = new Date("2024-01-15T12:00:00.000Z");
+    const occurredAt = new Date("2024-01-16T12:00:00.000Z");
+    const expiresAt = new Date("2025-01-15T12:00:00.000Z");
+    const nearYearExpiry = new Date(Date.now() - 1_000);
+    const nearYearCreated = new Date(nearYearExpiry.getTime() - (364 * 24 * 60 * 60 * 1_000) - 1_000);
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('ALTER TABLE "notifications" DISABLE TRIGGER USER');
+      await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" DISABLE TRIGGER USER');
+      await tx.notification.update({
+        where: { id: expired.id },
+        data: { createdAt, expiresAt, updatedAt: occurredAt, readAt: occurredAt },
+      });
+      await tx.notificationStateChange.updateMany({
+        where: { notificationId: expired.id },
+        data: { occurredAt },
+      });
+      await tx.notification.update({
+        where: { id: current.id },
+        data: { createdAt: nearYearCreated, expiresAt: nearYearExpiry, updatedAt: nearYearCreated },
+      });
+      await tx.$executeRawUnsafe('ALTER TABLE "notification_state_changes" ENABLE TRIGGER USER');
+      await tx.$executeRawUnsafe('ALTER TABLE "notifications" ENABLE TRIGGER USER');
+    });
+
+    await expect(prisma.notification.delete({ where: { id: current.id } })).rejects.toThrow(/before one year/i);
+    await prisma.idempotencyRecord.create({
+      data: {
+        key: `v1:notif-bulk:${randomUUID()}`,
+        requestHash: "a".repeat(64),
+        responseStatus: 200,
+        responseBody: {
+          state: "READ",
+          affectedCount: 2,
+          items: [
+            { id: expired.id, status: "READ", version: 2, readAt: occurredAt.toISOString(), archivedAt: null },
+            { id: current.id, status: "READ", version: 2, readAt: occurredAt.toISOString(), archivedAt: null },
+          ],
+        },
+      },
+    });
+
+    await expect(prisma.$queryRaw(Prisma.sql`
+      SELECT * FROM "purge_expired_notifications"(NULL, 1, 'notification-purge-invalid')
+    `)).rejects.toThrow(/invalid notification purge command/i);
+    expect(await prisma.notification.count({ where: { id: expired.id } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_PURGE_BATCH_COMPLETED" } })).toBe(0);
+
+    const result = await purgeExpiredNotificationBatch({
+      batchNumber: 1,
+      batchSize: 1,
+      workerId: "notification-purge-test",
+    });
+
+    expect(result).toMatchObject({
+      outcome: "PURGED",
+      notificationCount: 1,
+      stateChangeCount: 1,
+      idempotencyRecordCount: 2,
+      hasMore: false,
+    });
+    expect(await prisma.notification.findUnique({ where: { id: expired.id } })).toBeNull();
+    expect(await prisma.notification.findUnique({ where: { id: current.id } })).not.toBeNull();
+    expect(await prisma.notificationStateChange.count({ where: { notificationId: expired.id } })).toBe(0);
+    expect(await prisma.idempotencyRecord.count({ where: { key: { startsWith: "v1:notif:" } } })).toBe(0);
+    expect(await prisma.idempotencyRecord.count({ where: { key: { startsWith: "v1:notif-bulk:" } } })).toBe(0);
+    expect(await prisma.supportIncidentEvent.count({ where: { id: sourceEventId } })).toBe(1);
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUPPORT_NOTIFICATIONS_CREATED" } })).toBe(sourceAuditCount);
+    const purgeAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "NOTIFICATION_PURGE_BATCH_COMPLETED" } });
+    expect(purgeAudit).toMatchObject({ actorType: "SYSTEM" });
+    expect(purgeAudit.payload).toMatchObject({ notificationCount: 1, stateChangeCount: 1, idempotencyRecordCount: 2, hasMore: false });
+    expect(JSON.stringify(purgeAudit.payload)).not.toContain(expired.id);
+    expect(JSON.stringify(purgeAudit.payload)).not.toContain(storedExpired.incidentNumber);
+    const retentionObjects = await prisma.$queryRaw<Array<{ name: string; definition: string }>>(Prisma.sql`
+      SELECT indexname AS name, indexdef AS definition
+      FROM pg_indexes
+      WHERE schemaname = current_schema()
+        AND indexname IN (
+          'idempotency_records_notification_id_idx',
+          'idempotency_records_notification_bulk_body_idx'
+        )
+      ORDER BY indexname
+    `);
+    expect(retentionObjects).toHaveLength(2);
+    expect(retentionObjects.map((item) => item.definition).join("\n")).toContain("jsonb_path_ops");
+    const [purgeFunction] = await prisma.$queryRaw<Array<{ securityDefiner: boolean; settings: string[] | null }>>(Prisma.sql`
+      SELECT procedure.prosecdef AS "securityDefiner", procedure.proconfig AS settings
+      FROM pg_proc procedure
+      JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
+      WHERE namespace.nspname = current_schema()
+        AND procedure.proname = 'purge_expired_notifications'
+    `);
+    expect(purgeFunction).toMatchObject({ securityDefiner: true });
+    expect(purgeFunction?.settings).toEqual(expect.arrayContaining(["search_path=pg_catalog, public", "TimeZone=UTC"]));
+    const companyId = storedExpired.companyId;
+    let releaseLock!: () => void;
+    let reportLocked!: () => void;
+    const locked = new Promise<void>((resolve) => { reportLocked = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const lockOwner = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT 1::int AS locked
+        FROM (SELECT pg_advisory_xact_lock(hashtextextended(${companyId}::text, 2026082101))) acquired
+      `);
+      reportLocked();
+      await release;
+    });
+    await locked;
+    try {
+      await expect(purgeExpiredNotificationBatch({ batchNumber: 2, batchSize: 1, workerId: "notification-purge-contender" })).rejects.toThrow(/already running/i);
+    } finally {
+      releaseLock();
+      await lockOwner;
+    }
+    expect(await purgeExpiredNotificationBatch({ batchNumber: 2, batchSize: 1, workerId: "notification-purge-test" })).toMatchObject({ outcome: "IDLE" });
+    expect(await prisma.auditEvent.count({ where: { eventType: "NOTIFICATION_PURGE_BATCH_COMPLETED" } })).toBe(1);
+  }, 15_000);
 
   it("records and replays priority changes and notifies each urgent recipient once", async () => {
     const actor = await admin();

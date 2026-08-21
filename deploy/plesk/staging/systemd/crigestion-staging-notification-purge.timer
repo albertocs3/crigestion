@@ -1,0 +1,12 @@
+[Unit]
+Description=Purge expired CriGestion staging notifications daily
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 Europe/Madrid
+AccuracySec=5min
+RandomizedDelaySec=15min
+Persistent=true
+Unit=crigestion-staging-notification-purge.service
+
+[Install]
+WantedBy=timers.target

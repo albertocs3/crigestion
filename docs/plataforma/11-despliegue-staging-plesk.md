@@ -832,6 +832,35 @@ se cerró con tres notificaciones y la evidencia detallada en el acta. El health
 público devolvió HTTP 200 con todos los componentes en `ok`. Producción no se
 consultó ni modificó y el acceso SSH temporal permanece activo.
 
+### 8.9 Retención automática de notificaciones preparada localmente
+
+El siguiente candidato incorpora
+`crigestion-staging-notification-purge.service` y su timer diario a las 04:15
+`Europe/Madrid`, con retraso aleatorio de hasta quince minutos. La unidad es
+`oneshot`, usa el usuario de aplicación, falla cerrada durante una restauración
+y limita cada ejecución a diez lotes de 500 por defecto. El health exige timer
+activo, último resultado correcto y una ejecución no más antigua de 36 horas;
+el bundle de recuperación conserva las dos unidades y el restore las detiene y
+reanuda junto con el resto de procesos mutadores.
+
+Antes de desplegar este corte se debe crear y verificar un backup, revisar el
+plan del índice `notifications_companyId_expiresAt_id_idx`, aplicar únicamente
+`20260821010000_add_notification_retention_purge`, instalar y habilitar las dos
+unidades, ejecutar manualmente el `oneshot` y comprobar
+`NOTIFICATION_PURGE_AUTOMATION_OK`, `Result=success`, el timer y el health
+completo. La primera ejecución en staging debe registrar solo conteos agregados;
+no deben aparecer IDs, destinatarios, números de incidencia ni contenido. Este
+apartado describe el procedimiento preparado: no acredita todavía despliegue ni
+UAT. Producción permanece fuera de alcance.
+
+La unidad usa el `DATABASE_URL` ordinario, pero el migrador revoca a ese rol el
+`DELETE` sobre notificaciones y evidencias y solo concede `EXECUTE` sobre
+`purge_expired_notifications(integer,integer,text)`. El despliegue debe
+verificar ambas negaciones con `has_table_privilege`, el `EXECUTE`, el atributo
+`SECURITY DEFINER` y el `search_path=pg_catalog, public`. Un resultado
+`NOTIFICATION_PURGE_BACKLOG_REMAINS` es fallo operativo y debe mantener la
+alerta activa; no se acepta como ejecución correcta.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

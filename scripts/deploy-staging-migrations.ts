@@ -81,6 +81,8 @@ async function hardenRuntimePrivileges(client: Client, runtimeRole: string): Pro
     await client.query(`ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE UPDATE ON SEQUENCES FROM ${roleIdentifier}`);
     await client.query(`REVOKE ALL ON TABLE public._prisma_migrations FROM ${roleIdentifier}`);
     await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.audit_events FROM ${roleIdentifier}`);
+    await client.query(`REVOKE DELETE ON TABLE public.notifications, public.notification_state_changes FROM ${roleIdentifier}`);
+    await client.query(`GRANT EXECUTE ON FUNCTION public.purge_expired_notifications(integer, integer, text) TO ${roleIdentifier}`);
     await assertRuntimePrivilegesHardened(client, runtimeRole);
     await client.query("COMMIT");
   } catch (error) {
@@ -96,6 +98,8 @@ async function assertRuntimePrivilegesHardened(client: Client, runtimeRole: stri
     auditMutation: boolean;
     protectedOwnership: boolean;
     schemaCreate: boolean;
+    notificationDelete: boolean;
+    notificationPurgeExecute: boolean;
   }>(
     `SELECT
       has_table_privilege($1, 'public._prisma_migrations', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS "migrationAccess",
@@ -109,11 +113,14 @@ async function assertRuntimePrivilegesHardened(client: Client, runtimeRole: stri
         JOIN pg_roles r ON r.oid = c.relowner
         WHERE n.nspname = 'public' AND r.rolname = $1
           AND (c.relkind = 'S' OR c.relname IN ('_prisma_migrations', 'audit_events'))) AS "protectedOwnership",
-      has_schema_privilege($1, 'public', 'CREATE') AS "schemaCreate"`,
+      has_schema_privilege($1, 'public', 'CREATE') AS "schemaCreate",
+      (has_table_privilege($1, 'public.notifications', 'DELETE')
+        OR has_table_privilege($1, 'public.notification_state_changes', 'DELETE')) AS "notificationDelete",
+      has_function_privilege($1, 'public.purge_expired_notifications(integer,integer,text)', 'EXECUTE') AS "notificationPurgeExecute"`,
     [runtimeRole]
   );
   const state = result.rows[0];
-  if (!state || state.migrationAccess || state.sequenceUpdate || state.auditMutation || state.protectedOwnership || state.schemaCreate) {
+  if (!state || state.migrationAccess || state.sequenceUpdate || state.auditMutation || state.protectedOwnership || state.schemaCreate || state.notificationDelete || !state.notificationPurgeExecute) {
     throw new Error("STAGING_MIGRATION_RUNTIME_PRIVILEGES_UNSAFE");
   }
 }

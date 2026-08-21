@@ -449,6 +449,8 @@ for source_file in \
   /etc/systemd/system/crigestion-staging-health-alert.service \
   /etc/systemd/system/crigestion-staging-health-check.service \
   /etc/systemd/system/crigestion-staging-health-check.timer \
+  /etc/systemd/system/crigestion-staging-notification-purge.service \
+  /etc/systemd/system/crigestion-staging-notification-purge.timer \
   /etc/systemd/system/crigestion-staging-recovery-bundle.service \
   /etc/systemd/system/crigestion-staging-recovery-bundle-alert.service \
   /etc/systemd/system/crigestion-staging-recovery-bundle.timer \

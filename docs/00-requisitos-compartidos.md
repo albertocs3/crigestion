@@ -131,6 +131,19 @@ en la notificación.
 - Las notificaciones se conservarán durante un año.
 - Después podrán eliminarse de la bandeja, manteniendo el evento original en auditoría cuando corresponda.
 
+La eliminación posterior al vencimiento se ejecuta como mantenimiento interno
+por lotes acotados y no admite fecha, empresa, destinatario ni identificadores
+aportados por un usuario. PostgreSQL impide borrar anticipadamente una
+notificación o separar su evidencia de estado: la evidencia se elimina primero
+y la notificación debe desaparecer dentro de la misma transacción. El evento
+funcional de origen y las auditorías no forman parte de la purga. También se
+eliminan las respuestas idempotentes de marcado que retuvieran referencias a
+una notificación purgada.
+El rol ordinario no posee `DELETE` sobre la bandeja ni su evidencia: únicamente
+puede ejecutar la función de purga de privilegios controlados, que deriva la
+empresa, exige tanto `expiresAt` como un año calendario completo desde
+`createdAt` y materializa la auditoría dentro de la misma transacción.
+
 ## 4. Adjuntos
 
 Los archivos se almacenarán en un repositorio protegido. La base de datos conservará sus metadatos y relación con la entidad funcional.

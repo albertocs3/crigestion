@@ -611,7 +611,26 @@ El alta de incidencia notifica al responsable. Una incidencia creada como `URGEN
 
 La fusión notifica a los responsables vigentes de la principal y la duplicada, deduplicados si coinciden. El aviso utiliza un código controlado, enlaza con la principal y no contiene motivo, títulos, cliente ni nombres de actores.
 
-La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016; abrir una incidencia no marca el aviso como leído. El marcado múltiple queda limitado a la selección explícita de la página visible; la purga privilegiada tras un año permanece pendiente de su caso de uso. `URGENT` no equivale a `CRITICAL` y no abre un modal.
+La entrega inicial se refresca al navegar o recargar, conforme a ADR-0016;
+abrir una incidencia no marca el aviso como leído. El marcado múltiple queda
+limitado a la selección explícita de la página visible. La retención de un año
+se aplica mediante un job interno diario, no mediante una ruta HTTP: usa el
+reloj y la empresa de PostgreSQL, selecciona como máximo 500 vencidas por lote
+con bloqueos `SKIP LOCKED` y elimina atómicamente sus evidencias de estado, sus
+respuestas idempotentes de marcado y la fila de bandeja. Conserva el evento
+funcional de origen y todas las auditorías; cada lote con cambios crea una sola
+auditoría `SYSTEM` agregada sin IDs, destinatarios, número de incidencia ni
+contenido. La segunda ejecución sin candidatas no crea otra auditoría.
+PostgreSQL rechaza el borrado antes de `expiresAt`; el runtime no puede borrar
+aisladamente ni la evidencia ni su padre y la función privilegiada ejecuta
+ambos borrados dentro de una sola transacción. `URGENT` no equivale a `CRITICAL`
+y no abre un modal.
+El rol de aplicación no dispone de `DELETE` directo sobre `notifications` ni
+`notification_state_changes`; llama a una función PostgreSQL `SECURITY DEFINER`
+con `search_path` fijo. La elegibilidad exige simultáneamente `expiresAt <=
+transaction_timestamp()` y un año calendario completo desde `createdAt`. Si
+los diez lotes configurados no vacían el atraso, el job falla con
+`NOTIFICATION_PURGE_BACKLOG_REMAINS` y activa la alerta en vez de declarar éxito.
 
 Las clases adicionales son `SUPPORT_INCIDENT_COLLABORATOR_ADDED`, `SUPPORT_INCIDENT_COLLABORATOR_ACTION` y `SUPPORT_INCIDENT_REOPENED`, todas de severidad `INFO`. Sus mensajes se derivan de códigos controlados y del número de incidencia; nunca contienen texto de actuación, motivo de reapertura, cliente ni nombre del actor. Las actuaciones están limitadas a 30 intentos por actor y empresa cada 15 minutos; el replay válido queda exento y el exceso devuelve `429 SUPPORT_ACTION_RATE_LIMITED` con `Retry-After`. Tras agotar tres reintentos serializables se devuelve `503 SUPPORT_ACTION_BUSY` con `Retry-After: 3`.
 
