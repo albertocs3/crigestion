@@ -20,6 +20,7 @@ export default defineConfig({
     globalSetup: ["./tests/setup/vitestDatabaseGuard.ts"],
     include: ["tests/**/*.test.ts"],
     pool: "forks",
+    setupFiles: ["./tests/setup/vitestDatabaseReset.ts"],
     sequence: {
       concurrent: false
     }

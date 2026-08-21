@@ -662,9 +662,12 @@ además el instante de la proyección con el de la evidencia. Este corte quedó
 publicado como `staging-2026.08.21-rc11`, commit
 `adb54ff5fee6125a9dd91ef063bcc1cd0aab6e6b`, con 64 pruebas dirigidas de
 aplicación y contrato en verde, además de typecheck, lint, build y validación
-Prisma. La ejecución global queda bloqueada por fixtures antiguos que no
-eliminan `customer_contacts` antes de clientes y contaminan la base compartida;
-no se ha mezclado ese saneamiento ajeno en este corte.
+Prisma. Después del despliegue se aisló el saneamiento de fixtures en un cambio
+de infraestructura de pruebas: cada caso verifica la identidad exacta de la
+base Vitest y limpia `customer_contacts` junto con sus dependencias antes y
+después de ejecutarse. La regresión completa volvió a quedar operativa con
+84/84 ficheros y 813/813 pruebas en verde, sin modificar el código desplegado
+de `rc11`.
 
 La migración `20260821000000_harden_notification_state_timestamps` se aplicó
 solo en staging tras un backup verificado. La UAT Administrador seleccionó las
