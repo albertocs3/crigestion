@@ -881,6 +881,31 @@ VeriFactu TEST y timers operativos quedaron activos, el health local y público
 respondió `ok` y no hubo unidades CriGestión fallidas. Producción no se
 consultó ni modificó; el acceso SSH temporal permanece activo.
 
+### 8.10 Historial completo de correcciones de actuaciones del 2026-08-21
+
+La release inmutable `staging-2026.08.21-rc14`, commit
+`cc817652fcc49754728ee350c4417408a9b5a5c0`, incorporó la consulta paginada y
+auditada del historial append-only de correcciones de actuaciones. El paquete
+fuente medía 9.093.120 bytes y tenía SHA-256
+`5a2adf7a52c485063b8da6d0c2c43599e202440ad4139572ad7bf0162d545ccd`;
+el build aislado produjo `bPIHMzdPze67Pxj-qjDt7`.
+
+Antes de la conmutación se generó y verificó el backup
+`crigestion_staging-auto-20260821T091636Z.dump`, de 1.572.673 bytes y SHA-256
+`f7cb045e7c9fb6473b92c36a460e3d9823b3a25118cc1e317f9020098113c7b9`.
+El migrador controlado confirmó 159 migraciones y ninguna pendiente. La UAT
+Administrador abrió el historial de la actuación de `INC-2026-00003` desde su
+incidencia fuente y verificó la evidencia v2 OLD→NEW. La auditoría resultante
+solo contenía huellas, contadores y contexto; no contenía texto original,
+corregido, motivo ni cursor.
+
+El bundle cifrado `crigestion-staging-20260821T091950Z.cgrb`, de 209.684.056
+bytes, quedó verificado con SHA-256
+`470105a8b3d0a52d4a2f5e0847db18cc6bf8ce218a0b5cd5791a9c5bc4be6ad7`.
+Aplicación, worker VeriFactu TEST y todos los timers permanecieron activos; el
+health local y público respondió `ok` y no hubo unidades CriGestión fallidas.
+Producción no se consultó ni modificó y el acceso SSH temporal sigue activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

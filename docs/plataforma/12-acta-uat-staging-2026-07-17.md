@@ -1311,3 +1311,24 @@ respondió HTTP 200 con todos los componentes en `ok` y el bundle cifrado
 `c5e931ff7519b173dab6df5d83f9c4b410d11d5da1e420c38fdac234daa6b4e7`.
 VeriFactu continuó en TEST, producción no se consultó ni modificó y el acceso
 SSH temporal permanece activo por indicación expresa del usuario.
+
+## 36. Historial paginado de correcciones de actuaciones
+
+El 2026-08-21 se desplegó `staging-2026.08.21-rc14`, commit
+`cc817652fcc49754728ee350c4417408a9b5a5c0`, build ID
+`bPIHMzdPze67Pxj-qjDt7`, sin migraciones pendientes. El backup previo
+`crigestion_staging-auto-20260821T091636Z.dump` quedó verificado con SHA-256
+`f7cb045e7c9fb6473b92c36a460e3d9823b3a25118cc1e317f9020098113c7b9`.
+
+Con la sesión Administrador se abrió el historial completo de la actuación de
+`INC-2026-00003`. La pantalla mostró la cadena por versión, la evidencia v2 con
+valor anterior, corregido, autor, fecha y motivo, y el enlace de retorno a la
+incidencia fuente. La comprobación fue exclusivamente de lectura. PostgreSQL
+confirmó una auditoría `SUPPORT_ACTION_CORRECTION_HISTORY_VIEWED` con una fila,
+sin texto anterior/corregido, motivo ni cursor en el payload.
+
+El health canónico y público terminó en `ok`; aplicación, worker VeriFactu TEST
+y timers operativos quedaron activos, sin unidades fallidas. El bundle cifrado
+`crigestion-staging-20260821T091950Z.cgrb` se verificó con SHA-256
+`470105a8b3d0a52d4a2f5e0847db18cc6bf8ce218a0b5cd5791a9c5bc4be6ad7`.
+Producción no se consultó ni modificó y el acceso SSH temporal permanece activo.

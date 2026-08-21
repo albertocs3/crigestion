@@ -749,3 +749,13 @@ Existe una divergencia contable conocida: la especificacion admite coexistencia
 temporal de ejercicios abiertos, mientras la base vigente mantiene un indice
 parcial de un unico ejercicio `OPEN` por empresa. Su revision pertenece al
 proximo corte de cierre contable y no se ha mezclado con el maestro de proveedores.
+
+### Evidencia staging del historial de correcciones de actuaciones
+
+`staging-2026.08.21-rc14` ejecuta el commit
+`cc817652fcc49754728ee350c4417408a9b5a5c0` con build ID
+`bPIHMzdPze67Pxj-qjDt7`. El migrador confirmó cero cambios pendientes, la UAT
+Administrador validó el historial v2 OLD→NEW de una actuación y la auditoría
+opaca correspondiente, y los health local/público terminaron en `ok`. El backup
+previo y el bundle cifrado posterior quedaron verificados; VeriFactu continuó en
+TEST y producción permaneció fuera de alcance.
