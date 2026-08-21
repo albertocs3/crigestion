@@ -1,10 +1,11 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { RequestContext, SessionUser } from "@/modules/platform/application/auth";
+import { getSessionSecret } from "@/modules/platform/application/environment";
 
 const versionSchema = z.number().int().positive();
 
@@ -20,6 +21,11 @@ export const supportActionCorrectionParamsSchema = z.object({
   actionId: z.string().uuid(),
 }).strict();
 
+export const supportActionCorrectionHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(100),
+  cursor: z.string().max(2048).optional(),
+}).strict();
+
 export type SupportActionCorrectionCommand = z.infer<typeof supportActionCorrectionSchema>;
 export type SupportActionCorrectionContext = RequestContext & { idempotencyKey: string; requestHash: string; scope: string };
 
@@ -28,6 +34,30 @@ export type SupportActionCorrectionDto = {
   action: { id: string; text: string; version: number };
   correction: { id: string; resultingIncidentVersion: number; resultingActionVersion: number; correctedAt: string };
 };
+
+export type SupportActionCorrectionHistoryDto = {
+  incident: { id: string; number: string };
+  action: { id: string };
+  items: Array<{
+    id: string;
+    previousText: string;
+    correctedText: string;
+    reason: string;
+    resultingActionVersion: number;
+    resultingIncidentVersion: number;
+    correctedAt: string;
+    correctedBy: { id: string; displayName: string };
+  }>;
+  hasMore: boolean;
+  nextCursor: string | null;
+};
+
+type HistoryError =
+  | { ok: false; status: 403; error: { code: "SUPPORT_ACTION_CORRECTION_FORBIDDEN"; message: string } }
+  | { ok: false; status: 404; error: { code: "SUPPORT_ACTION_NOT_FOUND"; message: string } }
+  | { ok: false; status: 429; error: { code: "SUPPORT_ACTION_CORRECTION_HISTORY_RATE_LIMITED"; message: string; retryAfterSeconds: number } }
+  | { ok: false; status: 503; error: { code: "SUPPORT_ACTION_CORRECTION_HISTORY_BUSY"; message: string; retryAfterSeconds: number } };
+export type SupportActionCorrectionHistoryResult = { ok: true; value: SupportActionCorrectionHistoryDto } | HistoryError;
 
 type ErrorCode =
   | "SUPPORT_ACTION_CORRECTION_FORBIDDEN"
@@ -251,6 +281,132 @@ export async function correctSupportAction(
   return fail(503, "SUPPORT_ACTION_CORRECTION_BUSY", "No se pudo completar la corrección por concurrencia. Inténtalo de nuevo.", 3);
 }
 
+export async function listSupportActionCorrections(
+  incidentId: string,
+  actionId: string,
+  query: z.infer<typeof supportActionCorrectionHistoryQuerySchema>,
+  actor: SessionUser,
+  context: RequestContext = {},
+): Promise<SupportActionCorrectionHistoryResult> {
+  if (!actor.permissions.includes("Support.View")) {
+    return { ok: false, status: 403, error: { code: "SUPPORT_ACTION_CORRECTION_FORBIDDEN", message: "No tienes permiso para consultar correcciones de actuaciones." } };
+  }
+  try {
+    return await prisma.$transaction(async (tx) => {
+    const companyId = (await tx.installation.findFirst({ where: { companyId: { not: null } }, select: { companyId: true } }))?.companyId;
+    if (!companyId) return historyNotFound();
+    const cursor = query.cursor ? decodeHistoryCursor(query.cursor, companyId, incidentId, actionId, query.limit) : null;
+    if (query.cursor && !cursor) return historyNotFound();
+    const rate = await consumeHistoryRateLimit(tx, companyId, actor.id);
+    if (rate.limited) {
+      if (rate.firstLimitedRequest) {
+        await tx.auditEvent.create({
+          data: {
+            eventType: "SUPPORT_ACTION_CORRECTION_HISTORY_RATE_LIMITED",
+            actorType: "USER",
+            payload: {
+              actorUserId: actor.id,
+              companyId,
+              incidentFingerprint: fingerprint(incidentId),
+              actionFingerprint: fingerprint(actionId),
+              retryAfterSeconds: rate.retryAfterSeconds,
+              ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+            },
+          },
+        });
+      }
+      return { ok: false, status: 429, error: { code: "SUPPORT_ACTION_CORRECTION_HISTORY_RATE_LIMITED", message: "Se han consultado demasiadas páginas. Inténtalo más tarde.", retryAfterSeconds: rate.retryAfterSeconds } };
+    }
+    const action = await tx.supportIncidentAction.findFirst({
+      where: { id: actionId, incidentId, companyId },
+      select: { id: true, incident: { select: { id: true, number: true } } },
+    });
+    if (!action) {
+      await tx.auditEvent.create({
+        data: {
+          eventType: "SUPPORT_ACTION_CORRECTION_HISTORY_DENIED",
+          actorType: "USER",
+          payload: {
+            actorUserId: actor.id,
+            companyId,
+            incidentFingerprint: fingerprint(incidentId),
+            actionFingerprint: fingerprint(actionId),
+            reason: "ACTION_NOT_FOUND",
+            ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+          },
+        },
+      });
+      return historyNotFound();
+    }
+    const rows = await tx.supportIncidentActionCorrection.findMany({
+      where: {
+        companyId,
+        incidentId,
+        actionId,
+        ...(cursor ? { resultingActionVersion: { lt: cursor.resultingActionVersion } } : {}),
+      },
+      orderBy: { resultingActionVersion: "desc" },
+      take: query.limit + 1,
+      select: {
+        id: true,
+        previousText: true,
+        correctedText: true,
+        reason: true,
+        resultingActionVersion: true,
+        resultingIncidentVersion: true,
+        correctedAt: true,
+        correctedBy: { select: { id: true, displayName: true } },
+      },
+    });
+    const page = rows.slice(0, query.limit);
+    const hasMore = rows.length > query.limit;
+    const oldest = page[page.length - 1];
+    await tx.auditEvent.create({
+      data: {
+        eventType: "SUPPORT_ACTION_CORRECTION_HISTORY_VIEWED",
+        actorType: "USER",
+        payload: {
+          actorUserId: actor.id,
+          companyId,
+          incidentFingerprint: fingerprint(incidentId),
+          actionFingerprint: fingerprint(actionId),
+          resultCount: page.length,
+          hasMore,
+          cursorPresent: Boolean(query.cursor),
+          ...(context.correlationId ? { correlationId: context.correlationId } : {}),
+        },
+      },
+    });
+    return {
+      ok: true,
+      value: {
+        incident: action.incident,
+        action: { id: action.id },
+        items: page.reverse().map((item) => ({ ...item, correctedAt: item.correctedAt.toISOString() })),
+        hasMore,
+        nextCursor: hasMore && oldest
+          ? encodeHistoryCursor(companyId, incidentId, actionId, query.limit, oldest.resultingActionVersion)
+          : null,
+      },
+    };
+    }, { maxWait: 1_000, timeout: 5_000 });
+  } catch (error) {
+    if (isHistoryBusyError(error)) {
+      return { ok: false, status: 503, error: { code: "SUPPORT_ACTION_CORRECTION_HISTORY_BUSY", message: "No se pudo consultar el historial en este momento. Inténtalo de nuevo.", retryAfterSeconds: 3 } };
+    }
+    throw error;
+  }
+}
+
+export function isSupportActionCorrectionHistoryCursor(
+  value: string,
+  incidentId: string,
+  actionId: string,
+  limit: number,
+): boolean {
+  return Boolean(decodeHistoryCursor(value, null, incidentId, actionId, limit));
+}
+
 export function hashSupportActionCorrectionRequest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -318,4 +474,91 @@ async function consumeRateLimit(
   `);
   if (!bucket || bucket.count <= 20) return { limited: false };
   return { limited: true, firstLimitedRequest: bucket.count === 21, retryAfterSeconds: Math.max(1, Math.ceil((bucket.windowStart.getTime() + windowMs - now.getTime()) / 1000)) };
+}
+
+function encodeHistoryCursor(
+  companyId: string,
+  incidentId: string,
+  actionId: string,
+  limit: number,
+  resultingActionVersion: number,
+): string {
+  const payload = Buffer.from(JSON.stringify({ v: 1, companyFingerprint: fingerprint(companyId), incidentId, actionId, limit, resultingActionVersion }), "utf8").toString("base64url");
+  return `${payload}.${signHistoryCursor(payload)}`;
+}
+
+function decodeHistoryCursor(
+  value: string,
+  companyId: string | null,
+  incidentId: string,
+  actionId: string,
+  limit: number,
+): { resultingActionVersion: number } | null {
+  try {
+    const [payload, signature, extra] = value.split(".");
+    if (!payload || !signature || extra !== undefined) return null;
+    const expected = Buffer.from(signHistoryCursor(payload), "base64url");
+    const submitted = Buffer.from(signature, "base64url");
+    if (submitted.toString("base64url") !== signature || submitted.length !== expected.length || !timingSafeEqual(submitted, expected)) return null;
+    const parsed = z.object({
+      v: z.literal(1),
+      companyFingerprint: z.string().length(64),
+      incidentId: z.string().uuid(),
+      actionId: z.string().uuid(),
+      limit: z.number().int().min(1).max(100),
+      resultingActionVersion: z.number().int().min(2),
+    }).strict().safeParse(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")));
+    if (!parsed.success
+      || (companyId !== null && parsed.data.companyFingerprint !== fingerprint(companyId))
+      || parsed.data.incidentId !== incidentId
+      || parsed.data.actionId !== actionId
+      || parsed.data.limit !== limit) return null;
+    return { resultingActionVersion: parsed.data.resultingActionVersion };
+  } catch {
+    return null;
+  }
+}
+
+function signHistoryCursor(payload: string): string {
+  return createHmac("sha256", getSessionSecret()).update(`support-action-corrections-cursor:v1:${payload}`).digest("base64url");
+}
+
+function historyNotFound(): HistoryError {
+  return { ok: false, status: 404, error: { code: "SUPPORT_ACTION_NOT_FOUND", message: "La actuación no existe." } };
+}
+
+function fingerprint(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function isHistoryBusyError(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2024" || error.code === "P2034") return true;
+    if (error.code === "P2010" && (error.meta?.code === "40001" || error.meta?.code === "57014")) return true;
+    return error.code === "P2028" && /timed out|timeout|unable to start a transaction/i.test(error.message);
+  }
+  return error instanceof Prisma.PrismaClientUnknownRequestError
+    && error.message.includes('code: "57014"')
+    && /statement timeout|canceling statement/i.test(error.message);
+}
+
+async function consumeHistoryRateLimit(
+  tx: Prisma.TransactionClient,
+  companyId: string,
+  actorId: string,
+): Promise<{ limited: false } | { limited: true; firstLimitedRequest: boolean; retryAfterSeconds: number }> {
+  const now = new Date();
+  const windowMs = 15 * 60 * 1000;
+  const resetBefore = new Date(now.getTime() - windowMs);
+  const [bucket] = await tx.$queryRaw<Array<{ count: number; windowStart: Date }>>(Prisma.sql`
+    INSERT INTO "rate_limit_buckets" ("id", "key", "windowStart", "count", "createdAt", "updatedAt")
+    VALUES (gen_random_uuid(), ${`support-action-correction-history:${companyId}:${actorId}`}, ${now}, 1, ${now}, ${now})
+    ON CONFLICT ("key") DO UPDATE SET
+      "count" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${resetBefore} THEN 1 ELSE "rate_limit_buckets"."count" + 1 END,
+      "windowStart" = CASE WHEN "rate_limit_buckets"."windowStart" <= ${resetBefore} THEN ${now} ELSE "rate_limit_buckets"."windowStart" END,
+      "updatedAt" = ${now}
+    RETURNING "count", "windowStart"
+  `);
+  if (!bucket || bucket.count <= 60) return { limited: false };
+  return { limited: true, firstLimitedRequest: bucket.count === 61, retryAfterSeconds: Math.max(1, Math.ceil((bucket.windowStart.getTime() + windowMs - now.getTime()) / 1000)) };
 }

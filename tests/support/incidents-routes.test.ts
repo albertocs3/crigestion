@@ -8,7 +8,7 @@ import {
   POST as incidentsPost,
 } from "@/app/api/support/incidents/route";
 import { POST as actionsPost } from "@/app/api/support/incidents/[incidentId]/actions/route";
-import { POST as actionCorrectionsPost } from "@/app/api/support/incidents/[incidentId]/actions/[actionId]/corrections/route";
+import { GET as actionCorrectionsGet, POST as actionCorrectionsPost } from "@/app/api/support/incidents/[incidentId]/actions/[actionId]/corrections/route";
 import { POST as transitionsPost } from "@/app/api/support/incidents/[incidentId]/status-transitions/route";
 import { POST as participantsPost } from "@/app/api/support/incidents/[incidentId]/participant-changes/route";
 import { POST as priorityChangesPost } from "@/app/api/support/incidents/[incidentId]/priority-changes/route";
@@ -695,13 +695,46 @@ describe("support incidents HTTP contracts", () => {
     expect(replayBody.correction.id).toBe(firstBody.correction.id);
     expect(await prisma.supportIncidentActionCorrection.count({ where: { actionId: actionResult.action.id } })).toBe(1);
     expect(await prisma.supportIncidentEvent.count({ where: { incidentId: incident.id, eventType: "ACTION_CORRECTED" } })).toBe(1);
+    const secondBody = { ...body, expectedIncidentVersion: 3, expectedActionVersion: 2, text: "Segunda corrección desde el contrato HTTP." };
+    expect((await actionCorrectionsPost(jsonRequest(url, secondBody, { csrf, key: randomUUID() }), context)).status).toBe(201);
+    const history = await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1`), context);
+    expect(history.status).toBe(200);
+    expect(history.headers.get("cache-control")).toBe("private, no-store, max-age=0");
+    const historyBody = (await history.json()) as { items: Array<{ correctedText: string }>; hasMore: boolean; nextCursor: string };
+    expect(historyBody).toMatchObject({ action: { id: actionResult.action.id }, items: [{ correctedText: secondBody.text }], hasMore: true, nextCursor: expect.any(String) });
+    const older = await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1&cursor=${encodeURIComponent(historyBody.nextCursor)}`), context);
+    expect(older.status).toBe(200);
+    expect(await older.json()).toMatchObject({ items: [{ resultingActionVersion: 2, correctedText: body.text }], hasMore: false, nextCursor: null });
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1&cursor=${encodeURIComponent(`${historyBody.nextCursor}x`)}`), context)).status).toBe(422);
+    const otherActionContext = { params: Promise.resolve({ incidentId: incident.id, actionId: randomUUID() }) };
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1&cursor=${encodeURIComponent(historyBody.nextCursor)}`), otherActionContext)).status).toBe(422);
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1`), otherActionContext)).status).toBe(404);
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?unknown=1`), context)).status).toBe(422);
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1&limit=2`), context)).status).toBe(422);
+    const transaction = vi.spyOn(prisma, "$transaction").mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError("pool timeout", { code: "P2024", clientVersion: "test" }));
+    const busy = await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1`), context);
+    transaction.mockRestore();
+    expect(busy.status).toBe(503);
+    expect(busy.headers.get("retry-after")).toBe("3");
+    expect(await busy.json()).toMatchObject({ code: "SUPPORT_ACTION_CORRECTION_HISTORY_BUSY" });
     const viewerRole = await prisma.role.create({ data: { code: "ActionCorrectionViewer", name: "Sin corrección de actuaciones", permissions: { create: ["Support.View", "Support.AddActions"].map((code) => ({ permission: { connect: { code } } })) } } });
-    await prisma.user.create({ data: { displayName: "Sin corrección", userName: "action-correction-viewer", normalizedUserName: "action-correction-viewer", passwordHash: hashPassword("Cambiar-action-correction-viewer-2026"), roleId: viewerRole.id } });
+    const viewer = await prisma.user.create({ data: { displayName: "Sin corrección", userName: "action-correction-viewer", normalizedUserName: "action-correction-viewer", passwordHash: hashPassword("Cambiar-action-correction-viewer-2026"), roleId: viewerRole.id } });
     await loginAs("action-correction-viewer", "Cambiar-action-correction-viewer-2026");
     const viewerCsrf = await csrfToken();
-    const forbidden = await actionCorrectionsPost(jsonRequest(url, { ...body, expectedIncidentVersion: 3, expectedActionVersion: 2, text: "Intento sin permiso específico." }, { csrf: viewerCsrf, key: randomUUID() }), context);
+    expect((await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1`), context)).status).toBe(200);
+    const forbidden = await actionCorrectionsPost(jsonRequest(url, { ...body, expectedIncidentVersion: 4, expectedActionVersion: 3, text: "Intento sin permiso específico." }, { csrf: viewerCsrf, key: randomUUID() }), context);
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ code: "FORBIDDEN" });
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    await prisma.rateLimitBucket.upsert({
+      where: { key: `support-action-correction-history:${companyId}:${viewer.id}` },
+      create: { key: `support-action-correction-history:${companyId}:${viewer.id}`, count: 60, windowStart: new Date() },
+      update: { count: 60, windowStart: new Date() },
+    });
+    const limited = await actionCorrectionsGet(new Request(`http://localhost${url}?limit=1`), context);
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(await prisma.auditEvent.count({ where: { eventType: "SUPPORT_ACTION_CORRECTION_HISTORY_RATE_LIMITED" } })).toBe(1);
   });
 
   it("merges two incidents once through the protected bilateral contract", async () => {

@@ -23,7 +23,7 @@ import {
   createSupportAction,
   hashSupportActionRequest,
 } from "@/modules/support/application/actions";
-import { correctSupportAction, hashSupportActionCorrectionRequest } from "@/modules/support/application/actionCorrections";
+import { correctSupportAction, hashSupportActionCorrectionRequest, isSupportActionCorrectionHistoryCursor, listSupportActionCorrections } from "@/modules/support/application/actionCorrections";
 import { changeSupportCategory, hashSupportCategoryChangeRequest } from "@/modules/support/application/categoryChanges";
 import {
   createIncidentFromCommunication,
@@ -555,6 +555,17 @@ describe("support incidents application", () => {
     const secondCommand = { expectedIncidentVersion: 3, expectedActionVersion: 2, text: "TextoVigenteSegundaCorreccion", reason: "Segunda corrección que sustituye por completo a la primera." };
     const second = await correctSupportAction(created.value.id, action.value.action.id, secondCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionCorrectionRequest({ incidentId: created.value.id, actionId: action.value.action.id, ...secondCommand }), scope: context.scope });
     expect(second).toMatchObject({ ok: true, status: 201, value: { incident: { version: 4 }, action: { text: secondCommand.text, version: 3 } } });
+    const firstHistoryPage = await listSupportActionCorrections(created.value.id, action.value.action.id, { limit: 1 }, actor, { correlationId: "action-history-0001" });
+    expect(firstHistoryPage).toMatchObject({ ok: true, value: { items: [{ resultingActionVersion: 3, correctedText: secondCommand.text }], hasMore: true, nextCursor: expect.any(String) } });
+    if (!firstHistoryPage.ok || !firstHistoryPage.value.nextCursor) throw new Error("Expected action correction cursor");
+    expect(isSupportActionCorrectionHistoryCursor(firstHistoryPage.value.nextCursor, created.value.id, action.value.action.id, 1)).toBe(true);
+    expect(isSupportActionCorrectionHistoryCursor(firstHistoryPage.value.nextCursor, created.value.id, randomUUID(), 1)).toBe(false);
+    const secondHistoryPage = await listSupportActionCorrections(created.value.id, action.value.action.id, { limit: 1, cursor: firstHistoryPage.value.nextCursor }, actor);
+    expect(secondHistoryPage).toMatchObject({ ok: true, value: { items: [{ resultingActionVersion: 2, correctedText: command.text }], hasMore: false, nextCursor: null } });
+    const historyAudit = await prisma.auditEvent.findFirstOrThrow({ where: { eventType: "SUPPORT_ACTION_CORRECTION_HISTORY_VIEWED", payload: { path: ["correlationId"], equals: "action-history-0001" } } });
+    expect(JSON.stringify(historyAudit.payload)).not.toContain(command.text);
+    expect(JSON.stringify(historyAudit.payload)).not.toContain(secondCommand.text);
+    expect(JSON.stringify(historyAudit.payload)).not.toContain(firstHistoryPage.value.nextCursor);
     expect((await listSupportIncidents({ limit: 25, search: secondCommand.text }, actor)).incidents.map((item) => item.id)).toContain(created.value.id);
     expect((await listSupportIncidents({ limit: 25, search: command.text }, actor)).incidents.map((item) => item.id)).not.toContain(created.value.id);
     const correctionIndex = await prisma.$queryRaw<Array<{ indexdef: string }>>(Prisma.sql`
@@ -615,6 +626,65 @@ describe("support incidents application", () => {
     const reassign = { action: "reassign" as const, expectedVersion: 2, responsibleUserId: replacement.id, reason: "Retirada del autor del equipo actual." };
     expect(await changeSupportParticipants(created.value.id, reassign, administrator, participantContext(created.value.id, reassign))).toMatchObject({ ok: true, status: 201 });
     expect(await createSupportAction(created.value.id, command, logged.value.user, context)).toMatchObject({ ok: false, status: 403, error: { code: "SUPPORT_INCIDENT_ACTION_FORBIDDEN" } });
+  });
+
+  it("paginates 201 action corrections by logical version without gaps or duplicates", async () => {
+    const actor = await admin();
+    const customer = await createCustomerRecord(actor);
+    const references = await listSupportReferences();
+    const companyId = (await prisma.installation.findFirstOrThrow({ select: { companyId: true } })).companyId!;
+    const create = { customerId: customer.id, storeId: null, categoryId: references.categories[0]!.id, responsibleUserId: actor.id, title: "Historial extenso de actuación", description: "Incidencia sintética para validar tres páginas completas.", priority: "MEDIUM" as const };
+    const created = await createSupportIncident(create, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportRequest(create), scope: "incident:create" });
+    if (!created.ok) throw new Error(created.error.code);
+    const actionCommand = { expectedVersion: created.value.version, text: "Texto versión 1", performedAt: new Date().toISOString() };
+    const action = await createSupportAction(created.value.id, actionCommand, actor, { idempotencyKey: randomUUID(), requestHash: hashSupportActionRequest({ incidentId: created.value.id, ...actionCommand }), scope: `incident:${created.value.id}:action:create` });
+    if (!action.ok) throw new Error(action.error.code);
+    const baseTime = Date.now();
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('ALTER TABLE "support_incident_action_corrections" DISABLE TRIGGER USER');
+      try {
+        await tx.supportIncidentActionCorrection.createMany({
+          data: Array.from({ length: 201 }, (_, index) => {
+            const version = index + 2;
+            return {
+              companyId,
+              incidentId: created.value.id,
+              actionId: action.value.action.id,
+              originalAuthorUserId: actor.id,
+              correctedByUserId: actor.id,
+              previousText: `Texto versión ${version - 1}`,
+              correctedText: `Texto versión ${version}`,
+              reason: `Corrección sintética de la versión ${version}.`,
+              resultingActionVersion: version,
+              resultingIncidentVersion: version + 1,
+              correctedAt: new Date(baseTime - version * 1_000),
+            };
+          }),
+        });
+      } finally {
+        await tx.$executeRawUnsafe('ALTER TABLE "support_incident_action_corrections" ENABLE TRIGGER USER');
+      }
+    }, { timeout: 15_000 });
+
+    const versions: number[] = [];
+    let cursor: string | undefined;
+    const pageSizes: number[] = [];
+    for (let pageNumber = 0; pageNumber < 3; pageNumber += 1) {
+      const page = await listSupportActionCorrections(created.value.id, action.value.action.id, { limit: 100, ...(cursor ? { cursor } : {}) }, actor);
+      if (!page.ok) throw new Error(page.error.code);
+      pageSizes.push(page.value.items.length);
+      const pageVersions = page.value.items.map((item) => item.resultingActionVersion);
+      versions.push(...pageVersions);
+      if (pageNumber === 0) expect(pageVersions).toEqual(Array.from({ length: 100 }, (_, index) => index + 103));
+      if (pageNumber === 1) expect(pageVersions).toEqual(Array.from({ length: 100 }, (_, index) => index + 3));
+      if (pageNumber === 2) expect(pageVersions).toEqual([2]);
+      cursor = page.value.nextCursor ?? undefined;
+      if (pageNumber < 2) expect(page.value.hasMore).toBe(true);
+      else expect(page.value).toMatchObject({ hasMore: false, nextCursor: null });
+    }
+    expect(pageSizes).toEqual([100, 100, 1]);
+    expect(new Set(versions).size).toBe(201);
+    expect([...versions].sort((left, right) => left - right)).toEqual(Array.from({ length: 201 }, (_, index) => index + 2));
   });
 
   it("limits action correction to the original current member or an administrator and allows finalized documentation", async () => {

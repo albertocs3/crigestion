@@ -2,10 +2,30 @@ import { cookies } from "next/headers";
 import { requirePermission, sessionCookieName, validateCsrfToken } from "@/modules/platform/application/auth";
 import { getCorrelationId, invalidJson, isAllowedOrigin, isJsonRequest, jsonResponse, originNotAllowed, readBoundedTextBody, unsupportedMediaType, validateIdempotencyKey, validationError } from "@/modules/platform/application/http";
 import { requireMaintenanceModeInactive } from "@/modules/platform/application/maintenance";
-import { correctSupportAction, hashSupportActionCorrectionRequest, supportActionCorrectionParamsSchema, supportActionCorrectionSchema } from "@/modules/support/application/actionCorrections";
+import { correctSupportAction, hashSupportActionCorrectionRequest, isSupportActionCorrectionHistoryCursor, listSupportActionCorrections, supportActionCorrectionHistoryQuerySchema, supportActionCorrectionParamsSchema, supportActionCorrectionSchema } from "@/modules/support/application/actionCorrections";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+
+export async function GET(request: Request, context: { params: Promise<{ incidentId: string; actionId: string }> }) {
+  const token = (await cookies()).get(sessionCookieName)?.value;
+  const correlationId = getCorrelationId(request);
+  const authorization = await requirePermission(token, "Support.View", { correlationId });
+  if (!authorization.ok) return response(request, authorization.error, authorization.status);
+  const params = supportActionCorrectionParamsSchema.safeParse(await context.params);
+  if (!params.success) return response(request, validationError(params.error.flatten()), 422);
+  const rawQuery = strictQuery(new URL(request.url).searchParams);
+  const query = rawQuery ? supportActionCorrectionHistoryQuerySchema.safeParse(rawQuery) : null;
+  if (!query?.success
+    || (query.data.cursor && !isSupportActionCorrectionHistoryCursor(query.data.cursor, params.data.incidentId, params.data.actionId, query.data.limit))) {
+    return response(request, validationError({ fieldErrors: { cursor: ["El cursor no es válido."] }, formErrors: [] }), 422);
+  }
+  const result = await listSupportActionCorrections(params.data.incidentId, params.data.actionId, query.data, authorization.user, { correlationId });
+  const headers: Record<string, string> = !result.ok && "retryAfterSeconds" in result.error
+    ? { "Retry-After": String(result.error.retryAfterSeconds) }
+    : {};
+  return result.ok ? response(request, result.value, 200) : response(request, result.error, result.status, headers);
+}
 
 export async function POST(request: Request, context: { params: Promise<{ incidentId: string; actionId: string }> }) {
   if (!isAllowedOrigin(request)) return response(request, originNotAllowed(), 403);
@@ -42,4 +62,13 @@ export async function POST(request: Request, context: { params: Promise<{ incide
 
 function response(request: Request, body: unknown, status: number, extraHeaders: Record<string, string> = {}) {
   return jsonResponse(request, body, { status, headers: { "Cache-Control": "private, no-store, max-age=0", ...extraHeaders } });
+}
+
+function strictQuery(searchParams: URLSearchParams): Record<string, string> | null {
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [key, value] of searchParams.entries()) {
+    if ((key !== "limit" && key !== "cursor") || Object.hasOwn(result, key)) return null;
+    result[key] = value;
+  }
+  return result;
 }

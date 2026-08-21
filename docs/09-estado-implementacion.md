@@ -703,6 +703,15 @@ health local y público, backup y bundle de recuperación quedaron verificados.
 VeriFactu continúa en TEST, producción no se consultó ni modificó y el acceso
 SSH temporal permanece activo.
 
+El corte local posterior añade la consulta paginada del historial completo de
+correcciones de actuaciones. El `GET` exige `Support.View`, valida empresa,
+incidencia fuente y actuación de forma conjunta, usa un cursor HMAC ligado al
+recurso y al límite, pagina por versión lógica y acota cada respuesta a 100
+evidencias. La auditoría y la cuota son independientes de la mutación y no
+almacenan textos, motivos ni cursores. La ficha conserva la vista previa de las
+100 correcciones recientes y ofrece navegación al historial completo cuando
+existen evidencias anteriores.
+
 ## 5. Riesgos y trabajo posterior
 
 Prioridades pendientes despues de este corte:

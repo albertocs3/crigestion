@@ -363,6 +363,10 @@ inmutable en esta primera rebanada para no reescribir indicadores históricos
 sin una decisión funcional específica. Solo el autor que continúe como
 responsable o colaborador activo puede corregir su actuación; el Administrador
 puede corregir cualquiera. Una duplicada fusionada sigue siendo de solo lectura.
+La ficha muestra una vista previa acotada de las correcciones y permite navegar
+por la cadena completa mediante páginas ordenadas por versión. Cuando una
+actuación procede de una incidencia duplicada agregada, el historial se consulta
+siempre a través de ese registro fuente y no de la principal.
 
 ## 8. Adjuntos
 

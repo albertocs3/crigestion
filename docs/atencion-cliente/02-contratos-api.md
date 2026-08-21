@@ -250,7 +250,8 @@ Conserva la actuación original inmutable, añade una evidencia append-only con
 la cadena OLD→NEW, incrementa una versión lógica de la actuación y una versión
 de la incidencia, y crea un evento `ACTION_CORRECTED`. El detalle muestra el
 texto vigente y hasta las 100 correcciones más recientes; la evidencia anterior
-permanece en PostgreSQL y su consulta paginada queda como ampliación posterior.
+permanece en PostgreSQL y puede consultarse mediante el endpoint paginado
+descrito a continuación.
 La búsqueda usa únicamente el texto vigente, manteniendo un índice trigram
 separado para las correcciones. La
 auditoría contiene identificadores, versiones y booleanos, nunca texto ni
@@ -267,6 +268,48 @@ con `Retry-After: 3`. Errores estables:
 `SUPPORT_ACTION_CORRECTION_RATE_LIMITED`,
 `SUPPORT_ACTION_CORRECTION_BUSY`, `IDEMPOTENCY_KEY_REUSED` e
 `IDEMPOTENCY_REPLAY_INVALID`.
+
+## `GET /api/support/incidents/{incidentId}/actions/{actionId}/corrections`
+
+Lectura autenticada con `Support.View`, sin CSRF ni idempotencia. Resuelve
+conjuntamente empresa, incidencia fuente real y actuación; cualquier UUID ajeno
+o combinación incoherente devuelve `404 SUPPORT_ACTION_NOT_FOUND` sin revelar
+qué recurso existe. En una principal que agrega duplicadas, el enlace usa el
+`incidentId` del registro fuente de la actuación.
+
+Admite únicamente `limit` entre 1 y 100, 100 por defecto, y `cursor`. Los
+parámetros desconocidos o repetidos devuelven `422`. El cursor HMAC queda ligado
+a empresa, incidencia, actuación y límite; una firma alterada o su reutilización
+en otro recurso devuelve `422`. La cadena se pagina por
+`resultingActionVersion DESC`, no por fecha, y cada página se presenta en orden
+ascendente para conservar la lectura OLD→NEW:
+
+```json
+{
+  "incident": { "id": "uuid", "number": "INC-2026-00001" },
+  "action": { "id": "uuid" },
+  "items": [{
+    "id": "uuid",
+    "previousText": "...",
+    "correctedText": "...",
+    "reason": "...",
+    "resultingActionVersion": 2,
+    "resultingIncidentVersion": 4,
+    "correctedAt": "2026-08-21T09:00:00.000Z",
+    "correctedBy": { "id": "uuid", "displayName": "Técnico" }
+  }],
+  "hasMore": false,
+  "nextCursor": null
+}
+```
+
+La cuota permite 60 páginas por actor y empresa cada 15 minutos; el primer
+exceso queda auditado y devuelve `429` con `Retry-After`. La adquisición de
+conexión y la transacción tienen esperas acotadas; saturación, timeout o
+cancelación recuperable devuelven `503 SUPPORT_ACTION_CORRECTION_HISTORY_BUSY`
+con `Retry-After: 3`. Cada página genera una
+auditoría opaca con fingerprints, cantidad y presencia de cursor, nunca texto,
+motivo ni el cursor. La respuesta usa `Cache-Control: private, no-store`.
 
 ## `POST /api/support/incidents/{incidentId}/status-transitions`
 
