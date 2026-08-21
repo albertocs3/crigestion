@@ -806,6 +806,32 @@ contenía resumen, motivo ni teléfono. El health canónico y público permaneci
 en `ok`, VeriFactu siguió en TEST y no hubo unidades fallidas. Producción no se
 consultó ni modificó; el acceso SSH temporal permanece activo.
 
+### 8.8 Marcado múltiple de notificaciones del 2026-08-21
+
+La release inmutable `staging-2026.08.21-rc11`, commit
+`adb54ff5fee6125a9dd91ef063bcc1cd0aab6e6b`, se materializó desde el tag
+publicado mediante un paquete fuente de 9.011.200 bytes y SHA-256
+`cd24fef4f520dba4a2275f4f94ef1b7b301e99bea473fd0fbbfd75365b9f112e`.
+El build aislado produjo el identificador `ifRQdqThGs5NVkA7ZT7oj`.
+
+Antes de migrar se creó el dump custom
+`crigestion_staging-auto-20260821T063848Z.dump`, de 1.564.376 bytes y SHA-256
+`c8f2cd0d2a1130e17bbac9ef6e426000ea443c0c67adfd455748f47326f5a30f`;
+su catálogo se verificó con `pg_restore --list`. El primer arranque de la
+unidad migradora falló antes de ejecutar cambios porque el binario
+`schema-engine` del paquete tenía modo `0640`. La release activa continuó
+siendo `rc10`. Se corrigió únicamente el permiso de ejecución dentro de la
+nueva release a `0750` y se repitió la unidad controlada. Esta aplicó solo
+`20260821000000_harden_notification_state_timestamps` y terminó con
+`Result=success` y `ExecMainStatus=0`.
+
+Después se conmutó `current` atómicamente a `rc11`. Aplicación, worker
+VeriFactu TEST y timers de reactivación, health, backup y bundle de recuperación
+quedaron activos, sin unidades fallidas. La UAT autenticada de marcado múltiple
+se cerró con tres notificaciones y la evidencia detallada en el acta. El health
+público devolvió HTTP 200 con todos los componentes en `ok`. Producción no se
+consultó ni modificó y el acceso SSH temporal permanece activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

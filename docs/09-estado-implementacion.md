@@ -658,13 +658,23 @@ de una página, con un máximo de cien, versiones esperadas por elemento y un
 persistente de 120 transiciones por usuario y empresa cada quince minutos,
 ordena los bloqueos, reintenta conflictos serializables, conserva una evidencia
 append-only por fila y una única auditoría agregada opaca. PostgreSQL vincula
-además el instante de la proyección con el de la evidencia. Este corte sigue
-con 64 pruebas dirigidas de aplicación y contrato en verde, además de
-typecheck, lint, build y validación Prisma. La ejecución global queda bloqueada
-por fixtures antiguos que no eliminan `customer_contacts` antes de clientes y
-contaminan la base compartida; no se ha mezclado ese saneamiento ajeno en este
-corte. Quedan pendientes commit, despliegue aislado y UAT en staging;
-producción no forma parte de su alcance.
+además el instante de la proyección con el de la evidencia. Este corte quedó
+publicado como `staging-2026.08.21-rc11`, commit
+`adb54ff5fee6125a9dd91ef063bcc1cd0aab6e6b`, con 64 pruebas dirigidas de
+aplicación y contrato en verde, además de typecheck, lint, build y validación
+Prisma. La ejecución global queda bloqueada por fixtures antiguos que no
+eliminan `customer_contacts` antes de clientes y contaminan la base compartida;
+no se ha mezclado ese saneamiento ajeno en este corte.
+
+La migración `20260821000000_harden_notification_state_timestamps` se aplicó
+solo en staging tras un backup verificado. La UAT Administrador seleccionó las
+tres notificaciones no leídas visibles y las marcó como leídas mediante una
+única operación: la interfaz dejó el contador en cero y PostgreSQL confirmó
+exactamente tres evidencias con el mismo instante y destino `READ`, junto con
+una única auditoría `NOTIFICATION_BULK_STATE_CHANGED` con `affectedCount: 3`.
+El payload agregado no contiene IDs de notificación ni textos. El health
+público permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
+se consultó ni modificó y el acceso SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 

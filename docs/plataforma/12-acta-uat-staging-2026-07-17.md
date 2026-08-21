@@ -1255,3 +1255,31 @@ La aplicación, PostgreSQL, VeriFactu TEST y worker permanecieron en `ok`, el
 health canónico terminó con `Result=success` y no hubo unidades fallidas.
 Producción no se consultó ni modificó. El acceso SSH temporal continúa activo
 por indicación expresa del usuario.
+
+## 34. Marcado múltiple y atómico de notificaciones
+
+El 2026-08-21 se promovió la release inmutable
+`staging-2026.08.21-rc11`, commit
+`adb54ff5fee6125a9dd91ef063bcc1cd0aab6e6b`, con build ID
+`ifRQdqThGs5NVkA7ZT7oj`. La candidata superó 64/64 pruebas dirigidas de
+aplicación y contrato, typecheck, ESLint, validación Prisma y build optimizado,
+y cerró dos revisiones independientes sin P0/P1. La auditoría npm conservó
+cuatro vulnerabilidades altas transitivas ya conocidas de
+`deepmerge-ts`/Prisma y `nanoid`; no se modificaron dependencias.
+
+Con una sesión Administrador se abrió el filtro de notificaciones sin leer. La
+página mostraba tres elementos. Se usó «Seleccionar las 3 disponibles en esta
+página» y después «Marcar como leídas». La operación se aplicó completa: el
+contador pasó de tres a cero, el filtro sin leer quedó vacío y el filtro de
+leídas mostró los tres elementos con estado `Leída`. No se archivó ninguna
+notificación.
+
+PostgreSQL confirmó exactamente tres filas nuevas en
+`notification_state_changes`, todas con el mismo `occurredAt` y destino
+`READ`. También confirmó una única auditoría
+`NOTIFICATION_BULK_STATE_CHANGED`, con `affectedCount: 3`, destino `READ` y un
+fingerprint de selección; el payload no contiene IDs de las notificaciones ni
+mensajes. La aplicación, PostgreSQL, VeriFactu TEST y worker respondieron en
+`ok`; los timers operativos permanecieron programados y no hubo unidades
+fallidas. Producción no se consultó ni modificó. El acceso SSH temporal
+continúa activo por indicación expresa del usuario.
