@@ -832,9 +832,10 @@ se cerró con tres notificaciones y la evidencia detallada en el acta. El health
 público devolvió HTTP 200 con todos los componentes en `ok`. Producción no se
 consultó ni modificó y el acceso SSH temporal permanece activo.
 
-### 8.9 Retención automática de notificaciones preparada localmente
+### 8.9 Retención automática de notificaciones del 2026-08-21
 
-El siguiente candidato incorpora
+La release final `staging-2026.08.21-rc13`, commit
+`cfb5add4a730788bfc7ecbc206952b130036890f`, incorpora
 `crigestion-staging-notification-purge.service` y su timer diario a las 04:15
 `Europe/Madrid`, con retraso aleatorio de hasta quince minutos. La unidad es
 `oneshot`, usa el usuario de aplicación, falla cerrada durante una restauración
@@ -845,23 +846,40 @@ algunas versiones de systemd lo reinician a cero después de finalizar;
 el bundle de recuperación conserva las dos unidades y el restore las detiene y
 reanuda junto con el resto de procesos mutadores.
 
-Antes de desplegar este corte se debe crear y verificar un backup, revisar el
-plan del índice `notifications_companyId_expiresAt_id_idx`, aplicar únicamente
-`20260821010000_add_notification_retention_purge`, instalar y habilitar las dos
-unidades, ejecutar manualmente el `oneshot` y comprobar
-`NOTIFICATION_PURGE_AUTOMATION_OK`, `Result=success`, el timer y el health
-completo. La primera ejecución en staging debe registrar solo conteos agregados;
-no deben aparecer IDs, destinatarios, números de incidencia ni contenido. Este
-apartado describe el procedimiento preparado: no acredita todavía despliegue ni
-UAT. Producción permanece fuera de alcance.
+Antes de migrar se creó el dump
+`crigestion_staging-auto-20260821T084003Z.dump`, de 1.565.478 bytes y SHA-256
+`ba0a83ccefed34084eefa352eeabeae9d81c507fd2fbe6869a19c472e3af28fb`;
+su catálogo se verificó con `pg_restore --list`. La unidad migradora aplicó
+únicamente `20260821010000_add_notification_retention_purge` y terminó con
+`Result=success`.
+
+La primera ejecución sobre `rc12` terminó correctamente con cero lotes y cero
+filas, pero la comprobación posterior detectó que este systemd no conserva
+`ExecMainExitTimestampMonotonic` para el nuevo `oneshot`. No se aceptó ese
+health fallido. El hotfix `rc13` sustituyó esa fuente efímera por un sello de
+éxito creado mediante `StateDirectory`; su paquete fuente medía 1.549.897 bytes
+y tenía SHA-256
+`358b4ce7fca6cd5ca2599614e9a54f8206df9c0b518a7e25a29542c996d25cc4`.
+El build aislado produjo `ssuEobydaIbb9yz44LZHr`.
+
+La ejecución final registró
+`NOTIFICATION_PURGE_AUTOMATION_OK` con cero notificaciones, cambios de estado e
+idempotencias; el timer quedó activo para las 04:15 `Europe/Madrid` y el health
+canónico terminó con `Result=success`. El bundle cifrado
+`crigestion-staging-20260821T084752Z.cgrb` se verificó con SHA-256
+`c5e931ff7519b173dab6df5d83f9c4b410d11d5da1e420c38fdac234daa6b4e7`.
 
 La unidad usa el `DATABASE_URL` ordinario, pero el migrador revoca a ese rol el
 `DELETE` sobre notificaciones y evidencias y solo concede `EXECUTE` sobre
 `purge_expired_notifications(integer,integer,text)`. El despliegue debe
-verificar ambas negaciones con `has_table_privilege`, el `EXECUTE`, el atributo
-`SECURITY DEFINER` y el `search_path=pg_catalog, public`. Un resultado
+verificó ambas negaciones con `has_table_privilege`, el `EXECUTE`, el atributo
+`SECURITY DEFINER`, el propietario migrador y
+`search_path=pg_catalog, public` con UTC. Un resultado
 `NOTIFICATION_PURGE_BACKLOG_REMAINS` es fallo operativo y debe mantener la
-alerta activa; no se acepta como ejecución correcta.
+alerta activa; no se acepta como ejecución correcta. Aplicación, worker
+VeriFactu TEST y timers operativos quedaron activos, el health local y público
+respondió `ok` y no hubo unidades CriGestión fallidas. Producción no se
+consultó ni modificó; el acceso SSH temporal permanece activo.
 
 ## 9. Rollback y recuperacion
 

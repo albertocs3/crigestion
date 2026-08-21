@@ -1283,3 +1283,31 @@ mensajes. La aplicación, PostgreSQL, VeriFactu TEST y worker respondieron en
 `ok`; los timers operativos permanecieron programados y no hubo unidades
 fallidas. Producción no se consultó ni modificó. El acceso SSH temporal
 continúa activo por indicación expresa del usuario.
+
+## 35. Retención automática de notificaciones
+
+El 2026-08-21 se aplicó en staging la migración
+`20260821010000_add_notification_retention_purge` después del backup verificado
+`crigestion_staging-auto-20260821T084003Z.dump` (SHA-256
+`ba0a83ccefed34084eefa352eeabeae9d81c507fd2fbe6869a19c472e3af28fb`).
+La release final fue `staging-2026.08.21-rc13`, commit
+`cfb5add4a730788bfc7ecbc206952b130036890f`, build ID
+`ssuEobydaIbb9yz44LZHr`.
+
+La inspección con el rol runtime confirmó que no tiene `DELETE` sobre
+`notifications` ni `notification_state_changes`, que sí puede ejecutar
+`purge_expired_notifications(integer,integer,text)` y que la función es
+`SECURITY DEFINER`, propiedad del migrador, con `search_path` fijo y UTC. La
+ejecución manual terminó con `NOTIFICATION_PURGE_AUTOMATION_OK` y conteos cero,
+coherentes con la ausencia de notificaciones que hubieran cumplido vencimiento
+y un año calendario completo. No se generó contenido sensible en logs.
+
+Durante la primera comprobación se detectó que el timestamp de proceso del
+`oneshot` no persistía en la versión de systemd instalada. El candidato no se
+aceptó con health fallido; `rc13` incorporó un sello persistente de éxito y la
+repetición dejó servicio, timer y health en `Result=success`. El health público
+respondió HTTP 200 con todos los componentes en `ok` y el bundle cifrado
+`crigestion-staging-20260821T084752Z.cgrb` quedó verificado con SHA-256
+`c5e931ff7519b173dab6df5d83f9c4b410d11d5da1e420c38fdac234daa6b4e7`.
+VeriFactu continuó en TEST, producción no se consultó ni modificó y el acceso
+SSH temporal permanece activo por indicación expresa del usuario.

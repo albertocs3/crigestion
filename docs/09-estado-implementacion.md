@@ -679,7 +679,8 @@ El payload agregado no contiene IDs de notificación ni textos. El health
 público permaneció completo en `ok`, VeriFactu continuó en TEST, producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
 
-El siguiente corte local, todavía no desplegado, completa la retención de la
+La release activa `staging-2026.08.21-rc13`, commit
+`cfb5add4a730788bfc7ecbc206952b130036890f`, completa la retención de la
 bandeja mediante un job diario `oneshot`, sin endpoint ni parámetros de usuario.
 Procesa lotes de 500 con límite total por ejecución, reloj PostgreSQL,
 aislamiento por empresa y `FOR UPDATE SKIP LOCKED`; borra en una transacción la
@@ -695,7 +696,12 @@ El borrado directo queda revocado al runtime y la única capacidad concedida es
 la función `SECURITY DEFINER` con `search_path` fijo. Esta exige vencimiento y
 un año calendario completo, usa índices parciales para localizar replays
 individuales y masivos y hace fallar la unidad si persiste backlog tras diez
-lotes, de modo que health no pueda quedar verde con retención atrasada.
+lotes, de modo que health no pueda quedar verde con retención atrasada. La
+primera ejecución controlada en staging no encontró filas elegibles y terminó
+con `NOTIFICATION_PURGE_AUTOMATION_OK`; el sello persistente de éxito, timer,
+health local y público, backup y bundle de recuperación quedaron verificados.
+VeriFactu continúa en TEST, producción no se consultó ni modificó y el acceso
+SSH temporal permanece activo.
 
 ## 5. Riesgos y trabajo posterior
 
