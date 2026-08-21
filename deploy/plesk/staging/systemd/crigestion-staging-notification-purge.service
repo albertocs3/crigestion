@@ -14,8 +14,11 @@ Environment=NODE_ENV=production
 ExecStartPre=/usr/bin/test -f /opt/crigestion-staging/current/.next/BUILD_ID
 ExecStartPre=/usr/bin/test ! -e /var/lib/crigestion-staging-restore/restore-required
 ExecStart=/opt/plesk/node/22/bin/node --conditions=react-server --import tsx scripts/run-notification-purge.ts
+ExecStartPost=/usr/bin/touch /var/lib/crigestion-staging-notification-purge/last-success
 TimeoutStartSec=600s
 UMask=0027
+StateDirectory=crigestion-staging-notification-purge
+StateDirectoryMode=0750
 
 NoNewPrivileges=true
 PrivateDevices=true

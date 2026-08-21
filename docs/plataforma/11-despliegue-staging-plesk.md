@@ -839,7 +839,9 @@ El siguiente candidato incorpora
 `Europe/Madrid`, con retraso aleatorio de hasta quince minutos. La unidad es
 `oneshot`, usa el usuario de aplicación, falla cerrada durante una restauración
 y limita cada ejecución a diez lotes de 500 por defecto. El health exige timer
-activo, último resultado correcto y una ejecución no más antigua de 36 horas;
+activo, último resultado correcto y un sello de éxito persistente no más antiguo
+de 36 horas; no se usa el timestamp efímero del proceso `oneshot`, porque
+algunas versiones de systemd lo reinician a cero después de finalizar;
 el bundle de recuperación conserva las dos unidades y el restore las detiene y
 reanuda junto con el resto de procesos mutadores.
 

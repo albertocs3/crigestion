@@ -22,12 +22,15 @@ describe("notification retention automation deployment", () => {
     expect(service).toContain("ProtectSystem=strict");
     expect(service).toContain("/var/lib/crigestion-staging-restore/restore-required");
     expect(service).toContain("run-notification-purge.ts");
+    expect(service).toContain("StateDirectory=crigestion-staging-notification-purge");
+    expect(service).toContain("ExecStartPost=/usr/bin/touch /var/lib/crigestion-staging-notification-purge/last-success");
     expect(service).toContain("TimeoutStartSec=600s");
     expect(timer).toContain("OnCalendar=*-*-* 04:15:00 Europe/Madrid");
     expect(timer).toContain("RandomizedDelaySec=15min");
     expect(timer).toContain("Persistent=true");
     expect(health).toContain("crigestion-staging-notification-purge.timer");
     expect(health).toContain("crigestion-staging-notification-purge.service");
+    expect(health).toContain("/var/lib/crigestion-staging-notification-purge/last-success");
     expect(health).toContain("CRIGESTION_STAGING_NOTIFICATION_PURGE_NEVER_RAN");
     expect(health).toContain("CRIGESTION_STAGING_NOTIFICATION_PURGE_STALE");
     expect(recovery).toContain("crigestion-staging-notification-purge.service");
