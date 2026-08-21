@@ -37,6 +37,7 @@ type Current = {
   summary: string;
   result: string;
   incidentId: string | null;
+  incident: { id: string; number: string; title: string } | null;
 };
 
 export function SupportCommunicationForm({
@@ -72,6 +73,12 @@ export function SupportCommunicationForm({
   const incidents = references.incidents.filter(
     (item) => item.customerId === customerId,
   );
+  const historicalIncidentMissing =
+    current?.incident &&
+    current.incidentId === current.incident.id &&
+    !incidents.some((item) => item.id === current.incident?.id)
+      ? current.incident
+      : null;
   const contacts = references.contacts.filter(
     (item) => item.customerId === customerId,
   );
@@ -316,6 +323,11 @@ export function SupportCommunicationForm({
             defaultValue={current?.incidentId ?? ""}
           >
             <option value="">Sin incidencia</option>
+            {historicalIncidentMissing ? (
+              <option value={historicalIncidentMissing.id}>
+                {historicalIncidentMissing.number} · {historicalIncidentMissing.title} · vínculo histórico
+              </option>
+            ) : null}
             {incidents.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.number} · {item.title}
