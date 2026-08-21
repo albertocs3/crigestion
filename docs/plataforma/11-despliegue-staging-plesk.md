@@ -781,6 +781,31 @@ navegador incrustado había expirado y mostró el login. No se introdujeron dato
 de prueba durante el smoke. Producción no se consultó ni modificó y el acceso
 SSH temporal permanece activo.
 
+### 8.7 Hotfix de vínculo histórico de comunicaciones del 2026-08-21
+
+La UAT de `rc9` detectó antes de enviar datos que el formulario mostraba “Sin
+incidencia” aunque la comunicación conservaba un vínculo histórico válido con
+una incidencia cuyo cliente había cambiado. No se ejecutó la corrección en ese
+estado. El hotfix inmutable `staging-2026.08.21-rc10`, commit
+`4f801521e1fb034caa3a554171d1f7784a5056cc`, añadió únicamente la opción del
+vínculo vigente ausente del catálogo y mantuvo la autoridad server-side.
+
+La release se materializó con 1.532.053 bytes y SHA-256
+`146a0f8cd1c9f903056754023cb8d4844877cd6d79d910667ad1a760cfdd5918`;
+el build aislado produjo `AWXlSVvkEJMQjZWYJzuJG`. No hubo migraciones ni
+cambios de dependencias. Se reutilizó el backup verificado inmediatamente antes
+de `rc9`, se podaron dependencias, se normalizaron permisos y se conmutó
+`current` atómicamente desde `rc9`.
+
+La UAT Administrador confirmó que `INC-2026-00002` aparecía seleccionada y
+marcada como vínculo histórico. Se corrigió únicamente el resumen de la
+comunicación sintética `d30bbe43-81b2-4854-a432-977cd0afc434`; la proyección
+terminó en versión 2, conservó la incidencia, mostró la diferencia OLD→NEW y
+PostgreSQL verificó una evidencia de versión 2 y una auditoría cuyo payload no
+contenía resumen, motivo ni teléfono. El health canónico y público permaneció
+en `ok`, VeriFactu siguió en TEST y no hubo unidades fallidas. Producción no se
+consultó ni modificó; el acceso SSH temporal permanece activo.
+
 ## 9. Rollback y recuperacion
 
 Antes de una release conservar tag, SHA, backup previo y ruta de la release

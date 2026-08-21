@@ -1230,3 +1230,28 @@ La UAT autenticada del historial queda abierta: al reclamar la pestaña del
 navegador incrustado, la aplicación mostró el formulario de login. No se usaron
 credenciales ni se crearon o corrigieron datos durante el smoke. Producción no
 se consultó ni modificó y el acceso SSH temporal permanece activo.
+
+## 33. Cierre UAT del historial de correcciones de comunicaciones
+
+Tras iniciar sesión como Administrador, la primera inspección de `rc9` detectó
+que la comunicación `d30bbe43-81b2-4854-a432-977cd0afc434` conservaba
+`INC-2026-00002`, pero el formulario no incluía esa opción porque la incidencia
+había cambiado administrativamente de cliente. No se envió el formulario ni se
+alteraron datos. El defecto se corrigió en la release inmutable
+`staging-2026.08.21-rc10`, commit
+`4f801521e1fb034caa3a554171d1f7784a5056cc`, build ID
+`AWXlSVvkEJMQjZWYJzuJG`, después de TypeScript, ESLint, build, prueba dirigida y
+dos revisiones independientes sin bloqueos.
+
+La interfaz mostró `INC-2026-00002 · ... · vínculo histórico` seleccionada. Se
+modificó únicamente el resumen y se registró el motivo de UAT. El detalle pasó
+a versión 2, conservó el enlace, mostró la corrección con versión, autor, fecha,
+motivo y la diferencia OLD→NEW del único campo cambiado. PostgreSQL confirmó
+una evidencia `support_communication_corrections` de versión 2 y una auditoría
+`SUPPORT_COMMUNICATION_CORRECTED`; el payload no contenía resumen, motivo ni
+teléfono.
+
+La aplicación, PostgreSQL, VeriFactu TEST y worker permanecieron en `ok`, el
+health canónico terminó con `Result=success` y no hubo unidades fallidas.
+Producción no se consultó ni modificó. El acceso SSH temporal continúa activo
+por indicación expresa del usuario.
