@@ -340,7 +340,7 @@ controles sobre los cambios enviados al repositorio.
 | Código fuente | <https://github.com/albertocs3/crigestion> |
 | Proyecto desplegado | <https://gestion-test.crisoft.es/login> |
 | Estado del servicio | <https://gestion-test.crisoft.es/api/health> |
-| Slides | Pendiente de publicar |
+| Slides | [Presentación TFM (PowerPoint)](docs/presentacion/CriGestion-TFM-2026.pptx) |
 | Vídeo de presentación | Pendiente de publicar |
 
 El despliegue publicado es un entorno de demostración con VeriFactu limitado a
