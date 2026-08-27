@@ -759,3 +759,13 @@ Administrador validó el historial v2 OLD→NEW de una actuación y la auditorí
 opaca correspondiente, y los health local/público terminaron en `ok`. El backup
 previo y el bundle cifrado posterior quedaron verificados; VeriFactu continuó en
 TEST y producción permaneció fuera de alcance.
+
+### Evidencia staging del corte básico de presentación
+
+`staging-2026.08.27-rc15` ejecuta el commit
+`022a7e5bc2f3b200f0267599537aa3115c18a7bb` con build ID
+`6NgjzCuOkXJk4HrNOAbMC`. El migrador confirmó las 159 migraciones sin cambios
+pendientes; aplicación, worker VeriFactu TEST y los cinco timers operativos
+quedaron activos. El health local, el público y la unidad canónica terminaron
+en `ok`. El backup previo y el bundle cifrado posterior se verificaron y
+producción permaneció fuera de alcance.

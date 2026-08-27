@@ -5,7 +5,7 @@
 Este runbook cubre exclusivamente `https://gestion-test.crisoft.es` en el VPS
 Ubuntu 22.04 administrado con Plesk.
 
-Estado verificado el 2026-08-20:
+Estado verificado el 2026-08-27:
 
 - VPS `93.93.116.238`.
 - Node.js `22.23.2` en `/opt/plesk/node/22/bin/node`.
@@ -14,11 +14,11 @@ Estado verificado el 2026-08-20:
 - Rol runtime `crigestion_staging_app`.
 - Rol migrador `crigestion_staging_migrator`.
 - Extensiones `btree_gist` y `pg_trgm` instaladas.
-- Release activa `staging-2026.08.20-rc6`.
-- Commit `c19a3b7bb952f55b9899fb050af534bf65624591`.
-- Release en `/opt/crigestion-staging/releases/staging-2026.08.20-rc6` y
+- Release activa `staging-2026.08.27-rc15`.
+- Commit `022a7e5bc2f3b200f0267599537aa3115c18a7bb`.
+- Release en `/opt/crigestion-staging/releases/staging-2026.08.27-rc15` y
   enlace `/opt/crigestion-staging/current`.
-- 155 migraciones completadas y 0 incompletas activas.
+- 159 migraciones completadas y 0 pendientes.
 - Aplicacion y worker VeriFactu TEST activos y habilitados.
 - Health local y publico en estado `ok` con HTTP 200.
 - Backup PostgreSQL diario y health cada cinco minutos activos mediante timers.
@@ -905,6 +905,31 @@ bytes, quedó verificado con SHA-256
 Aplicación, worker VeriFactu TEST y todos los timers permanecieron activos; el
 health local y público respondió `ok` y no hubo unidades CriGestión fallidas.
 Producción no se consultó ni modificó y el acceso SSH temporal sigue activo.
+
+### 8.11 Corte básico de presentación del 2026-08-27
+
+La release inmutable `staging-2026.08.27-rc15`, commit
+`022a7e5bc2f3b200f0267599537aa3115c18a7bb`, publica el panel operativo y la
+pantalla de acceso preparados para la presentación. El paquete fuente medía
+1.562.171 bytes, tenía SHA-256
+`6eb16d7a415bef06ca48cf0df958862142b68e1c8f6adc373446870b088704d8` y el
+build aislado produjo `6NgjzCuOkXJk4HrNOAbMC`.
+
+Antes de la conmutación se creó y verificó el backup
+`crigestion_staging-auto-20260827T071515Z.dump`, de 1.573.002 bytes y SHA-256
+`379737345ae27e9fd7f6278c38599cc63ed886ca5cba19aa5b4c654b5dc6968d`.
+La unidad migradora confirmó 159 migraciones y ninguna pendiente. La release
+se podó a dependencias de producción, se normalizaron permisos y `current` se
+conmutó atómicamente desde `rc14`.
+
+Aplicación y worker VeriFactu TEST quedaron activos. Los cinco timers
+operativos permanecieron activos, el health local y público devolvió todos los
+componentes en `ok` y el servicio canónico de health terminó con
+`Result=success`. El acceso público mostró el nuevo encabezado de login. El
+bundle cifrado `crigestion-staging-20260827T071711Z.cgrb`, de 209.703.858 bytes,
+quedó verificado con SHA-256
+`24c8458e7cd777ac2eb20a8a897d6e823a08f72c4962c922184a849d86f95ac0`.
+Producción no se consultó ni modificó.
 
 ## 9. Rollback y recuperacion
 
