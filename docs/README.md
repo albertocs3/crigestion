@@ -28,10 +28,11 @@ La base tecnologica vigente es:
 13. [Preparacion del entorno en macOS](setup-mac.md)
 14. [Estado verificable de implementacion](09-estado-implementacion.md)
 15. [Guion de presentación](10-guion-presentacion.md)
-16. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
-17. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
-18. [Acta UAT acumulada de staging](plataforma/12-acta-uat-staging-2026-07-17.md)
-19. Especificaciones funcionales y tecnicas de cada modulo.
+16. [Guion de grabación del vídeo TFM](presentacion/guion-video-tfm.md)
+17. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
+18. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
+19. [Acta UAT acumulada de staging](plataforma/12-acta-uat-staging-2026-07-17.md)
+20. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 

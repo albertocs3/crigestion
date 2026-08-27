@@ -328,6 +328,7 @@ controles sobre los cambios enviados al repositorio.
 - [Arquitectura técnica](docs/05-arquitectura-tecnica.md)
 - [Estado de implementación](docs/09-estado-implementacion.md)
 - [Guion de presentación](docs/10-guion-presentacion.md)
+- [Guion de grabación del vídeo TFM](docs/presentacion/guion-video-tfm.md)
 - [Preparación de Windows](docs/setup-windows.md)
 - [ADR y decisiones técnicas](docs/adr/README.md)
 - [Política de seguridad](SECURITY.md)
