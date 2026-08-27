@@ -46,34 +46,79 @@ export default async function AppHomePage() {
   ].filter((utility): utility is { href: string; label: string } => utility !== null);
   const modules = [
     permissions.includes("Customers.View")
-      ? { href: "/app/customers", label: "Clientes", tone: "customers" }
+      ? {
+          href: "/app/customers",
+          label: "Clientes",
+          description: "Maestro fiscal, contactos y condiciones comerciales",
+          tone: "customers"
+        }
       : null,
     permissions.includes("Suppliers.View")
-      ? { href: "/app/suppliers", label: "Proveedores", tone: "customers" }
+      ? {
+          href: "/app/suppliers",
+          label: "Proveedores",
+          description: "Proveedores, datos fiscales y condiciones de pago",
+          tone: "customers"
+        }
       : null,
     permissions.includes("Purchases.View")
-      ? { href: "/app/purchases", label: "Compras", tone: "billing" }
+      ? {
+          href: "/app/purchases",
+          label: "Compras",
+          description: "Facturas recibidas, IVA, stock y pagos",
+          tone: "billing"
+        }
       : null,
     permissions.includes("Catalog.View")
-      ? { href: "/app/catalog", label: "Catalogo", tone: "catalog" }
+      ? {
+          href: "/app/catalog",
+          label: "Catálogo",
+          description: "Productos, servicios, impuestos y existencias",
+          tone: "catalog"
+        }
       : null,
     permissions.includes("Billing.View")
-      ? { href: "/app/invoices", label: "Facturas", tone: "billing" }
+      ? {
+          href: "/app/invoices",
+          label: "Facturación",
+          description: "Emisión, vencimientos, cobros, PDF y VeriFactu",
+          tone: "billing"
+        }
       : null,
     permissions.includes("Subscriptions.View")
-      ? { href: "/app/subscriptions", label: "Suscripciones", tone: "billing" }
+      ? {
+          href: "/app/subscriptions",
+          label: "Suscripciones",
+          description: "Contratos, renovaciones y facturación periódica",
+          tone: "billing"
+        }
       : null,
     permissions.includes("Support.View")
-      ? { href: "/app/support", label: "Atención al cliente", tone: "customers" }
+      ? {
+          href: "/app/support",
+          label: "Atención al cliente",
+          description: "Incidencias, actuaciones, comunicaciones y avisos",
+          tone: "customers"
+        }
       : null,
     treasuryHref
-      ? { href: treasuryHref, label: "Tesoreria", tone: "treasury" }
+      ? {
+          href: treasuryHref,
+          label: "Tesorería",
+          description: "Cobros, pagos, remesas y conciliación bancaria",
+          tone: "treasury"
+        }
       : null,
     permissions.includes("Accounting.View")
-      ? { href: "/app/accounting", label: "Contabilidad", tone: "accounting" }
+      ? {
+          href: "/app/accounting",
+          label: "Contabilidad",
+          description: "Plan contable, diario y gestión de ejercicios",
+          tone: "accounting"
+        }
       : null
   ].filter(
-    (module): module is { href: string; label: string; tone: string } => module !== null
+    (module): module is { href: string; label: string; description: string; tone: string } => module !== null
   );
 
   return (
@@ -83,7 +128,17 @@ export default async function AppHomePage() {
         <LogoutButton />
       </header>
       <section className="content stack">
-        <h1 className="sr-only">Inicio</h1>
+        <div className="home-heading">
+          <div>
+            <p className="eyebrow">Gestión empresarial</p>
+            <h1>Panel de control</h1>
+            <p className="muted">Accede a las áreas operativas disponibles para tu perfil.</p>
+          </div>
+          <span className="status">
+            <span className="status-dot status-dot-active" />
+            {modules.length} módulos disponibles
+          </span>
+        </div>
         <div className="panel home-overview">
           <div className="home-main">
             <div className="home-session-summary">
@@ -100,7 +155,10 @@ export default async function AppHomePage() {
                 </strong>
               </p>
             </div>
-            <Link className="button button-secondary" href="/app/notifications">Notificaciones · {unreadNotifications} sin leer</Link>
+            <Link className="home-notifications" href="/app/notifications">
+              <span>Notificaciones</span>
+              <strong>{unreadNotifications} sin leer</strong>
+            </Link>
             <nav className="home-module-grid" aria-label="Modulos principales">
               {modules.map((module) => (
                 <Link
@@ -108,7 +166,8 @@ export default async function AppHomePage() {
                   href={module.href}
                   key={module.href}
                 >
-                  {module.label}
+                  <strong>{module.label}</strong>
+                  <span>{module.description}</span>
                 </Link>
               ))}
             </nav>
@@ -126,9 +185,12 @@ export default async function AppHomePage() {
             </details>
           ) : null}
         </div>
-        <div className="panel stack">
-          <ChangePasswordForm />
-        </div>
+        <details className="panel home-account">
+          <summary>Seguridad de la cuenta</summary>
+          <div className="home-account-content">
+            <ChangePasswordForm />
+          </div>
+        </details>
       </section>
     </main>
   );

@@ -38,6 +38,8 @@
     "verifactu:service:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-verifactu-worker-task.ps1 -Action Status",
     "verifactu:service:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/manage-verifactu-worker-task.ps1 -Action Uninstall",
     "db:seed": "tsx prisma/seed.ts",
+    "demo:prepare": "node --env-file-if-exists=.env.demo.local --conditions=react-server --import tsx scripts/prepare-demo.ts",
+    "demo:start": "node --env-file=.env.demo.local node_modules/next/dist/bin/next dev",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres"

@@ -13,12 +13,14 @@ export default async function LoginPage() {
         <span className="muted">Acceso</span>
       </header>
       <section className="content narrow">
-        <div className="panel stack">
+        <div className="panel stack login-panel">
           <div>
-            <h1>Iniciar sesion</h1>
-            <p className="muted">Acceso interno para usuarios autorizados.</p>
+            <p className="eyebrow">Gestión empresarial integrada</p>
+            <h1>Acceso a CriGestión</h1>
+            <p className="muted">Inicia sesión para acceder a tu espacio de trabajo.</p>
           </div>
           <LoginForm />
+          <p className="login-help">Acceso restringido a usuarios autorizados.</p>
         </div>
       </section>
     </main>

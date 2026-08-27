@@ -27,10 +27,11 @@ La base tecnologica vigente es:
 12. [Preparacion del entorno en Windows](setup-windows.md)
 13. [Preparacion del entorno en macOS](setup-mac.md)
 14. [Estado verificable de implementacion](09-estado-implementacion.md)
-15. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
-16. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
-17. [Acta UAT acumulada de staging](plataforma/12-acta-uat-staging-2026-07-17.md)
-18. Especificaciones funcionales y tecnicas de cada modulo.
+15. [Guion de presentación](10-guion-presentacion.md)
+16. [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md)
+17. [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md)
+18. [Acta UAT acumulada de staging](plataforma/12-acta-uat-staging-2026-07-17.md)
+19. Especificaciones funcionales y tecnicas de cada modulo.
 
 ## 3. Documentos transversales
 
@@ -50,6 +51,7 @@ La base tecnologica vigente es:
 | [Plan de creacion fisica de la solucion](08-plan-creacion-fisica-solucion.md) | Secuencia de comandos, estructura y validaciones para crear la solucion real. |
 | [Preparacion del entorno en macOS](setup-mac.md) | Herramientas, variables de entorno y comandos para arrancar el desarrollo en Mac. |
 | [Estado de implementacion](09-estado-implementacion.md) | Rebanadas disponibles, evidencia de validacion y prioridades pendientes. |
+| [Guion de presentación](10-guion-presentacion.md) | Alcance, datos mínimos, recorrido y checklist para una demostración segura. |
 | [Despliegue en Plesk y Ubuntu 22.04](plataforma/10-despliegue-plesk-ubuntu.md) | Topologia, proxy HTTPS, servicios, secretos, migraciones y apertura gradual de `gestion.crisoft.es`. |
 | [Despliegue staging en Plesk y Ubuntu 22.04](plataforma/11-despliegue-staging-plesk.md) | Estado y puertas de seguridad para `gestion-test.crisoft.es`, PostgreSQL 14, Imunify360 y migraciones controladas. |
 | [Acta UAT de staging 2026-07-17](plataforma/12-acta-uat-staging-2026-07-17.md) | Aceptacion funcional, evidencias, estado final, riesgos y siguiente ciclo exclusivo de staging. |
@@ -86,7 +88,7 @@ La base tecnologica vigente es:
 | Registro de decisiones arquitectonicas | Adaptado inicialmente |
 | Plan de creacion fisica | Adaptado inicialmente |
 | Backlog tecnico primera rebanada vertical | Implementado; se conserva como trazabilidad historica |
-| Estado incremental del producto | Actualizado al corte 2026-08-05 |
+| Estado incremental del producto | Actualizado con evidencia de staging hasta 2026-08-21 |
 
 ## 6. Precedencia
 

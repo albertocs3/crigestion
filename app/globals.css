@@ -575,6 +575,23 @@ tr:last-child td {
   gap: 28px;
 }
 
+.home-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.home-heading h1,
+.login-panel h1 {
+  margin: 4px 0 8px;
+}
+
+.home-heading p,
+.login-panel p {
+  margin-top: 0;
+}
+
 .home-main {
   display: grid;
   gap: 28px;
@@ -605,20 +622,29 @@ tr:last-child td {
 }
 
 .home-module-card {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 112px;
-  padding: 20px;
+  --module-accent: var(--accent);
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 126px;
+  padding: 18px;
   border: 1px solid var(--border);
+  border-top: 4px solid var(--module-accent);
   border-radius: 10px;
+  background: var(--panel);
   color: var(--foreground);
-  font-size: 17px;
-  font-weight: 700;
-  text-align: center;
   text-decoration: none;
-  text-transform: uppercase;
   transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.home-module-card strong {
+  font-size: 17px;
+}
+
+.home-module-card span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .home-module-card:hover {
@@ -635,23 +661,70 @@ tr:last-child td {
 }
 
 .home-module-customers {
-  background: #e0f2fe;
+  --module-accent: #0369a1;
 }
 
 .home-module-catalog {
-  background: #ecfccb;
+  --module-accent: #4d7c0f;
 }
 
 .home-module-billing {
-  background: #fef3c7;
+  --module-accent: #b45309;
 }
 
 .home-module-treasury {
-  background: #ede9fe;
+  --module-accent: #6d28d9;
 }
 
 .home-module-accounting {
-  background: #fce7f3;
+  --module-accent: #be185d;
+}
+
+.home-notifications {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+  text-decoration: none;
+}
+
+.home-notifications:hover,
+.home-notifications:focus-visible {
+  border-color: var(--accent);
+}
+
+.home-notifications:focus-visible,
+.home-account > summary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  outline-offset: 2px;
+}
+
+.home-account > summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.home-account-content {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.login-panel {
+  margin-top: 6vh;
+  box-shadow: 0 18px 42px rgb(31 41 51 / 8%);
+}
+
+.login-help {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .home-utilities {
@@ -697,6 +770,11 @@ tr:last-child td {
 @media (max-width: 760px) {
   .home-overview {
     grid-template-columns: 1fr;
+  }
+
+  .home-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .home-session-summary {
